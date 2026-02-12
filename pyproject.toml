@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gitlab-copilot-agent"
+version = "0.1.0"
+description = "Automated GitLab MR reviews powered by GitHub Copilot SDK"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.8",
+    "uvicorn[standard]==0.34.0",
+    "python-gitlab==5.6.0",
+    "github-copilot-sdk==0.1.23",
+    "pydantic==2.10.6",
+    "pydantic-settings==2.7.1",
+    "structlog==25.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.3",
+    "httpx==0.28.1",
+    "mypy==1.14.1",
+    "ruff==0.9.6",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=gitlab_copilot_agent --cov-report=term-missing --cov-fail-under=90"
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 99
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gitlab_copilot_agent"]
+
+[dependency-groups]
+dev = [
+    "pytest-cov>=7.0.0",
+]

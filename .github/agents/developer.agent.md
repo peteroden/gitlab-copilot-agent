@@ -102,6 +102,9 @@ Only clean up dead/obsolete code when specifically directed. Never as a side eff
 - Test our logic, integrations, error handling, and edge cases.
 - Do NOT write tests that merely verify a third-party library works.
 - Mock external dependencies at the boundary.
+- **No magic strings**: all repeated test data (URLs, tokens, payloads) must be named constants or shared test fixtures. Never inline the same string literal in multiple tests.
+- **Shared test setup**: common setup (env vars, HTTP clients, factory functions) lives in a shared test module. Test files import from there — never redefine shared setup.
+- **Factory functions for test data**: use factory helpers so tests only specify what they care about. Defaults handle everything else.
 
 ## Language-Specific
 
@@ -117,7 +120,8 @@ Only clean up dead/obsolete code when specifically directed. Never as a side eff
 
 - [ ] Code builds with zero errors and zero warnings
 - [ ] Linters and formatters pass
-- [ ] Unit tests written and passing (>90% coverage on new code)
+- [ ] Unit tests written and passing (≥90% coverage on project)
+- [ ] No magic strings in tests — all test data uses named constants or shared fixtures
 - [ ] Integration tests written and passing
 - [ ] E2E tests written and passing for user-facing workflows
 - [ ] Documentation updated

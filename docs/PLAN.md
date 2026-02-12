@@ -21,10 +21,10 @@ GitLab Webhook (MR open/update)
   → Extract MR metadata (project, branch, diff)
   → Clone repo to temp dir (source branch)
   → Build Copilot session with:
-      - System prompt from .github/copilot-instructions.md
-      - Code review skill (new, based on OWASP + governance)
-      - Custom tools: read_file, list_files, get_mr_diff
-  → Agent performs review
+      - System prompt (built-in + repo instructions)
+      - working_directory → cloned repo (SDK provides built-in file/shell tools)
+      - Repo-level skills, agents, instructions from .github/
+  → Agent performs review (uses git diff, reads files via built-in tools)
   → Parse agent output into structured comments
   → Post to GitLab: inline discussion threads + summary note
   → Clean up temp dir
@@ -76,64 +76,57 @@ The Architect produces three artifacts before any code is written: research docs
 - [x] `.github/instructions/python.instructions.md` — Python-specific guidance covering:
   async patterns, error handling, Pydantic, DI, type strictness, project layout, testing
 
-### PR 1: Project scaffold + FastAPI skeleton _(Developer)_
-- [ ] `pyproject.toml` with pinned dependencies: `fastapi`, `uvicorn`, `python-gitlab`, `github-copilot-sdk`, `pydantic`, `pydantic-settings`, `structlog`
-- [ ] `src/gitlab_copilot_agent/` package structure
-- [ ] `src/gitlab_copilot_agent/main.py` — FastAPI app with health check endpoint
-- [ ] `src/gitlab_copilot_agent/config.py` — Settings via pydantic-settings (env vars): `GITLAB_TOKEN`, `GITLAB_URL`, `GITLAB_WEBHOOK_SECRET`, `COPILOT_MODEL`, `COPILOT_PROVIDER_TYPE`, `COPILOT_PROVIDER_BASE_URL`, `COPILOT_PROVIDER_API_KEY`, `GITHUB_TOKEN`
-- [ ] Update `.devcontainer/devcontainer.json` to install copilot CLI
-- [ ] Update `README.md` with project description and setup
-- [ ] Tests: health check endpoint, config loading
+### PR 1: Project scaffold + FastAPI skeleton _(Developer)_ ✅
+- [x] `pyproject.toml` with pinned dependencies
+- [x] `src/gitlab_copilot_agent/` package structure
+- [x] `main.py` — FastAPI app with health check endpoint
+- [x] `config.py` — Settings via pydantic-settings
+- [x] `.devcontainer/devcontainer.json` with copilot CLI
+- [x] Tests: health check endpoint, config loading
 
-### PR 2: Webhook endpoint + GitLab event parsing _(Developer)_
-- [ ] `src/gitlab_copilot_agent/webhook.py` — POST /webhook endpoint
-- [ ] Verify `X-Gitlab-Token` header against configured secret
-- [ ] Parse MR webhook payload (`object_kind == "merge_request"`, `action in ["open", "update"]`)
-- [ ] Extract: project ID, MR IID, source branch, target branch, source/target SHAs
-- [ ] `src/gitlab_copilot_agent/models.py` — Pydantic models for webhook payload (relevant fields only)
-- [ ] Return 200 immediately, queue review as background task
-- Reference: `docs/research/gitlab-api.md` for webhook payload structure
-- [ ] Tests: webhook validation, payload parsing, rejection of non-MR events
+### PR 2: Webhook endpoint + GitLab event parsing _(Developer)_ ✅
+- [x] `webhook.py` — POST /webhook with `X-Gitlab-Token` validation
+- [x] `models.py` — Pydantic models for webhook payload
+- [x] Returns 200 immediately, queues review as background task
+- [x] Tests: webhook validation, payload parsing, rejection of non-MR events
 
-### PR 3: GitLab client — repo cloning + diff fetching _(Developer)_
-- [ ] `src/gitlab_copilot_agent/gitlab_client.py`
-- [ ] Clone repo to temp directory (shallow clone of source branch, then fetch target branch for diff context)
-- [ ] Fetch MR diff via GitLab API (`/projects/:id/merge_requests/:iid/changes`)
-- [ ] Fetch MR metadata (title, description)
-- [ ] Clean up temp directory helper
-- Reference: `docs/research/gitlab-api.md` for API endpoints and response shapes
-- [ ] Tests: mock GitLab API responses, verify clone commands
+### PR 3: GitLab client — repo cloning + diff fetching _(Developer)_ ✅
+- [x] `gitlab_client.py` — clone, fetch MR details, cleanup
+- [x] Tests: mock GitLab API responses, verify clone commands
 
-### PR 4: Copilot review engine _(Developer)_
-- [ ] `src/gitlab_copilot_agent/review_engine.py`
-- [ ] Initialize `CopilotClient` with configurable provider (GitHub auth or Azure OpenAI BYOK)
-- [ ] Create session with system prompt built from `.github/copilot-instructions.md` + code-review skill
-- [ ] Define custom tools for the agent:
-  - `read_file(path)` — read a file from the cloned repo
-  - `list_directory(path)` — list files in the cloned repo
-  - `get_mr_diff()` — return the MR diff
-  - `get_mr_info()` — return MR title, description, changed files list
-- [ ] Send review prompt with diff context
-- [ ] Collect agent response
-- Reference: `docs/research/copilot-sdk-python.md` for SDK API, tool definitions, session config
-- [ ] Tests: mock Copilot SDK, verify prompt construction, tool definitions
+### PR 4: Copilot review engine _(Developer)_ ✅
+- [x] `review_engine.py` — CopilotClient with configurable provider
+- [x] **Simplified**: No custom tools needed — SDK provides built-in file/shell tools via `working_directory`. Agent runs `git diff target...source` itself.
+- [x] Waits for `session.idle` event (not `assistant.message`) to capture final response
+- [x] Tests: mock Copilot SDK, verify prompt construction
 
-### PR 5: Review output parsing + GitLab comment posting _(Developer)_
-- [ ] `src/gitlab_copilot_agent/comment_parser.py` — Parse agent output into structured review comments (file, line, comment text, severity)
-- [ ] `src/gitlab_copilot_agent/comment_poster.py` — Post comments to GitLab:
-  - Inline discussion threads via `/projects/:id/merge_requests/:iid/discussions` with position data
-  - Summary note via `/projects/:id/merge_requests/:iid/notes`
-- [ ] Handle edge cases: file not in diff, line not in diff range (fall back to general comment)
-- Reference: `docs/research/gitlab-api.md` for discussion position object structure
-- [ ] Tests: output parsing, comment posting with mocked GitLab API
+### PR 5: Review output parsing + GitLab comment posting _(Developer)_ ✅
+- [x] `comment_parser.py` — parses agent output into structured comments (file, line, severity)
+- [x] `comment_poster.py` — inline discussions + summary note, with fallback for out-of-diff lines
+- [x] Tests: output parsing, comment posting with mocked GitLab API
 
-### PR 6: End-to-end integration + Azure deployment config _(Developer)_
-- [ ] Wire webhook → clone → review → post in `src/gitlab_copilot_agent/orchestrator.py`
-- [ ] Background task execution with proper error handling and logging
-- [ ] `Dockerfile` for Azure App Service
-- [ ] `startup.sh` for Azure
-- [ ] Integration test with full flow (mocked externals)
+### PR 6: End-to-end integration + deployment _(Developer)_ ✅
+- [x] `orchestrator.py` — wires webhook → clone → review → parse → post → cleanup
+- [x] `Dockerfile` for deployment
+- [x] Integration test with full flow (mocked externals)
 - [ ] Update `README.md` with deployment instructions and environment variable reference
+
+### Repo config loading _(Developer)_ ✅
+- [x] `repo_config.py` — discovers `.github/`/`.gitlab/` skills, agents, instructions
+- [x] Skills loaded via SDK-native `skill_directories` field
+- [x] Agents loaded via SDK-native `custom_agents` field (YAML frontmatter parsing)
+- [x] Instructions appended to system message
+- [x] 12 unit tests
+- [x] Live-validated: skills, agents, instructions all loaded during real review
+
+### Test quality improvement ✅
+- [x] Updated `developer.agent.md` with language-agnostic test rules
+- [x] Created `python.instructions.md` with coverage/conftest patterns
+- [x] Created `test-quality` skill with patterns, anti-patterns, checklist
+- [x] Created `tests/conftest.py` with shared constants, fixtures, factories
+- [x] Refactored all test files to use shared fixtures (eliminated magic strings)
+- [x] Coverage: 84% → 95% (43 tests, `--cov-fail-under=90` enforced)
+- [x] Contributed instructions back to `../copilot-bootstrap`
 
 ## Execution Sequence
 
@@ -166,10 +159,95 @@ The devcontainer should include ngrok or document its installation. The `GITLAB_
 
 ## Key Design Decisions
 
-1. **Clone vs API fetch**: Clone to temp dir. The Copilot agent gets real file system access via custom tools, enabling it to browse the repo naturally.
-2. **Structured output**: Agent returns review in a defined format (JSON with file/line/comment), parsed into GitLab API calls. Fallback: if agent returns free-text, post as a single summary comment.
-3. **Background processing**: Webhook returns 200 immediately; review runs as a FastAPI background task. Long reviews (large diffs) won't timeout the webhook.
-4. **Auth flexibility**: Config supports both GitHub Copilot subscription auth and Azure OpenAI BYOK via environment variables.
+1. **Clone vs API fetch**: Clone to temp dir. The Copilot agent gets real file system access via SDK built-in tools (no custom tools needed), enabling it to browse the repo and run `git diff` naturally.
+2. **No custom tools**: The Copilot SDK provides built-in file read, directory list, and shell execution tools when `working_directory` is set. This eliminated the need for custom `read_file`, `list_directory`, `get_mr_diff` tools.
+3. **Structured output**: Agent returns review in a defined format (inline comments with `[ERROR]`/`[WARNING]`/`[INFO]` severity tags + file:line references), parsed into GitLab API calls. Fallback: post as a single summary comment.
+4. **Background processing**: Webhook returns 200 immediately; review runs as a FastAPI background task. Long reviews won't timeout the webhook.
+5. **Auth flexibility**: Config supports both GitHub Copilot subscription auth and Azure OpenAI BYOK via environment variables.
+6. **Repo config loading**: Skills and agents are loaded via SDK-native `SessionConfig` fields (`skill_directories`, `custom_agents`). Instructions are appended to the system message.
+7. **session.idle over assistant.message**: Must wait for `session.idle` event (agent finished all tool calls), not `assistant.message` (fires on each intermediate response).
+
+## Remaining Work
+
+- [x] Update `README.md` with deployment instructions and environment variable reference
+- [x] Fix structlog `exc_info` rendering (exception tracebacks currently swallowed)
+- [ ] Test Azure App Service deployment
+
+---
+
+## Feature: Inline Code Suggestions
+
+### Problem
+
+The agent posts review comments like `**[ERROR]** Function missing type hints` but doesn't propose the actual fix. GitLab supports **suggestions** — a markdown syntax in comment bodies that renders as an apply-able diff. Users click "Apply suggestion" and GitLab commits the fix directly to the MR branch.
+
+### How GitLab Suggestions Work
+
+No special API — suggestions are markdown in the discussion body:
+
+````
+```suggestion:-0+0
+def add(a: int, b: int) -> int:
+```
+````
+
+- Uses the same `POST /discussions` endpoint we already call
+- `-0+0` = replace just the commented line (0 lines above, 0 below)
+- `-2+1` = replace from 2 lines above to 1 line below the commented line
+- Max 100 lines above + 100 below (201 total per suggestion)
+- Users see "Apply suggestion" button in the GitLab UI
+- Multiple suggestions can be batched and applied as a single commit
+
+### Approach
+
+Three areas to change:
+
+1. **Agent prompt** (`review_engine.py`) — instruct the agent to include replacement code in its JSON output
+2. **Comment parser** (`comment_parser.py`) — extract the `suggestion` field from the JSON
+3. **Comment poster** (`comment_poster.py`) — format the suggestion into GitLab's markdown syntax
+
+### Phase 1: Prompt and parser
+
+- [x] **update-system-prompt**: Update `SYSTEM_PROMPT` in `review_engine.py`:
+  - Tell the agent to include a `suggestion` field with the replacement code when the fix is concrete
+  - Include `suggestion_start_offset` (lines above) and `suggestion_end_offset` (lines below) for multi-line replacements
+  - Only suggest when the fix is unambiguous — not every comment needs a suggestion
+
+- [x] **update-comment-model**: Add fields to `ReviewComment` dataclass in `comment_parser.py`:
+  - `suggestion: str | None` — the replacement code (optional)
+  - `suggestion_start_offset: int` — lines above the commented line to replace (default 0)
+  - `suggestion_end_offset: int` — lines below the commented line to replace (default 0)
+
+- [x] **update-parser**: Update `parse_review()` to extract `suggestion`, `suggestion_start_offset`, `suggestion_end_offset` from the JSON array items
+
+### Phase 2: Poster and docs
+
+- [x] **update-poster**: Update `post_review()` in `comment_poster.py`:
+  - When a comment has a `suggestion`, append the suggestion markdown block to the body:
+    ```
+    **[ERROR]** Function missing type hints
+
+    ```suggestion:-0+0
+    def add(a: int, b: int) -> int:
+    ```
+    ```
+  - Use the offset values for multi-line suggestions: `suggestion:-{start}+{end}`
+
+- [x] **update-research-doc**: Add suggestion syntax to `docs/research/gitlab-api.md`
+
+### Phase 3: Tests
+
+- [x] **test-parser-suggestions**: Tests for parsing comments with suggestions (single-line, multi-line offsets, missing suggestion field)
+- [x] **test-poster-suggestions**: Tests for posting comments with suggestion blocks (verify body format)
+- [x] **test-e2e-suggestion**: Live review against calculator-test repo, verify suggestions appear as apply-able in GitLab MR UI
+
+### Design Decisions
+
+1. **Suggestion in JSON, not raw markdown**: The agent outputs replacement code in a `suggestion` field. The poster formats it into GitLab's markdown. Avoids nested code-fence parsing.
+2. **Optional suggestions**: Not every comment needs a suggestion. The field is omitted when the fix isn't concrete.
+3. **Offsets default to 0,0**: Single-line replacement (the commented line) unless the agent specifies otherwise.
+
+---
 
 ## Assumptions
 

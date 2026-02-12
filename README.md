@@ -1,45 +1,104 @@
-# gitlab-copilot-agent
+# GitLab Copilot Agent
 
-GitLab Copilot Agent.
+Automated code review for GitLab Merge Requests, powered by the GitHub Copilot SDK.
 
-## What This Is
+## What It Does
 
-A project bootstrapped with agent-driven development governance:
-- **Governance model** — rules for how AI agents operate on this codebase.
-- **Agent instruction files** — role-specific instructions for Product, Architect, Designer, Orchestrator, and Developer agents.
-- **CI checks** — automated PR size enforcement.
+Receives GitLab webhooks when MRs are opened/updated → clones the repo → runs a Copilot agent review → posts inline comments with **apply-able code suggestions** back to the MR.
 
-## Structure
+## Quick Start
 
-```
-.github/
-├── copilot-instructions.md              # Shared baseline for all agents
-├── agents/
-│   ├── developer.agent.md               # Developer agent (yolo, restricted tools)
-│   ├── architect.agent.md               # Architect agent (interactive)
-│   ├── designer.agent.md                # Designer agent (interactive)
-│   ├── product.agent.md                 # Product agent (interactive)
-│   └── orchestrator.agent.md            # Orchestrator agent (interactive)
-├── skills/
-│   ├── owasp-review/SKILL.md            # OWASP Top 10 security review checklist
-│   ├── stacked-prs/SKILL.md             # Procedure for stacked PRs
-│   ├── worktree-setup/SKILL.md          # Worktree + devcontainer setup
-│   ├── devcontainer-setup/SKILL.md      # Devcontainer templates (yolo/interactive)
-│   ├── adr-creation/SKILL.md            # Architecture Decision Record template
-│   ├── conventional-commits/SKILL.md    # Commit and branch naming reference
-│   └── ci-failure-debugging/SKILL.md    # CI failure diagnosis steps
-└── workflows/
-    └── pr-size-check.yml                # Enforce ≤200 diff line PRs
-GOVERNANCE.md                            # Full governance document
+```bash
+# 1. Clone and start devcontainer
+devcontainer up --workspace-folder .
+
+# 2. Set environment variables
+export GITLAB_URL=https://gitlab.com
+export GITLAB_TOKEN=glpat-...
+export GITLAB_WEBHOOK_SECRET=your-secret
+export GITHUB_TOKEN=$(gh auth token)
+
+# 3. Run
+devcontainer exec --workspace-folder . uv run uvicorn gitlab_copilot_agent.main:app --port 8000
 ```
 
-## Key Rules
+## Environment Variables
 
-- All coding in devcontainers.
-- 1 task = 1 agent = 1 worktree = 1 devcontainer.
-- PRs ≤200 diff lines. Stacked PRs if larger.
-- Conventional commits. Conventional branches.
-- OWASP self-review on every PR.
-- No slop.
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `GITLAB_URL` | ✅ | — | GitLab instance URL |
+| `GITLAB_TOKEN` | ✅ | — | GitLab API token (needs `api` scope) |
+| `GITLAB_WEBHOOK_SECRET` | ✅ | — | Secret for validating webhook payloads |
+| `GITHUB_TOKEN` | ✅* | — | GitHub token for Copilot auth |
+| `COPILOT_MODEL` | — | `gpt-4` | Model for reviews |
+| `COPILOT_PROVIDER_TYPE` | — | `None` | BYOK provider: `azure`, `openai`, or omit for Copilot |
+| `COPILOT_PROVIDER_BASE_URL` | — | `None` | BYOK provider endpoint |
+| `COPILOT_PROVIDER_API_KEY` | — | `None` | BYOK provider API key |
+| `HOST` | — | `0.0.0.0` | Server bind host |
+| `PORT` | — | `8000` | Server bind port |
+| `LOG_LEVEL` | — | `info` | Log level |
 
-See `GOVERNANCE.md` for full details.
+*`GITHUB_TOKEN` is required when using GitHub Copilot auth. Not needed for BYOK providers.
+
+## GitLab Webhook Setup
+
+1. Go to your GitLab project → **Settings** → **Webhooks**
+2. Set the URL to `https://your-host/webhook`
+3. Set the secret token to match `GITLAB_WEBHOOK_SECRET`
+4. Check **Merge request events**
+5. Save
+
+The service needs a publicly reachable URL. For local dev, use [ngrok](https://ngrok.com): `ngrok http 8000`.
+
+## Repo-Level Configuration
+
+The agent automatically loads project-specific config from the reviewed repo:
+
+| Path | What | How |
+|---|---|---|
+| `.github/skills/*/SKILL.md` | Skills | SDK-native `skill_directories` |
+| `.github/agents/*.agent.md` | Custom agents | SDK-native `custom_agents` (YAML frontmatter) |
+| `.github/copilot-instructions.md` | Global instructions | Appended to system message |
+| `.github/instructions/*.md` | Per-language instructions | Appended to system message |
+
+`.gitlab/` paths are also supported.
+
+## Review Output
+
+Each review comment includes:
+- Severity tag: `[ERROR]`, `[WARNING]`, or `[INFO]`
+- Description of the issue
+- **Inline code suggestion** (when a concrete fix exists) — click "Apply suggestion" in the GitLab UI to commit the fix
+
+## Docker
+
+```bash
+docker build -t gitlab-copilot-agent .
+docker run -p 8000:8000 \
+  -e GITLAB_URL=https://gitlab.com \
+  -e GITLAB_TOKEN=glpat-... \
+  -e GITLAB_WEBHOOK_SECRET=secret \
+  -e GITHUB_TOKEN=gho_... \
+  gitlab-copilot-agent
+```
+
+## Development
+
+```bash
+# Run tests
+devcontainer exec --workspace-folder . uv run pytest
+
+# Lint
+devcontainer exec --workspace-folder . uv run ruff check src/ tests/
+
+# Type check
+devcontainer exec --workspace-folder . uv run mypy src/
+```
+
+## Architecture
+
+See `docs/PLAN.md` for full implementation plan and `docs/adr/` for architecture decisions.
+
+```
+GitLab Webhook → FastAPI /webhook → Clone repo → Copilot agent review → Parse output → Post inline comments + summary
+```

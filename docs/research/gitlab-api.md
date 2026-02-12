@@ -158,6 +158,31 @@ POST /api/v4/projects/:id/merge_requests/:merge_request_iid/discussions
 }
 ```
 
+### Inline Code Suggestions
+
+GitLab supports apply-able code suggestions via markdown syntax in the discussion body. No special API — just include a `suggestion` code fence:
+
+````markdown
+**[ERROR]** Function missing type hints
+
+```suggestion:-0+0
+def add(a: int, b: int) -> int:
+```
+````
+
+**Offset syntax**: `` ```suggestion:-N+M ``
+- `-N` = lines **above** the commented line to replace
+- `+M` = lines **below** the commented line to replace
+- `-0+0` = replace just the commented line
+- `-2+1` = replace from 2 lines above to 1 line below (4 lines total)
+- Max 100 lines above + 100 below (201 total per suggestion)
+
+**UI behavior**: Users see "Apply suggestion" button → clicking creates a commit on the MR branch. Multiple suggestions can be batched into a single commit.
+
+**Suggestions API** (for applying programmatically):
+- `PUT /api/v4/suggestions/:id/apply` — apply a single suggestion
+- `PUT /api/v4/suggestions/batch_apply` — apply multiple suggestions
+
 ### Position Object Fields
 
 | Field | Type | Description |

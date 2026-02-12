@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted
 
 ## Context
 
@@ -28,17 +28,19 @@ We choose the following architectural approach across seven key areas:
 
 **Alternatives considered:**
 - API-only file fetching: fetch changed files via GitLab API
+- Pass diff in prompt: fetch diff via API, embed in user message
 
-**Rationale:** Copilot agent needs real filesystem access to use custom tools (`read_file`, `list_directory`). Cloning enables natural repo browsing and reading any file (base branch context, not just diff). Cleanup on task completion.
+**Rationale:** The Copilot SDK provides built-in file and shell tools when given a `working_directory`. Cloning the repo lets the agent use `git diff target...source` to see changes and browse any file for context — no custom tools needed. Cleanup on task completion.
 
-### 3. AI Integration: Copilot SDK with Custom Tools
+### 3. AI Integration: Copilot SDK Built-in Tools
 
-**Selected:** `github-copilot-sdk` with custom tool definitions
+**Selected:** `github-copilot-sdk` with built-in tools via `working_directory`
 
 **Alternatives considered:**
-- Raw OpenAI/Azure API calls with manual tool implementation
+- Custom tools (`read_file`, `list_directory`, `get_mr_diff`): redundant — the SDK already provides these
+- Raw OpenAI/Azure API calls: requires reimplementing agent runtime
 
-**Rationale:** SDK handles agent runtime (tool calling loop, session management, streaming). Custom tools (`read_file`, `list_directory`, `get_mr_diff`, `get_mr_info`) give structured repo access. We write tools, not agent infrastructure.
+**Rationale:** The SDK agent already has file reading, directory listing, and shell execution tools built in. Setting `working_directory` to the cloned repo is sufficient. The agent runs `git diff` itself to see changes. Zero custom tools needed — we provide branch names in the prompt and let the agent work.
 
 ### 4. Webhook Processing: Background Task
 
@@ -82,7 +84,7 @@ We choose the following architectural approach across seven key areas:
 
 **Positive:**
 - Async architecture handles concurrent webhook processing efficiently
-- Real filesystem access enables powerful agent tools (browse entire repo, not just diff)
+- Built-in SDK tools eliminate custom tool maintenance — agent browses repo naturally
 - Background processing prevents webhook timeouts
 - Structured output + fallback balances precision with robustness
 - Flexible auth supports diverse team requirements
@@ -104,5 +106,5 @@ We choose the following architectural approach across seven key areas:
 
 ```
 GitLab Webhook → FastAPI /webhook → Validate token → Extract MR metadata → Background task:
-  Clone repo → Build Copilot session (system prompt + tools) → Agent reviews → Parse output → Post inline + summary comments → Cleanup
+  Clone repo → Create Copilot session (system prompt + working_directory) → Agent diffs + reviews → Parse output → Post inline + summary comments → Cleanup
 ```

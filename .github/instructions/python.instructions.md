@@ -62,7 +62,78 @@ src/gitlab_copilot_agent/
 ## Testing
 
 - `pytest` + `pytest-asyncio` with `asyncio_mode = "auto"`.
-- Inject mocks via DI — no `unittest.mock.patch` on internals.
 - `httpx.AsyncClient` with `ASGITransport` for endpoint tests.
 - Test files: `tests/test_<module>.py`, mirroring source structure.
 - Test behavior, not implementation. Mock at the boundary.
+
+### Coverage
+
+- Enforce `--cov-fail-under=90` in `pyproject.toml` `[tool.pytest.ini_options]`.
+- Always run with `--cov-report=term-missing` to surface gaps.
+- New code must have ≥90% coverage. PRs that drop coverage below threshold are blocked.
+
+### No magic strings
+
+- All repeated test data (URLs, tokens, secrets, payloads) must be module-level constants or `conftest.py` fixtures.
+- Never inline string literals that appear in more than one test. Extract to a named constant.
+- Name constants descriptively: `GITLAB_URL`, `WEBHOOK_SECRET`, `MR_PAYLOAD` — not `URL` or `DATA`.
+
+### Shared fixtures in conftest.py
+
+- `tests/conftest.py` owns shared constants, fixtures, and factory functions.
+- Factory pattern for test data: `make_settings(**overrides)` returns a valid object with sensible defaults; tests override only what they care about.
+- Shared fixtures: `env_vars` (sets env), `client` (ASGITransport), etc.
+- Test files import constants from `conftest.py` — never redefine them.
+
+### Test layers
+
+| Layer | Scope | Mocking | Speed |
+|-------|-------|---------|-------|
+| Unit | Single function/class | Mock all external deps at boundary | <1s per test |
+| Integration | Multiple modules wired together | Mock only external services (GitLab API, Copilot SDK) | <5s per test |
+| E2E | Full service | Real services (or containers) | <60s per test |
+
+### conftest.py pattern
+
+```python
+# tests/conftest.py
+import pytest
+from collections.abc import AsyncIterator
+from httpx import ASGITransport, AsyncClient
+from my_app.config import Settings
+from my_app.main import app
+
+# -- Constants (single source of truth) --
+GITLAB_URL = "https://gitlab.example.com"
+GITLAB_TOKEN = "test-token"
+WEBHOOK_SECRET = "test-secret"
+HEADERS = {"X-Gitlab-Token": WEBHOOK_SECRET}
+
+MR_PAYLOAD = {
+    "object_kind": "merge_request",
+    "user": {"id": 1, "username": "testuser"},
+    # ...complete payload...
+}
+
+# -- Factories --
+def make_settings(**overrides: object) -> Settings:
+    defaults = {
+        "gitlab_url": GITLAB_URL,
+        "gitlab_token": GITLAB_TOKEN,
+        "gitlab_webhook_secret": WEBHOOK_SECRET,
+    }
+    return Settings(**(defaults | overrides))  # type: ignore[arg-type]
+
+# -- Fixtures --
+@pytest.fixture
+def env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
+    monkeypatch.setenv("GITLAB_TOKEN", GITLAB_TOKEN)
+    monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", WEBHOOK_SECRET)
+
+@pytest.fixture
+async def client(env_vars: None) -> AsyncIterator[AsyncClient]:
+    app.state.settings = make_settings()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        yield c
+```
