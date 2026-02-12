@@ -46,7 +46,7 @@ The Architect produces three artifacts before any code is written: research docs
 ## Progress
 
 ### Step 0a: Research docs _(Architect)_
-- [ ] `docs/research/copilot-sdk-python.md` — Copilot SDK Python API reference:
+- [x] `docs/research/copilot-sdk-python.md` — Copilot SDK Python API reference:
   - `CopilotClient` init options (`cli_path`, `cli_url`, `github_token`, `use_logged_in_user`)
   - `create_session` options (`model`, `tools`, `system_message`, `streaming`, `provider`, `hooks`)
   - Custom tools via `@define_tool` + Pydantic models, and low-level `Tool()` API
@@ -54,7 +54,7 @@ The Architect produces three artifacts before any code is written: research docs
   - Event types: `assistant.message`, `assistant.message_delta`, `session.idle`
   - Session hooks: `on_pre_tool_use`, `on_post_tool_use`, `on_error_occurred`
   - Requires Copilot CLI binary in PATH
-- [ ] `docs/research/gitlab-api.md` — GitLab API v4 reference for this project:
+- [x] `docs/research/gitlab-api.md` — GitLab API v4 reference for this project:
   - Webhook payload: `object_kind`, `object_attributes.action` (`open`, `update`), `object_attributes.iid`, `project.id`, source/target branches, SHAs
   - `GET /projects/:id/merge_requests/:iid/changes` — returns `changes[]` with `old_path`, `new_path`, `diff` (unified diff hunks)
   - `POST /projects/:id/merge_requests/:iid/notes` — post general MR comment (`body`)
