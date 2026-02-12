@@ -2,23 +2,28 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import frontmatter
 import structlog
 
 log = structlog.get_logger()
 
-_CONFIG_ROOTS = [".github", ".gitlab"]
+_CONFIG_ROOTS = [".github", ".claude"]
 _SKILLS_DIR = "skills"
 _AGENTS_DIR = "agents"
 _INSTRUCTIONS_DIR = "instructions"
-_GLOBAL_INSTRUCTIONS = "copilot-instructions.md"
+_CONFIG_ROOT_INSTRUCTIONS: dict[str, list[str]] = {
+    ".github": ["copilot-instructions.md"],
+    ".claude": ["CLAUDE.md"],
+}
 _AGENT_SUFFIX = ".agent.md"
+_AGENTS_MD = "AGENTS.md"
+_CLAUDE_MD = "CLAUDE.md"
 
-_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)", re.DOTALL)
+_CUSTOM_AGENT_FIELDS = {"name", "description", "tools", "display_name", "mcp_servers", "infer"}
 
 
 @dataclass(frozen=True)
@@ -37,43 +42,31 @@ def _parse_agent_file(path: Path) -> dict[str, Any] | None:
     except OSError:
         return None
 
-    match = _FRONTMATTER_RE.match(text)
-    if not match:
+    post = frontmatter.loads(text)
+    meta = post.metadata
+
+    if not meta:
         log.warning("agent_parse_skipped", path=str(path), reason="no YAML frontmatter")
         return None
-
-    frontmatter_text, body = match.group(1), match.group(2).strip()
-
-    # Simple YAML-like parsing for the flat key-value frontmatter.
-    # Avoids adding PyYAML as a dependency.
-    meta: dict[str, Any] = {}
-    for line in frontmatter_text.splitlines():
-        colon_idx = line.find(":")
-        if colon_idx == -1:
-            continue
-        key = line[:colon_idx].strip()
-        val = line[colon_idx + 1 :].strip()
-        # Handle quoted strings
-        if val.startswith('"') and val.endswith('"'):
-            val = val[1:-1]
-        # Handle YAML-style lists: ["a", "b"]
-        if val.startswith("[") and val.endswith("]"):
-            items = [s.strip().strip('"').strip("'") for s in val[1:-1].split(",") if s.strip()]
-            meta[key] = items
-        else:
-            meta[key] = val
 
     name = meta.get("name")
     if not name:
         log.warning("agent_parse_skipped", path=str(path), reason="missing name")
         return None
 
-    config: dict[str, Any] = {"name": name, "prompt": body}
-    if "description" in meta:
-        config["description"] = meta["description"]
-    if "tools" in meta:
-        config["tools"] = meta["tools"]
+    config: dict[str, Any] = {"name": name, "prompt": post.content.strip()}
+    for key in _CUSTOM_AGENT_FIELDS - {"name"}:
+        if key in meta:
+            config[key] = meta[key]
     return config
+
+
+def _resolve_real_path(path: Path) -> Path:
+    """Resolve symlinks to detect duplicates."""
+    try:
+        return path.resolve()
+    except OSError:
+        return path
 
 
 def discover_repo_config(repo_path: str) -> RepoConfig:
@@ -82,7 +75,22 @@ def discover_repo_config(repo_path: str) -> RepoConfig:
     skill_dirs: list[str] = []
     agents: list[dict[str, Any]] = []
     instruction_parts: list[str] = []
+    seen_instruction_paths: set[Path] = set()
 
+    def _add_instruction(path: Path) -> None:
+        """Add instruction file content, deduplicating symlinks."""
+        resolved = _resolve_real_path(path)
+        if resolved in seen_instruction_paths:
+            return
+        try:
+            content = path.read_text().strip()
+        except OSError:
+            return
+        if content:
+            seen_instruction_paths.add(resolved)
+            instruction_parts.append(content)
+
+    # 1. Config-root-scoped discovery (.github/, .claude/)
     for config_root in _CONFIG_ROOTS:
         base = root / config_root
 
@@ -99,20 +107,30 @@ def discover_repo_config(repo_path: str) -> RepoConfig:
                 if parsed:
                     agents.append(parsed)
 
-        # Global instructions
-        global_instructions = base / _GLOBAL_INSTRUCTIONS
-        if global_instructions.is_file():
-            content = global_instructions.read_text().strip()
-            if content:
-                instruction_parts.append(content)
+        # Global instructions scoped to this config root
+        for instr_name in _CONFIG_ROOT_INSTRUCTIONS.get(config_root, []):
+            _add_instruction(base / instr_name)
 
         # Per-language instructions
         instructions_dir = base / _INSTRUCTIONS_DIR
         if instructions_dir.is_dir():
             for instr_file in sorted(instructions_dir.glob("*.instructions.md")):
-                content = instr_file.read_text().strip()
-                if content:
-                    instruction_parts.append(content)
+                _add_instruction(instr_file)
+
+    # 2. Root-level AGENTS.md (universal standard) — root first, then subdirectories
+    root_agents_md = root / _AGENTS_MD
+    _add_instruction(root_agents_md)
+
+    config_root_dirs = {root / cr for cr in _CONFIG_ROOTS}
+    for agents_md in sorted(root.rglob(_AGENTS_MD)):
+        if agents_md == root_agents_md:
+            continue
+        if any(agents_md.is_relative_to(crd) for crd in config_root_dirs):
+            continue
+        _add_instruction(agents_md)
+
+    # 3. Root-level CLAUDE.md (if not already loaded from .claude/)
+    _add_instruction(root / _CLAUDE_MD)
 
     instructions = "\n\n".join(instruction_parts) if instruction_parts else None
 

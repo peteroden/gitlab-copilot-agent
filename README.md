@@ -54,14 +54,26 @@ The service needs a publicly reachable URL. For local dev, use [ngrok](https://n
 
 The agent automatically loads project-specific config from the reviewed repo:
 
+**Skills and agents** (from `.github/` and `.claude/`):
+
 | Path | What | How |
 |---|---|---|
 | `.github/skills/*/SKILL.md` | Skills | SDK-native `skill_directories` |
+| `.claude/skills/*/SKILL.md` | Skills | SDK-native `skill_directories` |
 | `.github/agents/*.agent.md` | Custom agents | SDK-native `custom_agents` (YAML frontmatter) |
-| `.github/copilot-instructions.md` | Global instructions | Appended to system message |
-| `.github/instructions/*.md` | Per-language instructions | Appended to system message |
+| `.claude/agents/*.agent.md` | Custom agents | SDK-native `custom_agents` (YAML frontmatter) |
 
-`.gitlab/` paths are also supported.
+**Instructions** (all discovered, concatenated into system message):
+
+| Path | Standard | Scope |
+|---|---|---|
+| `.github/copilot-instructions.md` | GitHub Copilot | Project-wide |
+| `.github/instructions/*.md` | GitHub Copilot | Per-language |
+| `.claude/CLAUDE.md` | Claude Code | Project-wide |
+| `AGENTS.md` | Universal (Copilot, Claude, Codex, Cursor, GitLab Duo) | Project root + subdirectories |
+| `CLAUDE.md` | Claude Code | Project root |
+
+Symlinked files (e.g., `ln -s AGENTS.md CLAUDE.md`) are deduplicated automatically.
 
 ## Review Output
 
