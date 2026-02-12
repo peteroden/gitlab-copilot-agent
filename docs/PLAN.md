@@ -249,6 +249,92 @@ Three areas to change:
 
 ---
 
+## Feature: Support `.claude/` config root and universal instruction files
+
+### Problem
+
+The repo config discovery currently searches `.github/` and `.gitlab/`. Two issues:
+
+1. `.gitlab/` is for CI/CD configs and MR templates — **not** agent config. GitLab uses `AGENTS.md` (via GitLab Duo) for AI agent instructions. Remove `.gitlab/` as a config root.
+2. `.claude/` (Claude Code's project config) is not searched. Add it.
+3. `AGENTS.md` is the emerging universal standard for AI agent instructions, supported by Copilot, Claude Code, Codex, Cursor, GitLab Duo, and others. It supports **hierarchical subdirectory loading** — the closest `AGENTS.md` to the file being worked on takes precedence.
+
+### Instruction file landscape
+
+| File | Location | Used by |
+|---|---|---|
+| `.github/copilot-instructions.md` | `.github/` | GitHub Copilot |
+| `.github/instructions/*.md` | `.github/instructions/` | GitHub Copilot (per-language) |
+| `AGENTS.md` | Project root + any subdirectory | Universal (Copilot, Claude, Codex, Cursor, GitLab Duo) |
+| `CLAUDE.md` | Project root | Claude Code |
+| `.claude/CLAUDE.md` | `.claude/` | Claude Code (project-scoped) |
+
+`AGENTS.md` hierarchy: the closest file to the working directory wins. In a monorepo:
+```
+/AGENTS.md                          ← global conventions
+/packages/frontend/AGENTS.md        ← frontend-specific rules
+/packages/backend/AGENTS.md         ← backend-specific rules
+```
+
+### Changes
+
+**Config roots** — replace `.gitlab/` with `.claude/`:
+- [ ] **update-config-roots** _(Developer)_: Change `_CONFIG_ROOTS` from `[".github", ".gitlab"]` to `[".github", ".claude"]`
+
+**Instruction file discovery** — add root-level universal files:
+- [ ] **root-instructions** _(Developer)_: After loading config-root-scoped instructions, also discover from the project root:
+  1. `AGENTS.md` — walk from root, collect all `AGENTS.md` files (root + subdirectories), concatenate with root first
+  2. `CLAUDE.md` — project root only
+  
+  Load order (all concatenated into system message):
+  1. `.github/copilot-instructions.md` + `.github/instructions/*.md`
+  2. `.claude/CLAUDE.md` (via config root discovery, treated as instructions file)
+  3. `AGENTS.md` (root, then subdirectories)
+  4. `CLAUDE.md` (project root)
+  
+  Deduplicate if files are symlinks to each other (common practice: `ln -s AGENTS.md CLAUDE.md`).
+
+- [ ] **test-config-roots** _(Developer)_: Add tests for `.claude/` discovery, `AGENTS.md` (root + subdirs), `CLAUDE.md`, symlink dedup, and removal of `.gitlab/`
+- [ ] **update-docs-config** _(Developer)_: Update README to list all supported instruction file locations
+
+---
+
+## Refactor: Replace regex frontmatter parsing with python-frontmatter
+
+### Problem
+
+`repo_config.py` uses a hand-rolled regex + manual key-value parser for `.agent.md` YAML frontmatter. This is fragile — it doesn't handle multiline values, nested YAML, quoted colons, or TOML/JSON frontmatter. It also silently drops `CustomAgentConfig` fields like `display_name`, `mcp_servers`, and `infer`.
+
+### Changes
+
+- [ ] **add-frontmatter-dep** _(Developer)_: Add `python-frontmatter` to `pyproject.toml` (it pulls in PyYAML)
+- [ ] **refactor-parser** _(Developer)_: Replace `_parse_agent_file()` regex with `frontmatter.loads()`:
+  ```python
+  import frontmatter
+  post = frontmatter.loads(text)
+  meta = post.metadata  # dict with all YAML fields
+  body = post.content    # markdown body
+  ```
+  Pass through all recognized `CustomAgentConfig` fields: `name`, `description`, `tools`, `display_name`, `mcp_servers`, `infer`
+- [ ] **remove-regex** _(Developer)_: Remove `_FRONTMATTER_RE` and the manual parsing loop
+- [ ] **test-frontmatter** _(Developer)_: Verify existing tests still pass, add test for nested/complex YAML frontmatter
+
+### Execution Sequence
+
+```
+Developer: update-config-roots + add-frontmatter-dep (independent, can parallelize)
+    ↓
+Developer: root-instructions + refactor-parser + remove-regex (depend on above)
+    ↓
+Developer: test-config-roots + test-frontmatter (after implementation)
+    ↓
+Developer: update-docs-config (after tests pass)
+```
+
+Branch: `feature/config-roots-and-frontmatter` off `main`
+
+---
+
 ## Assumptions
 
 1. The Copilot CLI binary will be available in the Azure App Service container (installed in Dockerfile).
