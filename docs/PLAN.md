@@ -63,8 +63,7 @@ The Architect produces three artifacts before any code is written: research docs
   - Webhook secret: `X-Gitlab-Token` header
 
 ### Step 0b: Architecture ADR _(Architect)_
-- [ ] `docs/adr/0001-mr-review-service-architecture.md`
-- Decisions to document:
+- [x] `docs/adr/0001-mr-review-service-architecture.md` — 7 decisions documented:
   - FastAPI + async over Flask (matches SDK)
   - Clone-to-temp-dir over API-only context (agent gets real file access)
   - Copilot SDK with custom tools over raw LLM API (leverages agent runtime)
@@ -74,14 +73,8 @@ The Architect produces three artifacts before any code is written: research docs
   - Structured JSON output from agent with free-text fallback
 
 ### Step 0c: Python instruction file _(Architect)_
-- [ ] `.github/instructions/python.instructions.md` — Python-specific production guidance covering:
-  - **Async patterns**: Structured concurrency with `asyncio.TaskGroup`, proper cancellation/cleanup, no fire-and-forget tasks, async context managers for resource lifecycle
-  - **Error handling**: Custom exception hierarchy inheriting from a project base, structured logging with `structlog`, retry with exponential backoff for transient failures, fail-fast for config/auth errors
-  - **Pydantic everywhere**: All data boundaries use Pydantic models (API input/output, config, internal DTOs). `model_validate` over manual dict unpacking. Strict mode for external input. `Field(description=...)` for self-documenting schemas.
-  - **Dependency injection**: FastAPI `Depends()` for all service dependencies. Protocol-based interfaces for external services (GitLab, Copilot). Constructor injection for testability — no module-level singletons.
-  - **Type strictness**: No `Any` without justification. `Protocol` over ABC. `TypeAlias` for complex types. All functions fully annotated including return types.
-  - **Project layout**: `src/` layout. Explicit `__init__.py` with `__all__`. Absolute imports only.
-  - **Testing**: `pytest` + `pytest-asyncio`. Fixtures for dependency injection. `httpx.AsyncClient` for FastAPI testing. No `unittest.mock.patch` on internals — inject mocks via DI.
+- [x] `.github/instructions/python.instructions.md` — Python-specific guidance covering:
+  async patterns, error handling, Pydantic, DI, type strictness, project layout, testing
 
 ### PR 1: Project scaffold + FastAPI skeleton _(Developer)_
 - [ ] `pyproject.toml` with pinned dependencies: `fastapi`, `uvicorn`, `python-gitlab`, `github-copilot-sdk`, `pydantic`, `pydantic-settings`, `structlog`
