@@ -1,0 +1,13 @@
+{
+  "name": "gitlab-copilot-agent",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {}
+  },
+  "postCreateCommand": "pipx install uv && uv tool install ruff && uv tool install mypy && uv --version",
+  "customizations": {
+    "vscode": {
+      "extensions": ["GitHub.copilot"]
+    }
+  }
+}

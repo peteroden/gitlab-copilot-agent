@@ -1,0 +1,39 @@
+name: PR Size Check
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  check-pr-size:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR diff size
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ADDITIONS=$(gh pr view ${{ github.event.number }} --repo ${{ github.repository }} --json additions --jq '.additions')
+          DELETIONS=$(gh pr view ${{ github.event.number }} --repo ${{ github.repository }} --json deletions --jq '.deletions')
+          TOTAL=$((ADDITIONS + DELETIONS))
+          echo "PR diff size: +${ADDITIONS} -${DELETIONS} = ${TOTAL} lines"
+
+          if [ "$TOTAL" -gt 200 ]; then
+            echo "::error::PR too large: ${TOTAL} diff lines (limit: 200). Split into smaller PRs."
+            echo ""
+            echo "If this is an exception (generated code, migrations), a maintainer can apply the 'override-size-check' label."
+            exit 1
+          fi
+
+          echo "✅ PR size OK: ${TOTAL} diff lines"
+
+      - name: Check for size override label
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LABELS=$(gh pr view ${{ github.event.number }} --repo ${{ github.repository }} --json labels --jq '.labels[].name')
+          if echo "$LABELS" | grep -q "override-size-check"; then
+            echo "✅ Size check overridden by label"
+            exit 0
+          fi
+          exit 1
