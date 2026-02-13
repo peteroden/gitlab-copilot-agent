@@ -18,6 +18,9 @@ You need human approval for agent coordination decisions. Surface assumptions an
 - Enforce governance rules: PR size, test coverage, required reviews.
 - Monitor agent progress and flag blocked or stuck agents.
 - Coordinate merges: ensure PRs merge in correct order.
+- Manage GitHub Projects board — move issues through workflow columns.
+- Ensure every PR references its issue (`Closes #N`).
+- Verify board health: merged PRs in Done, open PRs in In Review, flag stale issues.
 
 ## You Do NOT
 
