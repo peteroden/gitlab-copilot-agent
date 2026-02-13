@@ -96,7 +96,7 @@ The two capabilities must never depend on each other:
 | `jira_models.py` | Pydantic models for Jira API responses |
 | `jira_client.py` | Jira REST API: search issues, transition, add comment |
 | `coding_engine.py` | Coding-specific system prompt and prompt builder. Calls `run_copilot_session()`. |
-| `git_operations.py` | `GitRepo` class: branch, commit, push, pull |
+| `git_operations.py` | Standalone async functions: `git_create_branch()`, `git_commit()`, `git_push()`. Same `asyncio.create_subprocess_exec` pattern as existing `clone_repo()`. No class — YAGNI. |
 | `coding_orchestrator.py` | Jira issue → clone → code → MR → Jira update |
 | `comment_handler.py` | MR `/agent` comment → code update → reply |
 | `project_mapping.py` | Jira project key → GitLab project ID + clone URL config |
@@ -114,7 +114,7 @@ The two capabilities must never depend on each other:
 1. **Polling over webhooks** — no Jira admin access needed, works behind firewalls, catches up on restart. Webhook can be added later behind the same `JiraIssueHandler` interface.
 2. **Shared Copilot SDK session runner** — extract the common SDK lifecycle (client init → `discover_repo_config` → build `SessionConfig` with skills/agents/instructions/provider → create session → collect messages → cleanup) into a `copilot_session.py` module. Both `review_engine.py` and `coding_engine.py` call this with different system prompts and user prompts. No duplicated SDK wiring.
 3. **Shared `repo_config.py`** — both engines load agents, skills, and instructions from the cloned target repo via `discover_repo_config()`. The coding agent respects the same project conventions as the review agent.
-4. **`GitRepo` abstraction** in `git_operations.py` — reusable for branch/commit/push (existing clone stays in gitlab_client for now)
+4. **Standalone git functions** in `git_operations.py` — `git_create_branch()`, `git_commit()`, `git_push()` as standalone async functions, not a class. Matches existing `clone_repo()` pattern in `gitlab_client.py`. A class adds ceremony (construction, state management) with no benefit for 3 stateless operations. Reconsider if 10+ operations emerge.
 5. **Branch prefix `agent/`** — review agent can ignore agent-created MRs, prevents conflicts
 6. **Per-repo locking** — prevent concurrent coding sessions on the same repo
 7. **Project mapping via env var** — JSON config `JIRA_GITLAB_PROJECT_MAP='{"PROJ": {"gitlab_project_id": 12345, "clone_url": "https://..."}}'`
@@ -124,10 +124,12 @@ The two capabilities must never depend on each other:
 
 ### Phase 1: Foundation (3 PRs)
 
-**PR 1: Git operations abstraction** (~150 lines)
-- Create `git_operations.py` with `GitRepo` class: `create_branch()`, `commit()`, `push()`
-- Tests for each operation using local bare repos
-- AC: All git operations work on local test repos
+**PR 1: Git operations** (~100 lines)
+- Create `git_operations.py` with standalone async functions: `git_create_branch()`, `git_commit()`, `git_push()`
+- Same `asyncio.create_subprocess_exec` pattern as existing `clone_repo()` in `gitlab_client.py`
+- Token sanitization in push errors, `--` separators to prevent option injection
+- Tests for each function using local bare repos
+- AC: All git operations work on local test repos, consistent with existing codebase patterns
 
 **PR 2: Jira client and models** (~150 lines)
 - Create `jira_models.py`: Pydantic models for Jira API issue responses
