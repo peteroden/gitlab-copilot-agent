@@ -1,6 +1,6 @@
 """Application configuration via environment variables."""
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -33,3 +33,11 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0", description="Server bind host")
     port: int = Field(default=8000, description="Server bind port")
     log_level: str = Field(default="info", description="Log level")
+
+    @model_validator(mode="after")
+    def _check_auth(self) -> "Settings":
+        if not self.github_token and not self.copilot_provider_type:
+            raise ValueError(
+                "Either GITHUB_TOKEN or COPILOT_PROVIDER_TYPE must be set"
+            )
+        return self

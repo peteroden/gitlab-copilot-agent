@@ -137,24 +137,26 @@ async def run_review(
             session_opts["model"] = settings.copilot_model
 
         session = await client.create_session(session_opts)
-        done = asyncio.Event()
-        messages: list[str] = []
+        try:
+            done = asyncio.Event()
+            messages: list[str] = []
 
-        def on_event(event: Any) -> None:
-            match getattr(event, "type", None):
-                case t if t and t.value == "assistant.message":
-                    content = getattr(event.data, "content", "")
-                    if content:
-                        messages.append(content)
-                case t if t and t.value == "session.idle":
-                    done.set()
+            def on_event(event: Any) -> None:
+                match getattr(event, "type", None):
+                    case t if t and t.value == "assistant.message":
+                        content = getattr(event.data, "content", "")
+                        if content:
+                            messages.append(content)
+                    case t if t and t.value == "session.idle":
+                        done.set()
 
-        session.on(on_event)
-        await session.send({
-            "prompt": build_review_prompt(review_request),
-        })
-        await asyncio.wait_for(done.wait(), timeout=300)
-        await session.destroy()
+            session.on(on_event)
+            await session.send({
+                "prompt": build_review_prompt(review_request),
+            })
+            await asyncio.wait_for(done.wait(), timeout=300)
+        finally:
+            await session.destroy()
 
         return messages[-1] if messages else ""
     finally:
