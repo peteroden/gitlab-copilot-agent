@@ -1,7 +1,27 @@
 """Application configuration via environment variables."""
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings
+
+
+class JiraSettings(BaseModel):
+    """Jira configuration — all optional. Service runs review-only without these."""
+
+    model_config = ConfigDict(strict=True)
+
+    url: str = Field(description="Jira instance URL")
+    email: str = Field(description="Jira user email for basic auth")
+    api_token: str = Field(description="Jira API token or PAT")
+    trigger_status: str = Field(
+        default="AI Ready", description="Jira status that triggers the agent"
+    )
+    in_progress_status: str = Field(
+        default="In Progress", description="Status to transition to after pickup"
+    )
+    poll_interval: int = Field(default=30, description="Polling interval in seconds")
+    project_map_json: str = Field(
+        description="JSON string mapping Jira project keys to GitLab projects"
+    )
 
 
 class Settings(BaseSettings):
@@ -33,6 +53,41 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0", description="Server bind host")
     port: int = Field(default=8000, description="Server bind port")
     log_level: str = Field(default="info", description="Log level")
+
+    # Jira (all optional — service runs review-only without these)
+    jira_url: str | None = Field(default=None, description="Jira instance URL")
+    jira_email: str | None = Field(default=None, description="Jira user email")
+    jira_api_token: str | None = Field(default=None, description="Jira API token")
+    jira_trigger_status: str = Field(
+        default="AI Ready", description="Status that triggers agent"
+    )
+    jira_in_progress_status: str = Field(
+        default="In Progress", description="Status after pickup"
+    )
+    jira_poll_interval: int = Field(default=30, description="Poll interval seconds")
+    jira_project_map: str | None = Field(
+        default=None, description="JSON: Jira project key → GitLab project config"
+    )
+
+    @property
+    def jira(self) -> JiraSettings | None:
+        """Return JiraSettings if all required Jira fields are set, else None."""
+        if (
+            self.jira_url
+            and self.jira_email
+            and self.jira_api_token
+            and self.jira_project_map
+        ):
+            return JiraSettings(
+                url=self.jira_url,
+                email=self.jira_email,
+                api_token=self.jira_api_token,
+                trigger_status=self.jira_trigger_status,
+                in_progress_status=self.jira_in_progress_status,
+                poll_interval=self.jira_poll_interval,
+                project_map_json=self.jira_project_map,
+            )
+        return None
 
     @model_validator(mode="after")
     def _check_auth(self) -> "Settings":

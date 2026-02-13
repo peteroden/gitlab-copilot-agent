@@ -50,7 +50,11 @@ class JiraClient:
         next_page_token: str | None = None
 
         while True:
-            params: dict[str, str] = {"jql": jql, "maxResults": "50"}
+            params: dict[str, str] = {
+                "jql": jql,
+                "maxResults": "50",
+                "fields": "summary,status,assignee,labels,description",
+            }
             if next_page_token:
                 params["nextPageToken"] = next_page_token
 

@@ -94,7 +94,11 @@ class TestJiraClientSearch:
         assert issues[0].key == "PROJ-123"
         mock_get.assert_called_once_with(
             "/rest/api/3/search/jql",
-            params={"jql": 'status = "AI Ready"', "maxResults": "50"},
+            params={
+                "jql": 'status = "AI Ready"',
+                "maxResults": "50",
+                "fields": "summary,status,assignee,labels,description",
+            },
         )
         await client.close()
 
