@@ -4,9 +4,15 @@ These instructions apply to all agents regardless of role.
 
 ## Environment
 
-- Execute all commands inside the devcontainer: `devcontainer exec --workspace-folder . <command>`
-- Start the container if needed: `devcontainer up --workspace-folder .`
-- Never install development dependencies directly on the host.
+**All dev tool execution happens inside the devcontainer. No exceptions.**
+
+See `.github/instructions/devcontainer.instructions.md` for context detection, command rules, and failure recovery.
+
+## Pre-Implementation Gate
+
+**STOP. Before implementing any non-trivial task, invoke the `pre-implementation` skill and complete all applicable steps.** Do not write code, create files, or make changes until requirements are validated with `@product` and design is reviewed with `@architect` and `@designer` (if applicable).
+
+Skip only for single-line fixes, typos, or config tweaks.
 
 ## Quality Standard
 
@@ -31,6 +37,15 @@ ASSUMPTIONS:
 
 Interactive agents: surface assumptions and wait for confirmation.
 Yolo agents: document assumptions in commit messages and PR descriptions.
+
+## Work Tracking
+
+- Once a repo is published to GitHub, use **GitHub Issues** to track all planned work.
+- Every task should have an issue with acceptance criteria before work begins.
+- PRs must reference their issue (`Closes #N` in the PR description).
+- Branch names use the issue number: `<type>/<issue-number>-<short-description>`.
+- Local tracking (session SQL todos) is acceptable for unpublished repos or exploratory work.
+- See the `github-workflow` skill for detailed procedures.
 
 ## Conventions
 
@@ -73,6 +88,20 @@ Yolo agents: document assumptions in commit messages and PR descriptions.
 - Test our code, not third-party libraries. Mock at the boundary.
 - Tests written alongside code, not after.
 - All tests must pass before PR merge.
+
+## Agent Delegation
+
+When planning or executing non-trivial work, delegate to the appropriate agent role:
+
+| Phase | Agent | Use for |
+|-------|-------|---------|
+| Planning | `@product` | Defining requirements, user stories, acceptance criteria, scoping |
+| Planning | `@architect` | Evaluating system design, technology choices, API contracts, ADRs |
+| Planning | `@designer` | UX/UI patterns, interaction flows, accessibility (for end users and developer experience) |
+| Execution | `@developer` | Writing code, tests, and documentation |
+| Execution | `@orchestrator` | Task breakdown, PR sequencing, worktree management |
+
+Don't do everything yourself — involve the right agent at the right phase.
 
 ## References
 

@@ -79,6 +79,10 @@ Add only what the project requires:
 - Use `mcr.microsoft.com/devcontainers/base:ubuntu` instead.
 - All `ghcr.io/devcontainers/features/*` features support ARM64.
 
+## Pre-flight Check
+
+See `.github/instructions/devcontainer.instructions.md` for context detection and command rules before running any dev command.
+
 ## Setup Process
 
 ### New Project

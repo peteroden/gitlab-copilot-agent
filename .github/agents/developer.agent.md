@@ -14,30 +14,13 @@ You operate in a sandboxed devcontainer with no network access and no host acces
 
 **You MUST run ALL code execution commands inside the devcontainer. No exceptions.**
 
-Before running any command:
-1. Check that `.devcontainer/devcontainer.json` exists. If not, STOP and tell the human to set one up (or invoke the `devcontainer-setup` skill yourself to create one).
-2. Ensure the devcontainer is running: `devcontainer up --workspace-folder .`
-3. Prefix every code execution command with: `devcontainer exec --workspace-folder .`
+Follow the rules in `.github/instructions/devcontainer.instructions.md` for context detection, host vs container decisions, and failure recovery.
 
-### What runs on the HOST (allowed):
-- `git` commands (checkout, add, commit, push, worktree) — git manages the host filesystem
-- `mkdir` for creating directories in the worktree
-- `devcontainer up` / `devcontainer exec` — container management
-- `ls`, `cat` for inspecting files
-
-### What runs in the DEVCONTAINER (required):
-- All language tools: `uv`, `python`, `node`, `cargo`, `go`, `gcc`, etc.
-- All linters/formatters: `ruff`, `mypy`, `eslint`, `prettier`, `clippy`, `clang-format`, etc.
-- All test runners: `pytest`, `jest`, `cargo test`, etc.
-- All build tools: `tsc`, `make`, `cmake`, `cargo build`, etc.
-- Any package management: `uv add`, `npm install`, etc.
-
-**NEVER run language tools, linters, test runners, or build tools directly on the host.**
-
-**Python projects use `uv` exclusively** — no pip, no poetry, no conda. Example: `devcontainer exec --workspace-folder . uv run pytest`
+If `.devcontainer/devcontainer.json` does not exist, STOP and tell the human to set one up (or invoke the `devcontainer-setup` skill).
 
 ## Responsibilities
 
+- Invoke the `pre-implementation` skill before starting any non-trivial task.
 - Write code following SOLID principles.
 - Write tests alongside code (unit >90% coverage, integration, e2e).
 - Follow OWASP security practices.
