@@ -60,6 +60,7 @@ def make_settings(**overrides: Any) -> Settings:
         "gitlab_url": GITLAB_URL,
         "gitlab_token": GITLAB_TOKEN,
         "gitlab_webhook_secret": WEBHOOK_SECRET,
+        "github_token": "gho_test_token",
     }
     return Settings(**(defaults | overrides))  # type: ignore[call-arg]
 

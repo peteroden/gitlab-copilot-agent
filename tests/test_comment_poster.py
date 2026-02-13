@@ -99,3 +99,22 @@ async def test_posts_comment_without_suggestion_has_no_block() -> None:
     mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
     body = mr.discussions.create.call_args[0][0]["body"]
     assert "suggestion" not in body
+
+
+async def test_both_inline_and_fallback_fail_continues() -> None:
+    gl = MagicMock()
+    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+    mr.discussions.create.side_effect = Exception("Position invalid")
+    # Fallback fails for both comments, but summary succeeds
+    mr.notes.create.side_effect = [Exception("Fail1"), Exception("Fail2"), None]
+
+    review = ParsedReview(
+        comments=[
+            ReviewComment(file="a.py", line=1, severity="error", comment="Bug1"),
+            ReviewComment(file="b.py", line=2, severity="error", comment="Bug2"),
+        ],
+        summary="Summary.",
+    )
+    # Should not raise — both comments attempted, summary still posted
+    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review)
+    assert mr.notes.create.call_count == 3

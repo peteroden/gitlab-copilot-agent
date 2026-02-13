@@ -14,6 +14,8 @@ import structlog
 
 log = structlog.get_logger()
 
+CLONE_DIR_PREFIX = "mr-review-"
+
 
 @dataclass(frozen=True)
 class MRDiffRef:
@@ -86,20 +88,25 @@ class GitLabClient:
     async def clone_repo(
         self, clone_url: str, branch: str, token: str
     ) -> Path:
-        tmp_dir = Path(tempfile.mkdtemp(prefix="mr-review-"))
+        tmp_dir = Path(tempfile.mkdtemp(prefix=CLONE_DIR_PREFIX))
         auth_url = clone_url.replace("https://", f"https://oauth2:{token}@")
 
         proc = await asyncio.create_subprocess_exec(
-            "git", "clone", "--depth=1", "--branch", branch, auth_url, str(tmp_dir),
+            "git", "clone", "--depth=1", "--branch", branch, "--", auth_url, str(tmp_dir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await proc.communicate()
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            proc.kill()
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise RuntimeError("git clone timed out after 120s")
 
         if proc.returncode != 0:
             shutil.rmtree(tmp_dir, ignore_errors=True)
-            msg = f"git clone failed: {stderr.decode().strip()}"
-            raise RuntimeError(msg)
+            sanitized = stderr.decode().strip().replace(token, "***")
+            raise RuntimeError(f"git clone failed: {sanitized}")
 
         await log.ainfo("repo_cloned", path=str(tmp_dir), branch=branch)
         return tmp_dir

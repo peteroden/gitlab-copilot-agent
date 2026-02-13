@@ -62,7 +62,12 @@ async def _run(*cmd: str) -> None:
     await proc.communicate()
 
 
-async def test_clone_repo_success(tmp_path: Path) -> None:
+async def test_clone_repo_sanitizes_token_in_error(tmp_path: Path) -> None:
+    client = GitLabClient("https://gitlab.com", "token")
+    secret = "glpat-secret-token-value"
+    with pytest.raises(RuntimeError, match="git clone failed") as exc_info:
+        await client.clone_repo("https://gitlab.com/nonexistent/repo.git", "main", secret)
+    assert secret not in str(exc_info.value)
     client = GitLabClient("https://gitlab.com", "token")
 
     # Create a bare git repo to clone from

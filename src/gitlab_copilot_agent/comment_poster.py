@@ -49,7 +49,10 @@ async def post_review(
                 })
             except Exception:
                 log.warning("Inline comment failed for %s:%d", c.file, c.line, exc_info=True)  # stdlib logger
-                mr.notes.create({"body": f"{body}\n\n`{c.file}:{c.line}`"})
+                try:
+                    mr.notes.create({"body": f"{body}\n\n`{c.file}:{c.line}`"})
+                except Exception:
+                    log.warning("Fallback note also failed for %s:%d", c.file, c.line, exc_info=True)
 
         mr.notes.create({"body": f"## Code Review Summary\n\n{review.summary}"})
 
