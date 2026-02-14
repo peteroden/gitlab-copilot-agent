@@ -77,6 +77,7 @@ async def _run_git(
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError as e:
         proc.kill()
+        await proc.wait()
         raise RuntimeError(f"git {' '.join(args)} timed out after {timeout}s") from e
 
     if proc.returncode != 0:
@@ -178,6 +179,7 @@ async def git_clone(clone_url: str, branch: str, token: str) -> Path:
             _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
         except TimeoutError as e:
             proc.kill()
+            await proc.wait()
             shutil.rmtree(tmp_dir, ignore_errors=True)
             raise RuntimeError("git clone timed out after 120s") from e
         if proc.returncode != 0:
