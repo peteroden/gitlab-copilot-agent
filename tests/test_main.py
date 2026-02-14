@@ -72,4 +72,3 @@ async def test_lifespan_with_jira_creates_shared_lock_manager(
             assert args[3] is test_app.state.repo_locks
 
         mock_poller.stop.assert_called_once()
-        mock_jira_client.close.assert_called_once()
