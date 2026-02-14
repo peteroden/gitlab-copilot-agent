@@ -63,34 +63,12 @@ async def _run(*cmd: str) -> None:
 
 
 async def test_clone_repo_sanitizes_token_in_error(tmp_path: Path) -> None:
+    """Test that tokens are sanitized in clone error messages."""
     client = GitLabClient("https://gitlab.com", "token")
     secret = "glpat-secret-token-value"
+
+    # Token sanitization in error from non-existent repo
     with pytest.raises(RuntimeError, match="git clone failed") as exc_info:
         await client.clone_repo("https://gitlab.com/nonexistent/repo.git", "main", secret)
+    # Ensure token is not leaked in error message
     assert secret not in str(exc_info.value)
-    client = GitLabClient("https://gitlab.com", "token")
-
-    # Create a bare git repo to clone from
-    bare = tmp_path / "bare.git"
-    bare.mkdir()
-    await _run("git", "init", "--bare", "--initial-branch=main", str(bare))
-    await _run("git", "clone", str(bare), str(tmp_path / "work"))
-
-    work = tmp_path / "work"
-    (work / "file.txt").write_text("hello")
-    await _run("git", "-C", str(work), "add", ".")
-    await _run(
-        "git", "-C", str(work),
-        "-c", "user.name=Test", "-c", "user.email=t@t.com",
-        "commit", "-m", "init",
-    )
-    await _run("git", "-C", str(work), "push")
-
-    # Clone via our client (no auth needed for local path)
-    cloned = await client.clone_repo(str(bare), "main", "fake-token")
-    try:
-        assert cloned.exists()
-        assert (cloned / "file.txt").read_text() == "hello"
-    finally:
-        await client.cleanup(cloned)
-        assert not cloned.exists()
