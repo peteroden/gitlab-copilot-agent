@@ -91,9 +91,9 @@ class TestGitCommit:
         )
         assert author == f"{AUTHOR_NAME} <{AUTHOR_EMAIL}>"
 
-    async def test_fails_with_nothing_to_commit(self, work_repo: Path) -> None:
-        with pytest.raises(RuntimeError, match="git -c .* failed"):
-            await git_commit(work_repo, "empty", AUTHOR_NAME, AUTHOR_EMAIL)
+    async def test_returns_false_with_nothing_to_commit(self, work_repo: Path) -> None:
+        result = await git_commit(work_repo, "empty", AUTHOR_NAME, AUTHOR_EMAIL)
+        assert result is False
 
 
 class TestGitPush:
