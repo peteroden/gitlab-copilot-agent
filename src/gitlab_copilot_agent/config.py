@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0", description="Server bind host")
     port: int = Field(default=8000, description="Server bind port")
     log_level: str = Field(default="info", description="Log level")
+    agent_gitlab_username: str | None = Field(default=None, description="Agent's GitLab username for loop prevention")
 
     # Jira (all optional — service runs review-only without these)
     jira_url: str | None = Field(default=None, description="Jira instance URL")

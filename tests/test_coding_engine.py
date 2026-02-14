@@ -2,7 +2,7 @@
 
 from unittest.mock import AsyncMock, patch
 
-from gitlab_copilot_agent.coding_engine import SYSTEM_PROMPT, run_coding_task
+from gitlab_copilot_agent.coding_engine import CODING_SYSTEM_PROMPT, run_coding_task
 from tests.conftest import make_settings
 
 
@@ -22,6 +22,6 @@ async def test_run_coding_task_delegates_to_copilot_session(
 
     assert result == "Changes completed"
     call_args = mock_run_session.call_args[1]
-    assert call_args["system_prompt"] == SYSTEM_PROMPT
+    assert call_args["system_prompt"] == CODING_SYSTEM_PROMPT
     assert "PROJ-789" in call_args["user_prompt"]
     assert "Implement feature X" in call_args["user_prompt"]

@@ -1,22 +1,22 @@
-"""Copilot coding engine — implements changes from a Jira issue."""
+"""Shared coding system prompt and Jira-specific prompt builder."""
 
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.copilot_session import run_copilot_session
 
-SYSTEM_PROMPT = """\
-You are a senior software engineer implementing changes described in a Jira issue.
+CODING_SYSTEM_PROMPT = """\
+You are a senior software engineer implementing requested changes.
 
 Your workflow:
-1. Read the issue description carefully to understand requirements
+1. Read the task description carefully to understand requirements
 2. Explore the existing codebase using file tools to understand structure and conventions
-3. Make minimal, focused changes that address the issue
+3. Make minimal, focused changes that address the task
 4. Follow existing project conventions (code style, patterns, architecture)
 5. Run tests if available to verify your changes
 6. Output a summary of changes made
 
 Guidelines:
 - Make the smallest change that solves the problem
-- Preserve existing behavior unless the issue explicitly requires changes
+- Preserve existing behavior unless explicitly required to change it
 - Follow SOLID principles and existing patterns
 - Add tests for new functionality
 - Update documentation if needed
@@ -31,12 +31,8 @@ Provide a summary of:
 """
 
 
-def build_coding_prompt(
-    issue_key: str,
-    summary: str,
-    description: str | None,
-) -> str:
-    """Build the user prompt for a coding task."""
+def build_jira_coding_prompt(issue_key: str, summary: str, description: str | None) -> str:
+    """Build the user prompt for a Jira coding task."""
     desc_text = description if description else "(no description provided)"
     return (
         f"## Jira Issue: {issue_key}\n"
@@ -59,6 +55,6 @@ async def run_coding_task(
     return await run_copilot_session(
         settings=settings,
         repo_path=repo_path,
-        system_prompt=SYSTEM_PROMPT,
-        user_prompt=build_coding_prompt(issue_key, summary, description),
+        system_prompt=CODING_SYSTEM_PROMPT,
+        user_prompt=build_jira_coding_prompt(issue_key, summary, description),
     )
