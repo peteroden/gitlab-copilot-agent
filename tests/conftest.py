@@ -7,7 +7,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from gitlab_copilot_agent.config import Settings
-from gitlab_copilot_agent.gitlab_client import MRDiffRef
+from gitlab_copilot_agent.gitlab_client import MRChange, MRDiffRef
 from gitlab_copilot_agent.main import app
 
 # -- Constants --
@@ -32,6 +32,17 @@ MR_IID = 7
 
 DIFF_REFS = MRDiffRef(base_sha="aaa", start_sha="bbb", head_sha="ccc")
 
+# Sample unified diff for testing position validation
+SAMPLE_DIFF = """@@ -1,3 +1,4 @@
+ import sys
++import os
+
+ def main():
+@@ -10,2 +11,3 @@ def helper():
+     return x
++    # TODO: refactor
+"""
+
 MR_PAYLOAD: dict[str, Any] = {
     "object_kind": "merge_request",
     "user": {"id": 1, "username": "jdoe"},
@@ -53,11 +64,11 @@ MR_PAYLOAD: dict[str, Any] = {
 }
 
 FAKE_REVIEW_OUTPUT = (
-    '```json\n'
+    "```json\n"
     '[{"file": "src/main.py", "line": 10, "severity": "warning", '
     '"comment": "Consider error handling here"}]\n'
-    '```\n'
-    'Overall the changes look reasonable.'
+    "```\n"
+    "Overall the changes look reasonable."
 )
 
 
@@ -81,6 +92,20 @@ def make_mr_payload(**attr_overrides: Any) -> dict[str, Any]:
     if attr_overrides:
         payload["object_attributes"] = {**payload["object_attributes"], **attr_overrides}
     return payload
+
+
+def make_mr_changes(file_path: str = "src/main.py", diff: str = SAMPLE_DIFF) -> list[MRChange]:
+    """Create sample MRChange list for testing."""
+    return [
+        MRChange(
+            old_path=file_path,
+            new_path=file_path,
+            diff=diff,
+            new_file=False,
+            deleted_file=False,
+            renamed_file=False,
+        )
+    ]
 
 
 # -- Fixtures --
