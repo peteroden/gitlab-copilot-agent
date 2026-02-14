@@ -1,6 +1,7 @@
 """Shared Copilot SDK session runner — extracted from review_engine."""
 
 import asyncio
+import os
 from typing import Any, cast
 
 import structlog
@@ -17,6 +18,21 @@ from gitlab_copilot_agent.repo_config import discover_repo_config
 
 log = structlog.get_logger()
 
+# Env vars safe to pass to the SDK subprocess.
+_SDK_ENV_ALLOWLIST = frozenset({"PATH", "HOME", "LANG", "TERM", "TMPDIR", "USER"})
+
+
+def build_sdk_env(github_token: str | None) -> dict[str, str]:
+    """Build a minimal env dict for the SDK subprocess.
+
+    Only allowed vars + GITHUB_TOKEN are passed. Service secrets
+    (GITLAB_TOKEN, JIRA_*, WEBHOOK_SECRET) are excluded.
+    """
+    env = {k: v for k, v in os.environ.items() if k in _SDK_ENV_ALLOWLIST}
+    if github_token:
+        env["GITHUB_TOKEN"] = github_token
+    return env
+
 
 async def run_copilot_session(
     settings: Settings,
@@ -26,7 +42,9 @@ async def run_copilot_session(
     timeout: int = 300,
 ) -> str:
     """Run a Copilot agent session and return the last assistant message."""
-    client_opts: CopilotClientOptions = {}
+    client_opts: CopilotClientOptions = {
+        "env": build_sdk_env(settings.github_token),  # type: ignore[typeddict-unknown-key]
+    }
     if settings.github_token:
         client_opts["github_token"] = settings.github_token
 
