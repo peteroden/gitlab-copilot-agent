@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import shutil
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -13,8 +11,6 @@ import gitlab
 import structlog
 
 log = structlog.get_logger()
-
-CLONE_DIR_PREFIX = "mr-review-"
 
 
 @dataclass(frozen=True)
@@ -44,6 +40,7 @@ class GitLabClientProtocol(Protocol):
     async def get_mr_details(self, project_id: int, mr_iid: int) -> MRDetails: ...
     async def clone_repo(self, clone_url: str, branch: str, token: str) -> Path: ...
     async def cleanup(self, repo_path: Path) -> None: ...
+    async def create_merge_request(self, project_id: int, source_branch: str, target_branch: str, title: str, description: str) -> int: ...
 
 
 class GitLabClient:
@@ -85,32 +82,27 @@ class GitLabClient:
 
         return await asyncio.to_thread(_fetch)
 
-    async def clone_repo(
-        self, clone_url: str, branch: str, token: str
-    ) -> Path:
-        tmp_dir = Path(tempfile.mkdtemp(prefix=CLONE_DIR_PREFIX))
-        auth_url = clone_url.replace("https://", f"https://oauth2:{token}@")
-
-        proc = await asyncio.create_subprocess_exec(
-            "git", "clone", "--depth=1", "--branch", branch, "--", auth_url, str(tmp_dir),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-        except asyncio.TimeoutError:
-            proc.kill()
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            raise RuntimeError("git clone timed out after 120s")
-
-        if proc.returncode != 0:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            sanitized = stderr.decode().strip().replace(token, "***")
-            raise RuntimeError(f"git clone failed: {sanitized}")
-
-        await log.ainfo("repo_cloned", path=str(tmp_dir), branch=branch)
-        return tmp_dir
+    async def clone_repo(self, clone_url: str, branch: str, token: str) -> Path:
+        from gitlab_copilot_agent.git_operations import git_clone
+        return await git_clone(clone_url, branch, token)
 
     async def cleanup(self, repo_path: Path) -> None:
+        import shutil
         await asyncio.to_thread(shutil.rmtree, repo_path, True)
         await log.ainfo("repo_cleaned", path=str(repo_path))
+
+    async def create_merge_request(
+        self, project_id: int, source_branch: str, target_branch: str,
+        title: str, description: str,
+    ) -> int:
+        """Create a merge request. Returns the MR IID."""
+        def _create() -> int:
+            project = self._gl.projects.get(project_id)
+            mr = project.mergerequests.create({
+                "source_branch": source_branch,
+                "target_branch": target_branch,
+                "title": title,
+                "description": description,
+            })
+            return mr.iid
+        return await asyncio.to_thread(_create)
