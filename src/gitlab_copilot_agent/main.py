@@ -53,13 +53,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
     app.state.settings = settings
 
+    # Shared lock manager for both webhook and Jira flows
+    repo_locks = RepoLockManager()
+    app.state.repo_locks = repo_locks
+
     poller: JiraPoller | None = None
     jira_client: JiraClient | None = None
     if settings.jira:
         jira_client = JiraClient(settings.jira.url, settings.jira.email, settings.jira.api_token)
         project_map = ProjectMap.model_validate_json(settings.jira.project_map_json)
         gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
-        repo_locks = RepoLockManager()
         tracker = ProcessedIssueTracker()
         handler = CodingOrchestrator(settings, gl_client, jira_client, repo_locks, tracker)
         poller = JiraPoller(jira_client, settings.jira, project_map, handler)

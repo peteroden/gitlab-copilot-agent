@@ -5,7 +5,6 @@ import hmac
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
-from gitlab_copilot_agent.concurrency import RepoLockManager
 from gitlab_copilot_agent.models import MergeRequestWebhookPayload, NoteWebhookPayload
 from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
 from gitlab_copilot_agent.orchestrator import handle_review
@@ -15,9 +14,6 @@ log = structlog.get_logger()
 router = APIRouter()
 
 HANDLED_ACTIONS = frozenset({"open", "update"})
-
-# Module-level instance for MR comment handler
-_repo_locks = RepoLockManager()
 
 
 def _validate_webhook_token(received: str | None, expected: str) -> None:
@@ -36,8 +32,9 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
 
 async def _process_copilot_comment(request: Request, payload: NoteWebhookPayload) -> None:
     settings = request.app.state.settings
+    repo_locks = request.app.state.repo_locks
     try:
-        await handle_copilot_comment(settings, payload, _repo_locks)
+        await handle_copilot_comment(settings, payload, repo_locks)
     except Exception:
         await log.aexception("background_copilot_comment_failed")
 
