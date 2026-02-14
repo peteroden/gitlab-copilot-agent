@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from gitlab_copilot_agent.copilot_session import run_copilot_session
+from gitlab_copilot_agent.copilot_session import build_sdk_env, run_copilot_session
 from gitlab_copilot_agent.repo_config import RepoConfig
 from tests.conftest import make_settings
 
@@ -113,3 +113,19 @@ async def test_passes_repo_config_to_session(
     assert session_opts["skill_directories"] == ["/tmp/skills"]
     assert len(session_opts["custom_agents"]) == 1
     assert "Use strict typing." in session_opts["system_message"]["content"]
+
+
+def test_build_sdk_env_includes_only_allowed_vars(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("HOME", "/home/test")
+    monkeypatch.setenv("GITLAB_TOKEN", "secret-gl-token")
+    monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", "secret-webhook")
+    monkeypatch.setenv("JIRA_API_TOKEN", "secret-jira-token")
+
+    env = build_sdk_env(github_token="gh-token")
+
+    assert env["GITHUB_TOKEN"] == "gh-token"
+    assert env["PATH"] == "/usr/bin"
+    assert "GITLAB_TOKEN" not in env
+    assert "GITLAB_WEBHOOK_SECRET" not in env
+    assert "JIRA_API_TOKEN" not in env
