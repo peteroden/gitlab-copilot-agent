@@ -15,6 +15,7 @@ from copilot.types import (
 
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.repo_config import discover_repo_config
+from gitlab_copilot_agent.sandbox import create_permission_handler, create_pre_tool_use_hook
 from gitlab_copilot_agent.telemetry import get_tracer
 
 log = structlog.get_logger()
@@ -44,9 +45,12 @@ async def run_copilot_session(
     timeout: int = 300,
 ) -> str:
     """Run a Copilot agent session and return the last assistant message."""
-    with _tracer.start_as_current_span("copilot.session", attributes={"repo_path": repo_path, "timeout": timeout}):
+    with _tracer.start_as_current_span(
+        "copilot.session",
+        attributes={"repo_path": repo_path, "timeout": timeout},
+    ):
         client_opts: CopilotClientOptions = {
-            "env": build_sdk_env(settings.github_token),  # type: ignore[typeddict-unknown-key]
+            "env": build_sdk_env(settings.github_token),
         }
         if settings.github_token:
             client_opts["github_token"] = settings.github_token
@@ -66,6 +70,10 @@ async def run_copilot_session(
             session_opts: SessionConfig = {
                 "system_message": {"content": system_content},
                 "working_directory": repo_path,
+                "on_permission_request": create_permission_handler(repo_path),
+                "hooks": {
+                    "on_pre_tool_use": create_pre_tool_use_hook(repo_path),
+                },
             }
 
             if repo_config.skill_directories:
