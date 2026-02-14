@@ -13,14 +13,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends git bubblewrap 
 RUN pip install --no-cache-dir uv
 
 RUN useradd -m -u 1000 app
+USER app
 
-WORKDIR /app
-RUN chown app:app /app
+WORKDIR /home/app/app
 COPY --chown=app:app pyproject.toml uv.lock ./
 
-USER app
 RUN uv sync --no-dev --frozen && \
-    find /app/.venv -name "copilot" -path "*/bin/copilot" -exec chmod +x {} \;
+    find .venv -name "copilot" -path "*/bin/copilot" -exec chmod +x {} \;
 
 COPY --chown=app:app src/ src/
 EXPOSE 8000

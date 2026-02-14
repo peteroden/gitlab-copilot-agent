@@ -78,10 +78,10 @@ exec bwrap \\
   --ro-bind /etc/resolv.conf /etc/resolv.conf \\
   --ro-bind /etc/ssl /etc/ssl \\
   --ro-bind /etc/ca-certificates /etc/ca-certificates \\
-  --ro-bind {safe_cli_root} {safe_cli_root} \\
   --tmpfs /tmp \\
   --tmpfs /home \\
   --tmpfs /var/tmp \\
+  --ro-bind {safe_cli_root} {safe_cli_root} \\
   --bind {safe_repo} {safe_repo} \\
   --ro-bind /proc /proc \\
   --dev /dev \\
