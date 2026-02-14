@@ -54,9 +54,7 @@ def test_agent_parsing(tmp_path: Path) -> None:
 def test_agent_missing_optional_fields(tmp_path: Path) -> None:
     agents_dir = tmp_path / ".github" / "agents"
     agents_dir.mkdir(parents=True)
-    (agents_dir / "minimal.agent.md").write_text(
-        "---\nname: minimal\n---\n\nJust a prompt.\n"
-    )
+    (agents_dir / "minimal.agent.md").write_text("---\nname: minimal\n---\n\nJust a prompt.\n")
     config = discover_repo_config(str(tmp_path))
     assert len(config.custom_agents) == 1
     agent = config.custom_agents[0]
@@ -160,6 +158,52 @@ def test_symlink_dedup(tmp_path: Path) -> None:
     assert config.instructions is not None
     # Content should appear only once despite two files
     assert config.instructions.count("Shared instructions.") == 1
+
+
+def test_symlink_escape_rejected(tmp_path: Path) -> None:
+    """Symlink pointing outside repo root should be rejected."""
+    # Create a file outside the repo
+    outside_dir = tmp_path.parent / "outside"
+    outside_dir.mkdir(exist_ok=True)
+    outside_file = outside_dir / "evil.md"
+    outside_file.write_text("Malicious instructions from outside repo.")
+
+    # Create repo directory
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    # Create symlink inside repo pointing outside
+    (repo / "AGENTS.md").symlink_to(outside_file)
+
+    config = discover_repo_config(str(repo))
+    # Instructions should be None or not contain the outside content
+    if config.instructions:
+        assert "Malicious instructions" not in config.instructions
+
+
+def test_symlink_within_repo_accepted(tmp_path: Path) -> None:
+    """Symlink pointing within repo should be accepted."""
+    subdir = tmp_path / "subdir"
+    subdir.mkdir()
+    target = subdir / "shared.md"
+    target.write_text("Shared repo instructions.")
+
+    # Create symlink in root pointing to file in subdir
+    (tmp_path / "AGENTS.md").symlink_to(target)
+
+    config = discover_repo_config(str(tmp_path))
+    assert config.instructions is not None
+    assert "Shared repo instructions." in config.instructions
+
+
+def test_symlink_relative_within_repo(tmp_path: Path) -> None:
+    """Relative symlink within repo should be accepted."""
+    (tmp_path / "shared.md").write_text("Common instructions.")
+    (tmp_path / "AGENTS.md").symlink_to("shared.md")
+
+    config = discover_repo_config(str(tmp_path))
+    assert config.instructions is not None
+    assert "Common instructions." in config.instructions
 
 
 def test_all_instruction_sources_combined(tmp_path: Path) -> None:

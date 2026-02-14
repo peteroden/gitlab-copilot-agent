@@ -61,10 +61,23 @@ def _parse_agent_file(path: Path) -> dict[str, Any] | None:
     return config
 
 
-def _resolve_real_path(path: Path) -> Path:
-    """Resolve symlinks to detect duplicates."""
+def _resolve_real_path(path: Path, repo_root: Path) -> Path | None:
+    """Resolve symlinks to detect duplicates.
+
+    Returns None if the resolved path escapes the repository root.
+    """
     try:
-        return path.resolve()
+        resolved = path.resolve()
+        # Ensure resolved path is within repo boundary
+        if not resolved.is_relative_to(repo_root):
+            log.warning(
+                "instruction_path_rejected",
+                path=str(path),
+                resolved=str(resolved),
+                reason="escapes repository root",
+            )
+            return None
+        return resolved
     except OSError:
         return path
 
@@ -79,7 +92,9 @@ def discover_repo_config(repo_path: str) -> RepoConfig:
 
     def _add_instruction(path: Path) -> None:
         """Add instruction file content, deduplicating symlinks."""
-        resolved = _resolve_real_path(path)
+        resolved = _resolve_real_path(path, root)
+        if resolved is None:
+            return
         if resolved in seen_instruction_paths:
             return
         try:
