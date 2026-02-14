@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
 
     poller: JiraPoller | None = None
+    jira_client: JiraClient | None = None
     if settings.jira:
         jira_client = JiraClient(settings.jira.url, settings.jira.email, settings.jira.api_token)
         project_map = ProjectMap.model_validate_json(settings.jira.project_map_json)
@@ -70,6 +71,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     if poller:
         await poller.stop()
+    if jira_client:
+        await jira_client.close()
     await log.ainfo("service stopped")
     shutdown_telemetry()
 
