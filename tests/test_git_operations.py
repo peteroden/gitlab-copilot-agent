@@ -147,151 +147,80 @@ class TestRunGitTimeout:
 
 
 class TestGitClone:
-    """Test git_clone function with URL validation and secure credential handling."""
+    """Test git_clone with URL validation and error sanitization."""
 
-    async def test_successful_clone_with_secure_credentials(self, bare_repo: Path) -> None:
-        """Clone should successfully clone a valid repo using askpass for credentials."""
-        from unittest.mock import AsyncMock
-
-        from gitlab_copilot_agent.git_operations import git_clone
-
-        # Mock the subprocess to simulate successful clone
-        mock_proc = AsyncMock()
-        mock_proc.communicate.return_value = (b"", b"")
-        mock_proc.returncode = 0
-
-        import asyncio
-        from unittest.mock import patch
-
-        clone_path = None
-        askpass_dir_created = None
-        clone_dest_created = None
-        clone_dest_was_empty = False
-
-        original_create_subprocess_exec = asyncio.create_subprocess_exec
-
-        async def mock_create_subprocess_exec(*args, **kwargs):
-            nonlocal clone_dest_was_empty, clone_dest_created
-            # Capture the clone destination from args
-            if len(args) >= 2 and args[0] == "git" and args[1] == "clone":
-                clone_dest_created = Path(args[-1])
-                # Check if destination is empty when clone is called
-                if clone_dest_created.exists():
-                    clone_dest_was_empty = len(list(clone_dest_created.iterdir())) == 0
-                # Simulate git clone creating .git directory
-                (clone_dest_created / ".git").mkdir(parents=True, exist_ok=True)
-                (clone_dest_created / "README.md").write_text("init")
-            return mock_proc
-
-        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
-            clone_path = await git_clone("https://gitlab.com/test/repo.git", "main", "test-token")
-
-        try:
-            # Verify clone path was returned
-            assert clone_path is not None
-            assert clone_path.exists()
-            assert (clone_path / ".git").is_dir()
-
-            # Verify destination was empty when git clone was called
-            assert clone_dest_was_empty, "Clone destination must be empty when git clone executes"
-
-            # Verify askpass script was cleaned up (not in clone dir)
-            askpass_files = list(clone_path.glob("**/.git-askpass.sh"))
-            assert len(askpass_files) == 0, "askpass script should not be in clone directory"
-
-            # Verify no askpass temp dirs left behind
-            import tempfile
-
-            temp_dir = Path(tempfile.gettempdir())
-            askpass_dirs = list(temp_dir.glob("git-askpass-*"))
-            assert len(askpass_dirs) == 0, "askpass temp directories should be cleaned up"
-        finally:
-            # Clean up clone directory
-            import shutil
-
-            if clone_path:
-                shutil.rmtree(clone_path, ignore_errors=True)
-
-    async def test_clone_cleans_up_askpass_on_failure(self) -> None:
-        """Clone should clean up askpass artifacts even when clone fails."""
-        from gitlab_copilot_agent.git_operations import git_clone
-
-        # Count temp directories before clone attempt
-        import tempfile
-
-        temp_dir = tempfile.gettempdir()
-        before_askpass_dirs = list(Path(temp_dir).glob("git-askpass-*"))
-        before_clone_dirs = list(Path(temp_dir).glob("mr-review-*"))
-
-        # Attempt to clone a non-existent repo (will fail)
-        with pytest.raises(RuntimeError, match="git clone failed"):
-            await git_clone("https://invalid.example.com/nonexistent.git", "main", "test-token")
-
-        # Verify no new askpass directories were left behind
-        after_askpass_dirs = list(Path(temp_dir).glob("git-askpass-*"))
-        new_askpass_dirs = set(after_askpass_dirs) - set(before_askpass_dirs)
-        assert len(new_askpass_dirs) == 0, "askpass directories should be cleaned up on failure"
-
-        # Verify no new clone directories were left behind
-        after_clone_dirs = list(Path(temp_dir).glob("mr-review-*"))
-        new_clone_dirs = set(after_clone_dirs) - set(before_clone_dirs)
-        assert len(new_clone_dirs) == 0, "clone directories should be cleaned up on failure"
-
-    async def test_clone_destination_is_initially_empty(self) -> None:
-        """Regression test: clone destination must be empty when git clone runs.
-        
-        This test specifically catches the bug where askpass script was created
-        in the clone destination directory, causing git clone to fail.
-        """
+    async def test_successful_clone(self) -> None:
+        """Clone should validate URL and return a path."""
         from unittest.mock import AsyncMock, patch
 
         from gitlab_copilot_agent.git_operations import git_clone
 
-        clone_dest_was_empty_at_call_time = False
-        askpass_in_clone_dest = False
-
         mock_proc = AsyncMock()
         mock_proc.communicate.return_value = (b"", b"")
         mock_proc.returncode = 0
 
-        import asyncio
+        captured_args: tuple[str, ...] = ()
 
-        original_create_subprocess_exec = asyncio.create_subprocess_exec
-
-        async def mock_create_subprocess_exec(*args, **kwargs):
-            nonlocal clone_dest_was_empty_at_call_time, askpass_in_clone_dest
-            # Check if this is the git clone command
-            if len(args) >= 2 and args[0] == "git" and args[1] == "clone":
-                # Find the destination directory argument (last arg)
-                dest_dir = Path(args[-1])
-
-                # Verify destination is empty (or doesn't exist yet)
-                if dest_dir.exists():
-                    contents = list(dest_dir.iterdir())
-                    clone_dest_was_empty_at_call_time = len(contents) == 0
-                    # Check if any askpass files are in the destination
-                    askpass_in_clone_dest = any(".git-askpass" in str(f) for f in contents)
-                else:
-                    clone_dest_was_empty_at_call_time = True
-
-                # Simulate successful clone
-                (dest_dir / ".git").mkdir(parents=True, exist_ok=True)
-
+        async def mock_exec(*args: str, **kwargs: object) -> AsyncMock:
+            nonlocal captured_args
+            captured_args = args
+            dest = Path(args[-1])
+            if dest.exists():
+                (dest / ".git").mkdir(parents=True, exist_ok=True)
             return mock_proc
 
-        with patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
-            clone_path = await git_clone("https://gitlab.com/test/repo.git", "main", "test-token")
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
+            clone_path = await git_clone(
+                "https://gitlab.com/test/repo.git", "main", "test-token"
+            )
             try:
-                assert clone_dest_was_empty_at_call_time, (
-                    "git clone destination directory must be empty when clone executes"
-                )
-                assert not askpass_in_clone_dest, (
-                    "askpass script must not be in clone destination directory"
-                )
+                assert clone_path.exists()
+                # Token should be in the auth URL arg, sanitized in errors
+                assert any("oauth2:test-token@" in a for a in captured_args)
             finally:
                 import shutil
 
                 shutil.rmtree(clone_path, ignore_errors=True)
+
+    async def test_clone_cleans_up_on_failure(self) -> None:
+        """Clone directory should be removed when clone fails."""
+        from gitlab_copilot_agent.git_operations import git_clone
+
+        import tempfile
+
+        temp_dir = tempfile.gettempdir()
+        before = set(Path(temp_dir).glob("mr-review-*"))
+
+        with pytest.raises(RuntimeError, match="git clone failed"):
+            await git_clone(
+                "https://invalid.example.com/nonexistent.git", "main", "test-token"
+            )
+
+        after = set(Path(temp_dir).glob("mr-review-*"))
+        assert after - before == set(), "clone directories should be cleaned up on failure"
+
+    async def test_sanitizes_token_in_clone_errors(self) -> None:
+        """Token must not appear in clone error messages."""
+        from unittest.mock import AsyncMock, patch
+
+        from gitlab_copilot_agent.git_operations import git_clone
+
+        secret = "glpat-super-secret"
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (
+            b"",
+            f"fatal: could not read from https://oauth2:{secret}@gitlab.com/x.git".encode(),
+        )
+        mock_proc.returncode = 128
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+            pytest.raises(RuntimeError) as exc_info,
+        ):
+            await git_clone("https://gitlab.com/x.git", "main", secret)
+
+        assert secret not in str(exc_info.value)
+        assert "***" in str(exc_info.value)
 
     async def test_rejects_url_with_embedded_credentials(self) -> None:
         """Clone should reject URLs with embedded credentials."""
