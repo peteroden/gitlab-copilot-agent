@@ -15,6 +15,7 @@ from gitlab_copilot_agent.main import app
 GITLAB_URL = "https://gitlab.example.com"
 GITLAB_TOKEN = "test-token"
 WEBHOOK_SECRET = "test-secret"
+GITHUB_TOKEN = "gho_test_token"
 HEADERS = {"X-Gitlab-Token": WEBHOOK_SECRET}
 
 # Jira constants
@@ -81,7 +82,7 @@ def make_settings(**overrides: Any) -> Settings:
         "gitlab_url": GITLAB_URL,
         "gitlab_token": GITLAB_TOKEN,
         "gitlab_webhook_secret": WEBHOOK_SECRET,
-        "github_token": "gho_test_token",
+        "github_token": GITHUB_TOKEN,
     }
     return Settings(**(defaults | overrides))  # type: ignore[call-arg]
 
@@ -117,6 +118,7 @@ def env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
     monkeypatch.setenv("GITLAB_TOKEN", GITLAB_TOKEN)
     monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    monkeypatch.setenv("GITHUB_TOKEN", GITHUB_TOKEN)
 
 
 @pytest.fixture
