@@ -7,13 +7,16 @@ from contextlib import suppress
 from typing import Protocol
 
 import structlog
+from opentelemetry import trace
 
 from gitlab_copilot_agent.config import JiraSettings
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_models import JiraIssue
 from gitlab_copilot_agent.project_mapping import GitLabProjectMapping, ProjectMap
+from gitlab_copilot_agent.telemetry import get_tracer
 
 log = structlog.get_logger()
+_tracer = get_tracer(__name__)
 
 
 class CodingTaskHandler(Protocol):
@@ -64,22 +67,25 @@ class JiraPoller:
 
     async def _poll_once(self) -> None:
         """Single poll cycle — search for issues, filter by project map, invoke handler."""
-        # Build JQL for all projects in the map
-        project_keys = list(self._project_map.mappings.keys())
-        if not project_keys:
-            return
+        with _tracer.start_as_current_span("jira.poll"):
+            # Build JQL for all projects in the map
+            project_keys = list(self._project_map.mappings.keys())
+            if not project_keys:
+                return
 
-        project_list = ", ".join(f'"{key}"' for key in project_keys)
-        jql = f'status = "{self._trigger_status}" AND project IN ({project_list})'
+            project_list = ", ".join(f'"{key}"' for key in project_keys)
+            jql = f'status = "{self._trigger_status}" AND project IN ({project_list})'
 
-        issues = await self._client.search_issues(jql)
+            issues = await self._client.search_issues(jql)
+            span = trace.get_current_span()
+            span.set_attribute("issue_count", len(issues))
 
-        for issue in issues:
-            # Skip if already processed in this session
-            if issue.key in self._processed_issues:
-                continue
+            for issue in issues:
+                # Skip if already processed in this session
+                if issue.key in self._processed_issues:
+                    continue
 
-            mapping = self._project_map.get(issue.project_key)
-            if mapping:
-                await self._handler.handle(issue, mapping)
-                self._processed_issues.add(issue.key)
+                mapping = self._project_map.get(issue.project_key)
+                if mapping:
+                    await self._handler.handle(issue, mapping)
+                    self._processed_issues.add(issue.key)
