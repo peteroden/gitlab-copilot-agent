@@ -1,6 +1,6 @@
 """Tests for the webhook endpoint."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -55,3 +55,22 @@ async def test_note_webhook_queues_copilot_command(client: AsyncClient) -> None:
 async def test_note_webhook_ignores_non_copilot(client: AsyncClient) -> None:
     resp = await client.post("/webhook", json=_note_body("just a comment"), headers=HEADERS)
     assert resp.json()["status"] == "ignored"
+
+
+async def test_note_webhook_uses_shared_lock_manager(client: AsyncClient) -> None:
+    """Verify that the webhook endpoint uses app.state.repo_locks."""
+    mock_handle = AsyncMock()
+    with patch("gitlab_copilot_agent.webhook.handle_copilot_comment", mock_handle):
+        resp = await client.post("/webhook", json=_note_body(), headers=HEADERS)
+        assert resp.json()["status"] == "queued"
+
+        # Wait for background task to complete
+        import asyncio
+        await asyncio.sleep(0.1)
+
+        # Verify handle_copilot_comment was called with the lock manager from app state
+        mock_handle.assert_awaited_once()
+        args, kwargs = mock_handle.call_args
+        # Third argument should be the repo_locks from app.state
+        from gitlab_copilot_agent.main import app
+        assert args[2] is app.state.repo_locks
