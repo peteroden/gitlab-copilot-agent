@@ -41,6 +41,7 @@ class GitLabClientProtocol(Protocol):
     async def clone_repo(self, clone_url: str, branch: str, token: str) -> Path: ...
     async def cleanup(self, repo_path: Path) -> None: ...
     async def create_merge_request(self, project_id: int, source_branch: str, target_branch: str, title: str, description: str) -> int: ...
+    async def post_mr_comment(self, project_id: int, mr_iid: int, body: str) -> None: ...
 
 
 class GitLabClient:
@@ -106,3 +107,11 @@ class GitLabClient:
             })
             return mr.iid
         return await asyncio.to_thread(_create)
+
+    async def post_mr_comment(self, project_id: int, mr_iid: int, body: str) -> None:
+        """Post a comment on a merge request."""
+        def _post() -> None:
+            project = self._gl.projects.get(project_id)
+            mr = project.mergerequests.get(mr_iid)
+            mr.notes.create({"body": body})
+        await asyncio.to_thread(_post)

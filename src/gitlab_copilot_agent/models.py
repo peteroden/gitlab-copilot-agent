@@ -47,3 +47,27 @@ class MergeRequestWebhookPayload(BaseModel):
     user: WebhookUser
     project: WebhookProject
     object_attributes: MRObjectAttributes
+
+
+class NoteObjectAttributes(BaseModel):
+    model_config = ConfigDict(strict=True)
+    note: str = Field(description="Comment body text")
+    noteable_type: str = Field(description="Type of noteable: MergeRequest, Issue, etc.")
+
+
+class NoteMergeRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+    iid: int
+    title: str
+    source_branch: str
+    target_branch: str
+
+
+class NoteWebhookPayload(BaseModel):
+    """GitLab note webhook payload for MR comments."""
+    model_config = ConfigDict(strict=True)
+    object_kind: str
+    user: WebhookUser
+    project: WebhookProject
+    object_attributes: NoteObjectAttributes
+    merge_request: NoteMergeRequest

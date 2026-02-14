@@ -1,5 +1,7 @@
 """Tests for the webhook endpoint."""
 
+from unittest.mock import patch
+
 import pytest
 from httpx import AsyncClient
 
@@ -32,3 +34,24 @@ async def test_webhook_queues_handled_actions(client: AsyncClient, action: str) 
     resp = await client.post("/webhook", json=payload, headers=HEADERS)
     assert resp.status_code == 200
     assert resp.json() == {"status": "queued"}
+
+
+def _note_body(note: str = "/copilot fix the bug") -> dict[str, object]:
+    return {
+        "object_kind": "note",
+        "user": {"id": 1, "username": "reviewer"},
+        "project": {"id": 42, "path_with_namespace": "g/p", "git_http_url": "https://x.git"},
+        "object_attributes": {"note": note, "noteable_type": "MergeRequest"},
+        "merge_request": {"iid": 7, "title": "Fix", "source_branch": "feat", "target_branch": "main"},
+    }
+
+
+async def test_note_webhook_queues_copilot_command(client: AsyncClient) -> None:
+    with patch("gitlab_copilot_agent.webhook.handle_copilot_comment"):
+        resp = await client.post("/webhook", json=_note_body(), headers=HEADERS)
+    assert resp.json()["status"] == "queued"
+
+
+async def test_note_webhook_ignores_non_copilot(client: AsyncClient) -> None:
+    resp = await client.post("/webhook", json=_note_body("just a comment"), headers=HEADERS)
+    assert resp.json()["status"] == "ignored"
