@@ -156,53 +156,63 @@ async def git_clone(clone_url: str, branch: str, token: str) -> Path:
         # Validate URL before any git operations
         _validate_clone_url(clone_url)
 
-        tmp_dir = Path(tempfile.mkdtemp(prefix=CLONE_DIR_PREFIX))
+        # Create askpass script in a separate temp directory to avoid polluting clone destination
+        askpass_dir = Path(tempfile.mkdtemp(prefix="git-askpass-"))
+        askpass_script = askpass_dir / ".git-askpass.sh"
+        clone_dest: Path | None = None
 
-        # Create a temporary askpass script to provide credentials securely
-        # This avoids putting the token in the URL or command line args
-        askpass_script = tmp_dir / ".git-askpass.sh"
-        askpass_script.write_text(f'#!/bin/sh\necho "{token}"\n')
-        askpass_script.chmod(0o700)
-
-        # Set up environment to use askpass for credentials
-        env = os.environ.copy()
-        env["GIT_ASKPASS"] = str(askpass_script)
-        env["GIT_USERNAME"] = "oauth2"
-        # Disable terminal prompts to ensure askpass is used
-        env["GIT_TERMINAL_PROMPT"] = "0"
-
-        proc = await asyncio.create_subprocess_exec(
-            "git",
-            "clone",
-            "--depth=1",
-            "--branch",
-            branch,
-            "--",
-            clone_url,
-            str(tmp_dir),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
         try:
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-        except TimeoutError as e:
-            proc.kill()
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            raise RuntimeError("git clone timed out after 120s") from e
+            # Create a temporary askpass script to provide credentials securely
+            # This avoids putting the token in the URL or command line args
+            askpass_script.write_text(f'#!/bin/sh\necho "{token}"\n')
+            askpass_script.chmod(0o700)
+
+            # Set up environment to use askpass for credentials
+            env = os.environ.copy()
+            env["GIT_ASKPASS"] = str(askpass_script)
+            env["GIT_USERNAME"] = "oauth2"
+            # Disable terminal prompts to ensure askpass is used
+            env["GIT_TERMINAL_PROMPT"] = "0"
+
+            # Create destination directory for clone
+            clone_dest = Path(tempfile.mkdtemp(prefix=CLONE_DIR_PREFIX))
+
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "clone",
+                "--depth=1",
+                "--branch",
+                branch,
+                "--",
+                clone_url,
+                str(clone_dest),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            try:
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            except TimeoutError as e:
+                proc.kill()
+                raise RuntimeError("git clone timed out after 120s") from e
+
+            if proc.returncode != 0:
+                # Sanitize any URLs or tokens that might appear in error output
+                err_msg = stderr.decode().strip()
+                # Replace token if it somehow appears
+                err_msg = err_msg.replace(token, "***")
+                # Sanitize any URLs with credentials
+                safe_url = _sanitize_url_for_log(clone_url)
+                raise RuntimeError(f"git clone failed for {safe_url}: {err_msg}")
+
+            await log.ainfo("repo_cloned", path=str(clone_dest), branch=branch)
+            return clone_dest
+
+        except Exception:
+            # Clean up clone destination on any error
+            if clone_dest is not None:
+                shutil.rmtree(clone_dest, ignore_errors=True)
+            raise
         finally:
-            # Clean up askpass script immediately
-            askpass_script.unlink(missing_ok=True)
-
-        if proc.returncode != 0:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            # Sanitize any URLs or tokens that might appear in error output
-            err_msg = stderr.decode().strip()
-            # Replace token if it somehow appears
-            err_msg = err_msg.replace(token, "***")
-            # Sanitize any URLs with credentials
-            safe_url = _sanitize_url_for_log(clone_url)
-            raise RuntimeError(f"git clone failed for {safe_url}: {err_msg}")
-
-        await log.ainfo("repo_cloned", path=str(tmp_dir), branch=branch)
-        return tmp_dir
+            # Always clean up askpass artifacts
+            shutil.rmtree(askpass_dir, ignore_errors=True)
