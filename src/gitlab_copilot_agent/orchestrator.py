@@ -25,7 +25,9 @@ async def handle_review(settings: Settings, payload: MergeRequestWebhookPayload)
     """Full review pipeline: clone → review → parse → post comments."""
     mr = payload.object_attributes
     project = payload.project
-    with _tracer.start_as_current_span("mr.review", attributes={"project_id": project.id, "mr_iid": mr.iid}):
+    with _tracer.start_as_current_span(
+        "mr.review", attributes={"project_id": project.id, "mr_iid": mr.iid}
+    ):
         bound_log = log.bind(project_id=project.id, mr_iid=mr.iid)
 
         await bound_log.ainfo("review_started")
@@ -55,7 +57,9 @@ async def handle_review(settings: Settings, payload: MergeRequestWebhookPayload)
             mr_details = await gl_client.get_mr_details(project.id, mr.iid)
             gl = gitlab.Gitlab(settings.gitlab_url, private_token=settings.gitlab_token)
 
-            await post_review(gl, project.id, mr.iid, mr_details.diff_refs, parsed)
+            await post_review(
+                gl, project.id, mr.iid, mr_details.diff_refs, parsed, mr_details.changes
+            )
             await bound_log.ainfo("comments_posted")
         except Exception:
             await bound_log.aexception("review_failed")

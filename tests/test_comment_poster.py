@@ -4,16 +4,16 @@ from unittest.mock import MagicMock
 
 from gitlab_copilot_agent.comment_parser import ParsedReview, ReviewComment
 from gitlab_copilot_agent.comment_poster import post_review
-from tests.conftest import DIFF_REFS, MR_IID, PROJECT_ID
+from tests.conftest import DIFF_REFS, MR_IID, PROJECT_ID, make_mr_changes
 
 
 async def test_posts_inline_and_summary() -> None:
     gl = MagicMock()
     review = ParsedReview(
-        comments=[ReviewComment(file="src/main.py", line=10, severity="error", comment="Bug")],
+        comments=[ReviewComment(file="src/main.py", line=2, severity="error", comment="Bug")],
         summary="Needs fixes.",
     )
-    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review)
+    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
     mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
     assert mr.discussions.create.call_count == 1
@@ -24,7 +24,7 @@ async def test_posts_inline_and_summary() -> None:
 async def test_posts_summary_only_when_no_comments() -> None:
     gl = MagicMock()
     review = ParsedReview(comments=[], summary="All good.")
-    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review)
+    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
     mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
     assert mr.discussions.create.call_count == 0
@@ -37,29 +37,33 @@ async def test_inline_failure_falls_back_to_note() -> None:
     mr.discussions.create.side_effect = Exception("Position invalid")
 
     review = ParsedReview(
-        comments=[ReviewComment(file="bad.py", line=999, severity="error", comment="Bug")],
+        comments=[ReviewComment(file="src/main.py", line=2, severity="error", comment="Bug")],
         summary="Issues found.",
     )
-    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review)
+    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
     # Inline failed, so fallback note should be created instead
     assert mr.notes.create.call_count == 2  # 1 fallback + 1 summary
     fallback_body = mr.notes.create.call_args_list[0][0][0]["body"]
     assert "Bug" in fallback_body
-    assert "bad.py:999" in fallback_body
+    assert "src/main.py:2" in fallback_body
 
 
 async def test_posts_comment_with_suggestion() -> None:
     gl = MagicMock()
     review = ParsedReview(
-        comments=[ReviewComment(
-            file="calc.py", line=8, severity="error",
-            comment="Missing type hints",
-            suggestion="def add(a: int, b: int) -> int:",
-        )],
+        comments=[
+            ReviewComment(
+                file="src/main.py",
+                line=2,
+                severity="error",
+                comment="Missing type hints",
+                suggestion="def add(a: int, b: int) -> int:",
+            )
+        ],
         summary="Fixes needed.",
     )
-    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review)
+    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
     mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
     body = mr.discussions.create.call_args[0][0]["body"]
@@ -71,16 +75,20 @@ async def test_posts_comment_with_suggestion() -> None:
 async def test_posts_comment_with_multiline_suggestion() -> None:
     gl = MagicMock()
     review = ParsedReview(
-        comments=[ReviewComment(
-            file="calc.py", line=10, severity="warning",
-            comment="Refactor block",
-            suggestion="    x = 1\n    y = 2",
-            suggestion_start_offset=2,
-            suggestion_end_offset=1,
-        )],
+        comments=[
+            ReviewComment(
+                file="src/main.py",
+                line=2,
+                severity="warning",
+                comment="Refactor block",
+                suggestion="    x = 1\n    y = 2",
+                suggestion_start_offset=2,
+                suggestion_end_offset=1,
+            )
+        ],
         summary="Done.",
     )
-    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review)
+    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
     mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
     body = mr.discussions.create.call_args[0][0]["body"]
@@ -91,10 +99,12 @@ async def test_posts_comment_with_multiline_suggestion() -> None:
 async def test_posts_comment_without_suggestion_has_no_block() -> None:
     gl = MagicMock()
     review = ParsedReview(
-        comments=[ReviewComment(file="a.py", line=1, severity="info", comment="Looks fine")],
+        comments=[
+            ReviewComment(file="src/main.py", line=1, severity="info", comment="Looks fine")
+        ],
         summary="Ok.",
     )
-    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review)
+    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
     mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
     body = mr.discussions.create.call_args[0][0]["body"]
@@ -110,11 +120,96 @@ async def test_both_inline_and_fallback_fail_continues() -> None:
 
     review = ParsedReview(
         comments=[
-            ReviewComment(file="a.py", line=1, severity="error", comment="Bug1"),
-            ReviewComment(file="b.py", line=2, severity="error", comment="Bug2"),
+            ReviewComment(file="src/main.py", line=1, severity="error", comment="Bug1"),
+            ReviewComment(file="src/main.py", line=2, severity="error", comment="Bug2"),
         ],
         summary="Summary.",
     )
     # Should not raise — both comments attempted, summary still posted
-    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review)
+    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
     assert mr.notes.create.call_count == 3
+
+
+async def test_invalid_position_skips_inline_and_posts_fallback() -> None:
+    """Invalid positions (not in diff) should skip inline and post fallback note."""
+    gl = MagicMock()
+    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+
+    # Line 999 is not in the sample diff (only lines 1-4 and 11-13 are valid)
+    review = ParsedReview(
+        comments=[
+            ReviewComment(file="src/main.py", line=999, severity="error", comment="Invalid pos")
+        ],
+        summary="Done.",
+    )
+    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
+
+    # Should NOT call discussions.create (inline)
+    assert mr.discussions.create.call_count == 0
+    # Should call notes.create twice: 1 fallback + 1 summary
+    assert mr.notes.create.call_count == 2
+    fallback_body = mr.notes.create.call_args_list[0][0][0]["body"]
+    assert "Invalid pos" in fallback_body
+    assert "src/main.py:999" in fallback_body
+
+
+async def test_valid_position_posts_inline() -> None:
+    """Valid positions in diff should post inline comments."""
+    gl = MagicMock()
+
+    # Lines 1, 2, 3, 4 are valid in the sample diff (hunk @@ -1,3 +1,4 @@)
+    review = ParsedReview(
+        comments=[
+            ReviewComment(file="src/main.py", line=1, severity="info", comment="Line 1 ok"),
+            ReviewComment(file="src/main.py", line=2, severity="info", comment="Line 2 ok"),
+        ],
+        summary="Done.",
+    )
+    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
+
+    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+    # Both should be inline
+    assert mr.discussions.create.call_count == 2
+    # Only summary note
+    assert mr.notes.create.call_count == 1
+
+
+async def test_mixed_valid_and_invalid_positions() -> None:
+    """Mix of valid and invalid positions should route correctly."""
+    gl = MagicMock()
+
+    review = ParsedReview(
+        comments=[
+            ReviewComment(file="src/main.py", line=2, severity="info", comment="Valid"),
+            ReviewComment(file="src/main.py", line=999, severity="error", comment="Invalid"),
+            ReviewComment(file="src/main.py", line=12, severity="warning", comment="Also valid"),
+        ],
+        summary="Mixed.",
+    )
+    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
+
+    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+    # 2 valid positions = 2 inline comments
+    assert mr.discussions.create.call_count == 2
+    # 1 invalid fallback + 1 summary = 2 notes
+    assert mr.notes.create.call_count == 2
+
+
+async def test_file_not_in_changes_uses_fallback() -> None:
+    """Comments for files not in MR changes should use fallback."""
+    gl = MagicMock()
+
+    review = ParsedReview(
+        comments=[
+            ReviewComment(file="other_file.py", line=5, severity="error", comment="Wrong file")
+        ],
+        summary="Done.",
+    )
+    # Changes only include src/main.py
+    await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
+
+    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+    # No inline comment
+    assert mr.discussions.create.call_count == 0
+    # Fallback + summary
+    assert mr.notes.create.call_count == 2
