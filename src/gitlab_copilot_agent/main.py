@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
+from gitlab_copilot_agent.concurrency import ProcessedIssueTracker, RepoLockManager
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.git_operations import CLONE_DIR_PREFIX
 from gitlab_copilot_agent.gitlab_client import GitLabClient
@@ -57,7 +58,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         jira_client = JiraClient(settings.jira.url, settings.jira.email, settings.jira.api_token)
         project_map = ProjectMap.model_validate_json(settings.jira.project_map_json)
         gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
-        handler = CodingOrchestrator(settings, gl_client, jira_client)
+        repo_locks = RepoLockManager()
+        tracker = ProcessedIssueTracker()
+        handler = CodingOrchestrator(settings, gl_client, jira_client, repo_locks, tracker)
         poller = JiraPoller(jira_client, settings.jira, project_map, handler)
         await poller.start()
         await log.ainfo("jira_poller_started", interval=settings.jira.poll_interval)
