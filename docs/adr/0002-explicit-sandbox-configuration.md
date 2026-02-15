@@ -82,8 +82,9 @@ Called once at service startup (before server binds) to fail fast.
 ### 5. devcontainer.json Hardening
 
 - **Remove:** `--cap-add=SYS_ADMIN` (overprivileged)
-- **Ship:** `seccomp-bwrap.json` profile as alternative to `seccomp=unconfined`
-- **Default:** Keep `seccomp=unconfined` for dev simplicity, document hardened option
+- **Remove:** `--cap-add=SYS_ADMIN` (overprivileged)
+- **Default:** Keep `seccomp=unconfined` for dev simplicity
+- **Future:** Ship a minimal seccomp profile once bwrap syscall usage is audited via strace
 
 ### 6. Docker/Podman Stubs
 
@@ -142,7 +143,7 @@ Estimated diff: **~150 lines**
 - `test_process_sandbox.py`: +60 lines (preflight tests, dispatch tests)
 - `test_config.py`: +5 lines (validate default)
 - `main.py`: +10 lines (call preflight at startup)
-- `devcontainer.json`: -1 line (remove cap-add), +1 file (seccomp-bwrap.json)
+- `devcontainer.json`: -1 line (remove cap-add)
 - `.env.example` or README: +3 lines (document new var)
 
 **Diff estimate: ~140-160 lines**
