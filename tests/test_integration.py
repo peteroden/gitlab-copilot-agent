@@ -43,7 +43,7 @@ def _setup_mocks(
         )
     )
     mock_run_review.return_value = FAKE_REVIEW_OUTPUT
-    return mock_gl_instance
+    return mock_gl_instance  # type: ignore[no-any-return]
 
 
 @patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)

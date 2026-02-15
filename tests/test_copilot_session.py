@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -59,7 +59,7 @@ def _run(tmp_path: Path) -> Callable[..., Any]:
             "system_prompt": "System",
             "user_prompt": "User",
         }
-        return await run_copilot_session(**(defaults | kwargs))
+        return await run_copilot_session(**cast(Any, defaults | kwargs))
 
     return _inner
 
