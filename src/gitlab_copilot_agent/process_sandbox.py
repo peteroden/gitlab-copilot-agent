@@ -7,11 +7,17 @@ import os
 import shlex
 import shutil
 import stat
+import subprocess
 import tempfile
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 import copilot as _copilot_pkg
+import structlog
+
+from gitlab_copilot_agent.config import Settings
+
+log = structlog.get_logger()
 
 
 class ProcessSandbox(Protocol):
@@ -27,6 +33,10 @@ class ProcessSandbox(Protocol):
 
     def cleanup(self) -> None:
         """Clean up any resources created by the sandbox."""
+        ...
+
+    def preflight(self) -> None:
+        """Validate runtime dependencies. Raise RuntimeError if unavailable."""
         ...
 
 
@@ -49,8 +59,23 @@ class BubblewrapSandbox:
     def __init__(self) -> None:
         self._script_path: str | None = None
 
+    def preflight(self) -> None:
+        """Validate that bwrap is available and functional."""
+        if not shutil.which("bwrap"):
+            raise RuntimeError("bwrap binary not found on PATH")
+        try:
+            subprocess.run(
+                ["bwrap", "--version"],
+                check=True,
+                capture_output=True,
+                timeout=5,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+            raise RuntimeError(f"bwrap preflight check failed: {e}") from e
+
     def create_cli_wrapper(self, repo_path: str) -> str:
         """Create a wrapper script that runs the CLI inside bwrap."""
+        log.debug("sandbox_wrapper_created", method="bwrap", repo_path=repo_path)
         real_cli = _get_real_cli_path()
         safe_cli = shlex.quote(real_cli)
         safe_repo = shlex.quote(repo_path)
@@ -114,19 +139,55 @@ class NoopSandbox:
     Used when bwrap is not available (e.g., macOS, CI without capabilities).
     """
 
+    def preflight(self) -> None:
+        """No-op sandbox is always available."""
+
     def create_cli_wrapper(self, repo_path: str) -> str:  # noqa: ARG002
         """Return the real CLI path without sandboxing."""
+        log.debug("sandbox_wrapper_created", method="noop", repo_path=repo_path)
         return _get_real_cli_path()
 
     def cleanup(self) -> None:
         """Nothing to clean up."""
 
 
-def get_sandbox() -> ProcessSandbox:
-    """Get the appropriate sandbox implementation.
+class ContainerSandbox:
+    """Sandbox using Docker or Podman containers (not yet implemented).
 
-    Returns BubblewrapSandbox if bwrap is available, NoopSandbox otherwise.
+    Stub implementation for configuration dispatch — implementation deferred.
     """
-    if shutil.which("bwrap"):
-        return BubblewrapSandbox()
-    return NoopSandbox()
+
+    def __init__(self, runtime: Literal["docker", "podman"]) -> None:
+        self._runtime = runtime
+
+    def preflight(self) -> None:
+        """Fail fast — container sandbox is not yet implemented."""
+        raise NotImplementedError(
+            f"{self._runtime} sandbox is not yet implemented. "
+            f"Use SANDBOX_METHOD=bwrap or SANDBOX_METHOD=noop."
+        )
+
+    def create_cli_wrapper(self, repo_path: str) -> str:  # noqa: ARG002
+        """Not yet implemented."""
+        raise NotImplementedError("Container sandbox not yet implemented")
+
+    def cleanup(self) -> None:
+        """Nothing to clean up yet."""
+
+
+def get_sandbox(settings: Settings) -> ProcessSandbox:
+    """Get the configured sandbox implementation.
+
+    Raises ValueError if sandbox_method is invalid (should be prevented by Pydantic).
+    """
+    match settings.sandbox_method:
+        case "bwrap":
+            return BubblewrapSandbox()
+        case "docker":
+            return ContainerSandbox(runtime="docker")
+        case "podman":
+            return ContainerSandbox(runtime="podman")
+        case "noop":
+            return NoopSandbox()
+        case _:  # pragma: no cover
+            raise ValueError(f"Invalid sandbox_method: {settings.sandbox_method}")

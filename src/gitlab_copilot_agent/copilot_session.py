@@ -47,9 +47,13 @@ async def run_copilot_session(
     """Run a Copilot agent session and return the last assistant message."""
     with _tracer.start_as_current_span(
         "copilot.session",
-        attributes={"repo_path": repo_path, "timeout": timeout},
+        attributes={
+            "repo_path": repo_path,
+            "timeout": timeout,
+            "sandbox.method": settings.sandbox_method,
+        },
     ):
-        sandbox = get_sandbox()
+        sandbox = get_sandbox(settings)
         cli_wrapper = sandbox.create_cli_wrapper(repo_path)
         try:
             client_opts: CopilotClientOptions = {

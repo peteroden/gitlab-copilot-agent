@@ -91,7 +91,7 @@ def make_settings(**overrides: Any) -> Settings:
         "gitlab_webhook_secret": WEBHOOK_SECRET,
         "github_token": GITHUB_TOKEN,
     }
-    return Settings(**(defaults | overrides))  # type: ignore[call-arg]
+    return Settings(**(defaults | overrides))
 
 
 def make_mr_payload(**attr_overrides: Any) -> dict[str, Any]:
@@ -126,6 +126,7 @@ def env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITLAB_TOKEN", GITLAB_TOKEN)
     monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", WEBHOOK_SECRET)
     monkeypatch.setenv("GITHUB_TOKEN", GITHUB_TOKEN)
+    monkeypatch.setenv("SANDBOX_METHOD", "noop")
 
 
 @pytest.fixture
