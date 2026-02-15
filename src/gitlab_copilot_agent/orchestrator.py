@@ -63,6 +63,14 @@ async def handle_review(settings: Settings, payload: MergeRequestWebhookPayload)
             await bound_log.ainfo("comments_posted")
         except Exception:
             await bound_log.aexception("review_failed")
+            try:
+                await gl_client.post_mr_comment(
+                    project.id,
+                    mr.iid,
+                    "⚠️ Automated review failed. Check service logs for details.",
+                )
+            except Exception:
+                await bound_log.aexception("failure_comment_post_failed")
             raise
         finally:
             await gl_client.cleanup(repo_path)
