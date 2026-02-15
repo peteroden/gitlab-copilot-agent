@@ -94,6 +94,19 @@ docker run -p 8000:8000 \
   gitlab-copilot-agent
 ```
 
+## Operations
+
+### Memory Bounds
+
+The service uses in-memory structures that are bounded to prevent growth during long uptimes:
+
+| Structure | Purpose | Default Limit | Eviction Strategy |
+|---|---|---|---|
+| `RepoLockManager` | Serializes concurrent operations on the same repo | 1,024 entries | LRU — evicts oldest idle (unlocked) lock |
+| `ProcessedIssueTracker` | Prevents re-processing Jira issues within a run | 10,000 entries | Drops oldest 50% when limit is reached |
+
+Active locks are never evicted — the lock manager allows temporary over-capacity rather than dropping in-use locks. Both limits are configurable via constructor arguments but not currently exposed as environment variables.
+
 ## Development
 
 ```bash
