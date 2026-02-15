@@ -2,17 +2,20 @@
 
 import os
 import stat
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from gitlab_copilot_agent.process_sandbox import (
     BubblewrapSandbox,
+    ContainerSandbox,
     NoopSandbox,
     _get_real_cli_path,
     get_sandbox,
 )
+from tests.conftest import make_settings
 
 
 class TestGetRealCliPath:
@@ -34,6 +37,33 @@ class TestGetRealCliPath:
 
 class TestBubblewrapSandbox:
     """Tests for BubblewrapSandbox implementation."""
+
+    def test_preflight_succeeds_when_bwrap_available(self) -> None:
+        """Should pass preflight when bwrap is on PATH and functional."""
+        with (
+            patch("shutil.which", return_value="/usr/bin/bwrap"),
+            patch("subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            sandbox = BubblewrapSandbox()
+            sandbox.preflight()  # Should not raise
+
+    def test_preflight_raises_when_bwrap_missing(self) -> None:
+        """Should raise RuntimeError when bwrap not found."""
+        with patch("shutil.which", return_value=None):
+            sandbox = BubblewrapSandbox()
+            with pytest.raises(RuntimeError, match="bwrap binary not found"):
+                sandbox.preflight()
+
+    def test_preflight_raises_when_bwrap_fails(self) -> None:
+        """Should raise RuntimeError when bwrap --version fails."""
+        with (
+            patch("shutil.which", return_value="/usr/bin/bwrap"),
+            patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "bwrap")),
+        ):
+            sandbox = BubblewrapSandbox()
+            with pytest.raises(RuntimeError, match="bwrap preflight check failed"):
+                sandbox.preflight()
 
     def test_creates_executable_script(self, tmp_path: Path) -> None:
         """Should create an executable wrapper script."""
@@ -110,6 +140,11 @@ class TestBubblewrapSandbox:
 class TestNoopSandbox:
     """Tests for NoopSandbox fallback implementation."""
 
+    def test_preflight_always_passes(self) -> None:
+        """Should always pass preflight check."""
+        sandbox = NoopSandbox()
+        sandbox.preflight()  # Should not raise
+
     def test_returns_real_cli_path(self) -> None:
         """Should return the real CLI path without sandboxing."""
         sandbox = NoopSandbox()
@@ -123,20 +158,58 @@ class TestNoopSandbox:
         sandbox.cleanup()  # Should not raise
 
 
+class TestContainerSandbox:
+    """Tests for ContainerSandbox stub implementation."""
+
+    def test_preflight_raises_not_implemented(self) -> None:
+        """Should raise NotImplementedError — container sandbox not yet implemented."""
+        sandbox = ContainerSandbox(runtime="docker")
+        with pytest.raises(NotImplementedError, match="docker sandbox is not yet implemented"):
+            sandbox.preflight()
+
+    def test_preflight_raises_not_implemented_podman(self) -> None:
+        """Should raise NotImplementedError for podman too."""
+        sandbox = ContainerSandbox(runtime="podman")
+        with pytest.raises(NotImplementedError, match="podman sandbox is not yet implemented"):
+            sandbox.preflight()
+
+    def test_create_cli_wrapper_raises_not_implemented(self) -> None:
+        """Should raise NotImplementedError when creating wrapper."""
+        sandbox = ContainerSandbox(runtime="docker")
+        with pytest.raises(NotImplementedError, match="Container sandbox not yet implemented"):
+            sandbox.create_cli_wrapper("/some/repo")
+
+    def test_cleanup_is_noop(self) -> None:
+        """Should not raise on cleanup."""
+        sandbox = ContainerSandbox(runtime="docker")
+        sandbox.cleanup()  # Should not raise
+
+
 class TestGetSandbox:
     """Tests for get_sandbox factory function."""
 
-    def test_returns_bubblewrap_when_available(self) -> None:
-        """Should return BubblewrapSandbox when bwrap is on PATH."""
-        with patch(
-            "gitlab_copilot_agent.process_sandbox.shutil.which",
-            return_value="/usr/bin/bwrap",
-        ):
-            sandbox = get_sandbox()
-            assert isinstance(sandbox, BubblewrapSandbox)
+    def test_returns_bubblewrap_when_configured(self) -> None:
+        """Should return BubblewrapSandbox when sandbox_method=bwrap."""
+        settings = make_settings(sandbox_method="bwrap")
+        sandbox = get_sandbox(settings)
+        assert isinstance(sandbox, BubblewrapSandbox)
 
-    def test_returns_noop_when_not_available(self) -> None:
-        """Should return NoopSandbox when bwrap is not found."""
-        with patch("gitlab_copilot_agent.process_sandbox.shutil.which", return_value=None):
-            sandbox = get_sandbox()
-            assert isinstance(sandbox, NoopSandbox)
+    def test_returns_docker_when_configured(self) -> None:
+        """Should return ContainerSandbox(docker) when sandbox_method=docker."""
+        settings = make_settings(sandbox_method="docker")
+        sandbox = get_sandbox(settings)
+        assert isinstance(sandbox, ContainerSandbox)
+        assert sandbox._runtime == "docker"
+
+    def test_returns_podman_when_configured(self) -> None:
+        """Should return ContainerSandbox(podman) when sandbox_method=podman."""
+        settings = make_settings(sandbox_method="podman")
+        sandbox = get_sandbox(settings)
+        assert isinstance(sandbox, ContainerSandbox)
+        assert sandbox._runtime == "podman"
+
+    def test_returns_noop_when_configured(self) -> None:
+        """Should return NoopSandbox when sandbox_method=noop."""
+        settings = make_settings(sandbox_method="noop")
+        sandbox = get_sandbox(settings)
+        assert isinstance(sandbox, NoopSandbox)

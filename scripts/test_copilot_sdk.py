@@ -119,9 +119,9 @@ async def main() -> None:
             done2.set()
 
     session.on(on_event2)
-    await session.send({
-        "prompt": "What is the project name in pyproject.toml? Just the name, nothing else."
-    })
+    await session.send(
+        {"prompt": "What is the project name in pyproject.toml? Just the name, nothing else."}
+    )
 
     try:
         await asyncio.wait_for(done2.wait(), timeout=30)

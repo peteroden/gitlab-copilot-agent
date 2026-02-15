@@ -33,9 +33,11 @@ async def main(project_id: int, mr_iid: int) -> None:
     details = await client.get_mr_details(project_id, mr_iid)
     print(f"   Title: {details.title}")
     print(f"   Description: {details.description or '(none)'}")
-    print(f"   diff_refs: base={details.diff_refs.base_sha[:8]}, "
-          f"start={details.diff_refs.start_sha[:8]}, "
-          f"head={details.diff_refs.head_sha[:8]}")
+    print(
+        f"   diff_refs: base={details.diff_refs.base_sha[:8]}, "
+        f"start={details.diff_refs.start_sha[:8]}, "
+        f"head={details.diff_refs.head_sha[:8]}"
+    )
     print(f"   Changes: {len(details.changes)} file(s)")
     for c in details.changes:
         status = "new" if c.new_file else "deleted" if c.deleted_file else "modified"
@@ -67,18 +69,20 @@ async def main(project_id: int, mr_iid: int) -> None:
         change = details.changes[0]
         print(f"4. Posting inline discussion on {change.new_path}...")
         try:
-            disc = mr.discussions.create({
-                "body": "🤖 Inline smoke test — will be deleted shortly.",
-                "position": {
-                    "base_sha": details.diff_refs.base_sha,
-                    "start_sha": details.diff_refs.start_sha,
-                    "head_sha": details.diff_refs.head_sha,
-                    "position_type": "text",
-                    "old_path": change.old_path,
-                    "new_path": change.new_path,
-                    "new_line": 1,
-                },
-            })
+            disc = mr.discussions.create(
+                {
+                    "body": "🤖 Inline smoke test — will be deleted shortly.",
+                    "position": {
+                        "base_sha": details.diff_refs.base_sha,
+                        "start_sha": details.diff_refs.start_sha,
+                        "head_sha": details.diff_refs.head_sha,
+                        "position_type": "text",
+                        "old_path": change.old_path,
+                        "new_path": change.new_path,
+                        "new_line": 1,
+                    },
+                }
+            )
             discussion_id = disc.id
             print(f"   Discussion ID: {disc.id}")
             print("   ✅ Inline discussion posted\n")

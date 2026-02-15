@@ -23,7 +23,7 @@ def test_settings_loads_required_env_vars(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", WEBHOOK_SECRET)
     monkeypatch.setenv("GITHUB_TOKEN", GITHUB_TOKEN)
 
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
 
     assert settings.gitlab_url == GITLAB_URL
     assert settings.gitlab_token == GITLAB_TOKEN
@@ -42,7 +42,7 @@ def test_settings_defaults() -> None:
 
 def test_settings_missing_required_raises() -> None:
     with pytest.raises(ValidationError):
-        Settings()  # type: ignore[call-arg]
+        Settings()
 
 
 def test_settings_requires_auth() -> None:
@@ -52,7 +52,7 @@ def test_settings_requires_auth() -> None:
             gitlab_url=GITLAB_URL,
             gitlab_token=GITLAB_TOKEN,
             gitlab_webhook_secret=WEBHOOK_SECRET,
-        )  # type: ignore[call-arg]
+        )
 
 
 def test_settings_accepts_provider_type_without_github_token() -> None:

@@ -1,5 +1,7 @@
 """Application configuration via environment variables."""
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings
 
@@ -53,6 +55,10 @@ class Settings(BaseSettings):
     log_level: str = Field(default="info", description="Log level")
     agent_gitlab_username: str | None = Field(
         default=None, description="Agent's GitLab username for loop prevention"
+    )
+    sandbox_method: Literal["bwrap", "docker", "podman", "noop"] = Field(
+        default="bwrap",
+        description="Process sandbox method: bwrap, docker, podman, or noop",
     )
 
     # Jira (all optional — service runs review-only without these)
