@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 from typing import Any, cast
 
 import structlog
@@ -14,6 +15,7 @@ from copilot.types import (
 )
 
 from gitlab_copilot_agent.config import Settings
+from gitlab_copilot_agent.metrics import sandbox_active, sandbox_duration
 from gitlab_copilot_agent.process_sandbox import get_sandbox
 from gitlab_copilot_agent.repo_config import discover_repo_config
 from gitlab_copilot_agent.telemetry import get_tracer
@@ -45,6 +47,7 @@ async def run_copilot_session(
     timeout: int = 300,
 ) -> str:
     """Run a Copilot agent session and return the last assistant message."""
+    sandbox_start = time.monotonic()
     with _tracer.start_as_current_span(
         "copilot.session",
         attributes={
@@ -55,6 +58,7 @@ async def run_copilot_session(
     ):
         sandbox = get_sandbox(settings)
         cli_wrapper = sandbox.create_cli_wrapper(repo_path)
+        sandbox_active.add(1)
         try:
             client_opts: CopilotClientOptions = {
                 "cli_path": cli_wrapper,
@@ -132,3 +136,5 @@ async def run_copilot_session(
                 await client.stop()
         finally:
             sandbox.cleanup()
+            sandbox_active.add(-1)
+            sandbox_duration.record(time.monotonic() - sandbox_start)

@@ -5,6 +5,7 @@ import hmac
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
+from gitlab_copilot_agent.metrics import webhook_received_total
 from gitlab_copilot_agent.models import MergeRequestWebhookPayload, NoteWebhookPayload
 from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
 from gitlab_copilot_agent.orchestrator import handle_review
@@ -51,6 +52,7 @@ async def webhook(
 
     body = await request.json()
     object_kind = body.get("object_kind")
+    webhook_received_total.add(1, {"object_kind": object_kind or "unknown"})
 
     if object_kind == "merge_request":
         payload = MergeRequestWebhookPayload.model_validate(body)
