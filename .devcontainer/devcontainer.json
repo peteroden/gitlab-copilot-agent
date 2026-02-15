@@ -6,7 +6,7 @@
     "ghcr.io/devcontainers/features/node:1": {}
   },
   "postCreateCommand": "pipx install uv && uv sync --all-extras && npm install -g @github/copilot && sudo apt-get update && sudo apt-get install -y bubblewrap && uv --version",
-  "runArgs": ["--cap-add=SYS_ADMIN", "--security-opt", "seccomp=unconfined"],
+  "runArgs": ["--security-opt", "seccomp=unconfined"],
   "customizations": {
     "vscode": {
       "extensions": ["GitHub.copilot"]
