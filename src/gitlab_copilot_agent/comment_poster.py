@@ -55,13 +55,9 @@ def _parse_hunk_lines(diff: str, new_path: str) -> set[tuple[str, int]]:
     return valid_positions
 
 
-def _is_valid_position(file: str, line: int, changes: list[MRChange]) -> bool:
+def _is_valid_position(file: str, line: int, valid_positions: set[tuple[str, int]]) -> bool:
     """Check if a comment position (file, line) is valid in the MR diff."""
-    for change in changes:
-        if change.new_path == file:
-            valid_positions = _parse_hunk_lines(change.diff, change.new_path)
-            return (file, line) in valid_positions
-    return False
+    return (file, line) in valid_positions
 
 
 async def post_review(
@@ -82,6 +78,11 @@ async def post_review(
         project = gitlab_client.projects.get(project_id)
         mr = project.mergerequests.get(mr_iid)
 
+        # Precompute valid positions once for all comments
+        valid_positions: set[tuple[str, int]] = set()
+        for change in changes:
+            valid_positions |= _parse_hunk_lines(change.diff, change.new_path)
+
         for c in review.comments:
             body = f"**[{c.severity.upper()}]** {c.comment}"
             if c.suggestion is not None:
@@ -90,7 +91,7 @@ async def post_review(
                 body += f"\n\n```suggestion:-{start}+{end}\n{c.suggestion}\n```"
 
             # Validate position before attempting inline comment
-            if not _is_valid_position(c.file, c.line, changes):
+            if not _is_valid_position(c.file, c.line, valid_positions):
                 log.warning(
                     "Comment position not in diff, using fallback note for %s:%d",
                     c.file,
