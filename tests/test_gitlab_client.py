@@ -45,9 +45,7 @@ async def test_get_mr_details(mock_gl: MagicMock) -> None:
     assert isinstance(details, MRDetails)
     assert details.title == "Test MR"
     assert details.description == "A test merge request"
-    assert details.diff_refs == MRDiffRef(
-        base_sha="aaa111", start_sha="ccc333", head_sha="bbb222"
-    )
+    assert details.diff_refs == MRDiffRef(base_sha="aaa111", start_sha="ccc333", head_sha="bbb222")
     assert len(details.changes) == 1
     assert details.changes[0] == MRChange(
         old_path="src/main.py",

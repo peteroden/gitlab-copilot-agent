@@ -3,11 +3,14 @@
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
 from gitlab_copilot_agent.models import (
-    NoteWebhookPayload, NoteObjectAttributes, NoteMergeRequest,
-    WebhookProject, WebhookUser,
+    NoteMergeRequest,
+    NoteObjectAttributes,
+    NoteWebhookPayload,
+    WebhookProject,
+    WebhookUser,
 )
+from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
 from tests.conftest import MR_IID, PROJECT_ID, make_settings
 
 
@@ -31,9 +34,13 @@ def _make_note_payload(note: str = "/copilot fix bug") -> NoteWebhookPayload:
     return NoteWebhookPayload(
         object_kind="note",
         user=WebhookUser(id=1, username="reviewer"),
-        project=WebhookProject(id=PROJECT_ID, path_with_namespace="g/p", git_http_url="https://gl.example.com/g/p.git"),
+        project=WebhookProject(
+            id=PROJECT_ID, path_with_namespace="g/p", git_http_url="https://gl.example.com/g/p.git"
+        ),
         object_attributes=NoteObjectAttributes(note=note, noteable_type="MergeRequest"),
-        merge_request=NoteMergeRequest(iid=MR_IID, title="Fix", source_branch="feature/x", target_branch="main"),
+        merge_request=NoteMergeRequest(
+            iid=MR_IID, title="Fix", source_branch="feature/x", target_branch="main"
+        ),
     )
 
 
@@ -43,8 +50,12 @@ def _make_note_payload(note: str = "/copilot fix bug") -> NoteWebhookPayload:
 @patch("gitlab_copilot_agent.mr_comment_handler.git_commit")
 @patch("gitlab_copilot_agent.mr_comment_handler.git_clone")
 async def test_handle_full_pipeline(
-    mock_clone: AsyncMock, mock_commit: AsyncMock, mock_push: AsyncMock,
-    mock_session: AsyncMock, mock_gl_class: AsyncMock, tmp_path: Path,
+    mock_clone: AsyncMock,
+    mock_commit: AsyncMock,
+    mock_push: AsyncMock,
+    mock_session: AsyncMock,
+    mock_gl_class: AsyncMock,
+    tmp_path: Path,
 ) -> None:
     mock_clone.return_value = tmp_path
     mock_session.return_value = "Fixed the bug"

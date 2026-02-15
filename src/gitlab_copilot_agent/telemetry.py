@@ -16,7 +16,10 @@ _otel_logging_configured = False
 
 
 def init_telemetry() -> None:
-    """Configure OpenTelemetry tracing + log export. No-op if OTEL_EXPORTER_OTLP_ENDPOINT is unset."""
+    """Configure OpenTelemetry tracing + log export.
+
+    No-op if OTEL_EXPORTER_OTLP_ENDPOINT is unset.
+    """
     global _otel_logging_configured  # noqa: PLW0603
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
     if not endpoint:

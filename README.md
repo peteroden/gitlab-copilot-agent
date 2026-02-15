@@ -212,6 +212,9 @@ This shows:
 ## Development
 
 ```bash
+# Install pre-commit hook (runs ruff + mypy before each commit)
+ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+
 # Run tests
 devcontainer exec --workspace-folder . uv run pytest
 

@@ -84,8 +84,7 @@ class JiraClient:
         if not match:
             available = [t.name for t in transitions.transitions]
             raise ValueError(
-                f"No transition to '{target_status}' for {issue_key}. "
-                f"Available: {available}"
+                f"No transition to '{target_status}' for {issue_key}. Available: {available}"
             )
 
         resp = await self._client.post(

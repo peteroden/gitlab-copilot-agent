@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Git pre-commit hook: runs ruff and mypy on staged Python files.
+# Install: ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+set -euo pipefail
+
+# Determine execution context
+if [[ "${PWD}" == /workspaces/* ]]; then
+    # Inside devcontainer — run directly
+    RUN=""
+else
+    # On host — run inside devcontainer
+    RUN="devcontainer exec --workspace-folder ."
+fi
+
+echo "🔍 ruff check..."
+$RUN uv run ruff check src/ tests/
+
+echo "🔍 ruff format..."
+$RUN uv run ruff format --check src/ tests/
+
+echo "🔍 mypy..."
+$RUN uv run mypy src/
+
+echo "✅ All checks passed"

@@ -42,9 +42,7 @@ class Settings(BaseSettings):
     copilot_provider_base_url: str | None = Field(
         default=None, description="BYOK provider base URL"
     )
-    copilot_provider_api_key: str | None = Field(
-        default=None, description="BYOK provider API key"
-    )
+    copilot_provider_api_key: str | None = Field(default=None, description="BYOK provider API key")
     github_token: str | None = Field(
         default=None, description="GitHub token for Copilot auth (if not using BYOK)"
     )
@@ -53,18 +51,16 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0", description="Server bind host")
     port: int = Field(default=8000, description="Server bind port")
     log_level: str = Field(default="info", description="Log level")
-    agent_gitlab_username: str | None = Field(default=None, description="Agent's GitLab username for loop prevention")
+    agent_gitlab_username: str | None = Field(
+        default=None, description="Agent's GitLab username for loop prevention"
+    )
 
     # Jira (all optional — service runs review-only without these)
     jira_url: str | None = Field(default=None, description="Jira instance URL")
     jira_email: str | None = Field(default=None, description="Jira user email")
     jira_api_token: str | None = Field(default=None, description="Jira API token")
-    jira_trigger_status: str = Field(
-        default="AI Ready", description="Status that triggers agent"
-    )
-    jira_in_progress_status: str = Field(
-        default="In Progress", description="Status after pickup"
-    )
+    jira_trigger_status: str = Field(default="AI Ready", description="Status that triggers agent")
+    jira_in_progress_status: str = Field(default="In Progress", description="Status after pickup")
     jira_poll_interval: int = Field(default=30, description="Poll interval seconds")
     jira_project_map: str | None = Field(
         default=None, description="JSON: Jira project key → GitLab project config"
@@ -73,12 +69,7 @@ class Settings(BaseSettings):
     @property
     def jira(self) -> JiraSettings | None:
         """Return JiraSettings if all required Jira fields are set, else None."""
-        if (
-            self.jira_url
-            and self.jira_email
-            and self.jira_api_token
-            and self.jira_project_map
-        ):
+        if self.jira_url and self.jira_email and self.jira_api_token and self.jira_project_map:
             return JiraSettings(
                 url=self.jira_url,
                 email=self.jira_email,
@@ -93,7 +84,5 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _check_auth(self) -> "Settings":
         if not self.github_token and not self.copilot_provider_type:
-            raise ValueError(
-                "Either GITHUB_TOKEN or COPILOT_PROVIDER_TYPE must be set"
-            )
+            raise ValueError("Either GITHUB_TOKEN or COPILOT_PROVIDER_TYPE must be set")
         return self

@@ -22,9 +22,7 @@ _tracer = get_tracer(__name__)
 class CodingTaskHandler(Protocol):
     """Interface for handling discovered coding tasks."""
 
-    async def handle(
-        self, issue: JiraIssue, project_mapping: GitLabProjectMapping
-    ) -> None: ...
+    async def handle(self, issue: JiraIssue, project_mapping: GitLabProjectMapping) -> None: ...
 
 
 class JiraPoller:

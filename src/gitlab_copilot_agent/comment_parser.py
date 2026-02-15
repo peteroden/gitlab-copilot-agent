@@ -17,6 +17,7 @@ class ReviewComment:
     suggestion_start_offset: int = 0
     suggestion_end_offset: int = 0
 
+
 @dataclass
 class ParsedReview:
     comments: list[ReviewComment]
@@ -46,18 +47,20 @@ def parse_review(raw: str) -> ParsedReview:
             continue
         try:
             suggestion = item.get("suggestion")
-            comments.append(ReviewComment(
-                file=str(item["file"]),
-                line=int(item["line"]),
-                severity=str(item.get("severity", "info")),
-                comment=str(item["comment"]),
-                suggestion=str(suggestion) if suggestion else None,
-                suggestion_start_offset=int(item.get("suggestion_start_offset", 0)),
-                suggestion_end_offset=int(item.get("suggestion_end_offset", 0)),
-            ))
+            comments.append(
+                ReviewComment(
+                    file=str(item["file"]),
+                    line=int(item["line"]),
+                    severity=str(item.get("severity", "info")),
+                    comment=str(item["comment"]),
+                    suggestion=str(suggestion) if suggestion else None,
+                    suggestion_start_offset=int(item.get("suggestion_start_offset", 0)),
+                    suggestion_end_offset=int(item.get("suggestion_end_offset", 0)),
+                )
+            )
         except (KeyError, ValueError):
             continue
 
-    summary = raw[json_match.end():].strip()
+    summary = raw[json_match.end() :].strip()
     summary = re.sub(r"^```\s*", "", summary).strip() or "Review complete."
     return ParsedReview(comments=comments, summary=summary)

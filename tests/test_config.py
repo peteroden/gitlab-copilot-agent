@@ -73,7 +73,6 @@ def test_jira_property_returns_none_when_partially_configured() -> None:
     assert settings.jira is None
 
 
-
 def test_jira_property_uses_custom_values() -> None:
     """Verify custom Jira config values are honored."""
     settings = make_settings(
@@ -90,4 +89,3 @@ def test_jira_property_uses_custom_values() -> None:
     assert settings.jira.trigger_status == "Ready for AI"
     assert settings.jira.in_progress_status == "AI Working"
     assert settings.jira.poll_interval == 60
-
