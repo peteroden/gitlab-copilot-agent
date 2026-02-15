@@ -3,10 +3,41 @@
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
 from gitlab_copilot_agent.jira_models import JiraIssue, JiraIssueFields, JiraStatus
 from gitlab_copilot_agent.project_mapping import GitLabProjectMapping
-from tests.conftest import EXAMPLE_CLONE_URL, make_settings
+from tests.conftest import (
+    EXAMPLE_CLONE_URL,
+    JIRA_EMAIL,
+    JIRA_TOKEN,
+    JIRA_URL,
+    make_settings,
+)
+
+_JIRA_SETTINGS = {
+    "jira_url": JIRA_URL,
+    "jira_email": JIRA_EMAIL,
+    "jira_api_token": JIRA_TOKEN,
+    "jira_project_map": '{"mappings": {}}',
+}
+
+_TEST_ISSUE = JiraIssue(
+    id="10042",
+    key="PROJ-42",
+    fields=JiraIssueFields(
+        summary="Add feature",
+        status=JiraStatus(name="AI Ready", id="1"),
+        description="Impl",
+    ),
+)
+
+_TEST_MAPPING = GitLabProjectMapping(
+    gitlab_project_id=99,
+    clone_url=EXAMPLE_CLONE_URL,
+    target_branch="main",
+)
 
 
 @patch("gitlab_copilot_agent.coding_orchestrator.run_coding_task")
@@ -24,30 +55,48 @@ async def test_handle_full_pipeline(
 ) -> None:
     mock_clone.return_value = tmp_path
     mock_coding.return_value = "Changes made"
-    settings = make_settings(
-        jira_url="https://jira.example.com",
-        jira_email="bot@example.com",
-        jira_api_token="token",
-        jira_project_map='{"mappings": {}}',
-    )
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
     mock_gitlab.create_merge_request.return_value = 1
-    issue = JiraIssue(
-        id="10042",
-        key="PROJ-42",
-        fields=JiraIssueFields(
-            summary="Add feature", status=JiraStatus(name="AI Ready", id="1"), description="Impl"
-        ),
-    )
-    mapping = GitLabProjectMapping(
-        gitlab_project_id=99, clone_url=EXAMPLE_CLONE_URL, target_branch="main"
-    )
-    orch = CodingOrchestrator(settings, mock_gitlab, mock_jira)
-    await orch.handle(issue, mapping)
+    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira)
+    await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
     mock_clone.assert_awaited_once()
     mock_branch.assert_awaited_once_with(tmp_path, "agent/proj-42")
     mock_commit.assert_awaited_once()
     mock_push.assert_awaited_once()
     mock_gitlab.create_merge_request.assert_awaited_once()
     mock_jira.transition_issue.assert_awaited_once()
+    mock_jira.add_comment.assert_awaited_once()
+
+
+@patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
+async def test_coding_failure_posts_comment_to_jira(
+    mock_clone: AsyncMock,
+) -> None:
+    """Verify that coding task failures post a comment to Jira."""
+    mock_clone.side_effect = Exception("Git clone failed")
+    mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
+    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira)
+
+    with pytest.raises(Exception, match="Git clone failed"):
+        await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
+
+    mock_jira.add_comment.assert_awaited_once()
+    call_args = mock_jira.add_comment.call_args
+    assert call_args[0][0] == "PROJ-42"
+    assert "Automated implementation failed" in call_args[0][1]
+
+
+@patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
+async def test_coding_failure_comment_posting_failure_is_logged(
+    mock_clone: AsyncMock,
+) -> None:
+    """If posting the failure comment itself fails, the original exception still raises."""
+    mock_clone.side_effect = Exception("Git clone failed")
+    mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
+    mock_jira.add_comment.side_effect = Exception("Jira API error")
+    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira)
+
+    with pytest.raises(Exception, match="Git clone failed"):
+        await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
+
     mock_jira.add_comment.assert_awaited_once()

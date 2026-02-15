@@ -113,6 +113,13 @@ class CodingOrchestrator:
                     self._tracker.mark(issue.key)
                 except Exception:
                     await bound_log.aexception("coding_task_failed")
+                    try:
+                        await self._jira.add_comment(
+                            issue.key,
+                            "⚠️ Automated implementation failed. Check service logs for details.",
+                        )
+                    except Exception:
+                        await bound_log.aexception("failure_comment_post_failed")
                     raise
                 finally:
                     if repo_path:

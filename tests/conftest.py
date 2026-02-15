@@ -35,6 +35,9 @@ EXAMPLE_CLONE_URL = "https://gitlab.example.com/group/project.git"
 
 MR_IID = 7
 
+# Example clone URL used across multiple tests
+EXAMPLE_CLONE_URL = "https://gitlab.example.com/group/project.git"
+
 DIFF_REFS = MRDiffRef(base_sha="aaa", start_sha="bbb", head_sha="ccc")
 
 # Sample unified diff for testing position validation
