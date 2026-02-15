@@ -6,23 +6,27 @@ import logging
 import os
 from typing import Any
 
-from opentelemetry import trace
+from opentelemetry import metrics, trace
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 _SERVICE_NAME = "gitlab-copilot-agent"
 _otel_logging_configured = False
+_initialized = False
 
 
 def init_telemetry() -> None:
-    """Configure OpenTelemetry tracing + log export.
+    """Configure OpenTelemetry tracing, metrics, and log export.
 
-    No-op if OTEL_EXPORTER_OTLP_ENDPOINT is unset.
+    No-op if OTEL_EXPORTER_OTLP_ENDPOINT is unset or already initialized.
     """
-    global _otel_logging_configured  # noqa: PLW0603
+    global _otel_logging_configured, _initialized  # noqa: PLW0603
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-    if not endpoint:
+    if not endpoint or _initialized:
         return
 
     from opentelemetry._logs import set_logger_provider
@@ -38,6 +42,11 @@ def init_telemetry() -> None:
     tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(tracer_provider)
 
+    # Metrics
+    metric_reader = PeriodicExportingMetricReader(OTLPMetricExporter())
+    meter_provider = MeterProvider(metric_readers=[metric_reader], resource=resource)
+    metrics.set_meter_provider(meter_provider)
+
     # Logs → OTLP
     logger_provider = LoggerProvider(resource=resource)
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
@@ -48,13 +57,19 @@ def init_telemetry() -> None:
     otel_logger.addHandler(handler)
     otel_logger.setLevel(logging.DEBUG)
     _otel_logging_configured = True
+    _initialized = True
 
 
 def shutdown_telemetry() -> None:
     """Flush and shutdown providers."""
+    global _initialized, _otel_logging_configured  # noqa: PLW0603
     provider = trace.get_tracer_provider()
     if isinstance(provider, TracerProvider):
         provider.shutdown()
+
+    meter_provider = metrics.get_meter_provider()
+    if isinstance(meter_provider, MeterProvider):
+        meter_provider.shutdown()
 
     if _otel_logging_configured:
         from opentelemetry._logs import get_logger_provider
@@ -63,6 +78,9 @@ def shutdown_telemetry() -> None:
         log_provider = get_logger_provider()
         if isinstance(log_provider, LoggerProvider):
             log_provider.shutdown()  # type: ignore[no-untyped-call]
+
+    _initialized = False
+    _otel_logging_configured = False
 
 
 def get_tracer(name: str) -> trace.Tracer:

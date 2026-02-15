@@ -3,7 +3,8 @@
 from unittest.mock import patch
 
 import pytest
-from opentelemetry import trace
+from opentelemetry import metrics, trace
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.trace import TracerProvider
 
 from gitlab_copilot_agent.telemetry import (
@@ -25,12 +26,19 @@ def test_init_telemetry_noop_without_endpoint(monkeypatch: pytest.MonkeyPatch) -
 
 def test_init_telemetry_configures_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
-    with patch("gitlab_copilot_agent.telemetry.OTLPSpanExporter"):
+    with (
+        patch("gitlab_copilot_agent.telemetry.OTLPSpanExporter"),
+        patch("gitlab_copilot_agent.telemetry.OTLPMetricExporter"),
+    ):
         init_telemetry()
         assert isinstance(trace.get_tracer_provider(), TracerProvider)
+        assert isinstance(metrics.get_meter_provider(), MeterProvider)
         shutdown_telemetry()
     # Reset to default for other tests
+    from opentelemetry.metrics._internal import _ProxyMeterProvider
+
     trace.set_tracer_provider(trace.ProxyTracerProvider())
+    metrics.set_meter_provider(_ProxyMeterProvider())
 
 
 def test_get_tracer_returns_tracer() -> None:
