@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import gitlab
@@ -37,12 +38,13 @@ async def handle_review(settings: Settings, payload: MergeRequestWebhookPayload)
         await bound_log.ainfo("review_started")
 
         gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
-
-        repo_path = await gl_client.clone_repo(
-            project.git_http_url, mr.source_branch, settings.gitlab_token
-        )
+        repo_path: Path | None = None
 
         try:
+            repo_path = await gl_client.clone_repo(
+                project.git_http_url, mr.source_branch, settings.gitlab_token
+            )
+
             review_req = ReviewRequest(
                 title=mr.title,
                 description=mr.description,
@@ -78,6 +80,7 @@ async def handle_review(settings: Settings, payload: MergeRequestWebhookPayload)
                 await bound_log.aexception("failure_comment_post_failed")
             raise
         finally:
-            await gl_client.cleanup(repo_path)
+            if repo_path:
+                await gl_client.cleanup(repo_path)
             reviews_total.add(1, {"outcome": outcome})
             reviews_duration.record(time.monotonic() - start, {"outcome": outcome})

@@ -91,6 +91,7 @@ class CodingOrchestrator:
                     if not has_changes:
                         await self._jira.add_comment(issue.key, "Agent found no changes to make.")
                         await bound_log.awarn("no_changes_to_commit")
+                        outcome = "no_changes"
                         return
                     await git_push(
                         repo_path,

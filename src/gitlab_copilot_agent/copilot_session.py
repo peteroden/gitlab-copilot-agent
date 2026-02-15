@@ -48,7 +48,6 @@ async def run_copilot_session(
 ) -> str:
     """Run a Copilot agent session and return the last assistant message."""
     sandbox_start = time.monotonic()
-    sandbox_active.add(1)
     with _tracer.start_as_current_span(
         "copilot.session",
         attributes={
@@ -59,6 +58,7 @@ async def run_copilot_session(
     ):
         sandbox = get_sandbox(settings)
         cli_wrapper = sandbox.create_cli_wrapper(repo_path)
+        sandbox_active.add(1)
         try:
             client_opts: CopilotClientOptions = {
                 "cli_path": cli_wrapper,
