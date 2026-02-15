@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from gitlab_copilot_agent.gitlab_client import GitLabClient, MRChange, MRDetails, MRDiffRef
+from tests.conftest import MR_IID, PROJECT_ID
 
 
 @pytest.fixture
@@ -39,7 +40,7 @@ def mock_gl(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 async def test_get_mr_details(mock_gl: MagicMock) -> None:
     client = GitLabClient("https://gitlab.com", "token")
-    details = await client.get_mr_details(42, 7)
+    details = await client.get_mr_details(PROJECT_ID, MR_IID)
 
     assert isinstance(details, MRDetails)
     assert details.title == "Test MR"

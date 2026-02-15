@@ -31,7 +31,7 @@ class RepoLockManager:
         if len(self._locks) <= self._max_size:
             return
 
-        to_evict = []
+        to_evict: list[str] = []
         for repo_url, lock in self._locks.items():
             if len(self._locks) - len(to_evict) <= self._max_size:
                 break

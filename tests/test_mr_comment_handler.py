@@ -8,7 +8,7 @@ from gitlab_copilot_agent.models import (
     NoteWebhookPayload, NoteObjectAttributes, NoteMergeRequest,
     WebhookProject, WebhookUser,
 )
-from tests.conftest import make_settings
+from tests.conftest import MR_IID, PROJECT_ID, make_settings
 
 
 def test_parse_copilot_command_valid() -> None:
@@ -31,9 +31,9 @@ def _make_note_payload(note: str = "/copilot fix bug") -> NoteWebhookPayload:
     return NoteWebhookPayload(
         object_kind="note",
         user=WebhookUser(id=1, username="reviewer"),
-        project=WebhookProject(id=42, path_with_namespace="g/p", git_http_url="https://gl.example.com/g/p.git"),
+        project=WebhookProject(id=PROJECT_ID, path_with_namespace="g/p", git_http_url="https://gl.example.com/g/p.git"),
         object_attributes=NoteObjectAttributes(note=note, noteable_type="MergeRequest"),
-        merge_request=NoteMergeRequest(iid=7, title="Fix", source_branch="feature/x", target_branch="main"),
+        merge_request=NoteMergeRequest(iid=MR_IID, title="Fix", source_branch="feature/x", target_branch="main"),
     )
 
 

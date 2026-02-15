@@ -11,6 +11,7 @@ from gitlab_copilot_agent.git_operations import (
     git_create_branch,
     git_push,
 )
+from tests.conftest import GITLAB_TOKEN
 
 AUTHOR_NAME = "Test Agent"
 AUTHOR_EMAIL = "agent@test.com"
@@ -171,12 +172,12 @@ class TestGitClone:
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
             clone_path = await git_clone(
-                "https://gitlab.com/test/repo.git", "main", "test-token"
+                "https://gitlab.com/test/repo.git", "main", GITLAB_TOKEN
             )
             try:
                 assert clone_path.exists()
                 # Token should be in the auth URL arg, sanitized in errors
-                assert any("oauth2:test-token@" in a for a in captured_args)
+                assert any(f"oauth2:{GITLAB_TOKEN}@" in a for a in captured_args)
             finally:
                 import shutil
 
@@ -193,7 +194,7 @@ class TestGitClone:
 
         with pytest.raises(RuntimeError, match="git clone failed"):
             await git_clone(
-                "https://invalid.example.com/nonexistent.git", "main", "test-token"
+                "https://invalid.example.com/nonexistent.git", "main", GITLAB_TOKEN
             )
 
         after = set(Path(temp_dir).glob("mr-review-*"))
