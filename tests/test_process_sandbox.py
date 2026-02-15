@@ -158,31 +158,109 @@ class TestNoopSandbox:
         sandbox.cleanup()  # Should not raise
 
 
+_TEST_SANDBOX_IMAGE = "copilot-cli-sandbox:test"
+
+
 class TestContainerSandbox:
-    """Tests for ContainerSandbox stub implementation."""
+    """Tests for ContainerSandbox implementation."""
 
-    def test_preflight_raises_not_implemented(self) -> None:
-        """Should raise NotImplementedError — container sandbox not yet implemented."""
-        sandbox = ContainerSandbox(runtime="docker")
-        with pytest.raises(NotImplementedError, match="docker sandbox is not yet implemented"):
-            sandbox.preflight()
+    def test_preflight_succeeds(self) -> None:
+        """Should pass preflight when runtime is available and image exists."""
+        with (
+            patch("shutil.which", return_value="/usr/bin/docker"),
+            patch("subprocess.run") as mock_run,
+        ):
+            # First call is docker info, second is image inspect
+            mock_run.side_effect = [
+                MagicMock(returncode=0),  # docker info
+                MagicMock(returncode=0),  # docker image inspect
+            ]
+            sandbox = ContainerSandbox(runtime="docker", image=_TEST_SANDBOX_IMAGE)
+            sandbox.preflight()  # Should not raise
 
-    def test_preflight_raises_not_implemented_podman(self) -> None:
-        """Should raise NotImplementedError for podman too."""
-        sandbox = ContainerSandbox(runtime="podman")
-        with pytest.raises(NotImplementedError, match="podman sandbox is not yet implemented"):
-            sandbox.preflight()
+    def test_preflight_raises_when_runtime_missing(self) -> None:
+        """Should raise RuntimeError when runtime not found on PATH."""
+        with patch("shutil.which", return_value=None):
+            sandbox = ContainerSandbox(runtime="docker", image=_TEST_SANDBOX_IMAGE)
+            with pytest.raises(RuntimeError, match="docker binary not found"):
+                sandbox.preflight()
 
-    def test_create_cli_wrapper_raises_not_implemented(self) -> None:
-        """Should raise NotImplementedError when creating wrapper."""
-        sandbox = ContainerSandbox(runtime="docker")
-        with pytest.raises(NotImplementedError, match="Container sandbox not yet implemented"):
-            sandbox.create_cli_wrapper("/some/repo")
+    def test_preflight_raises_when_runtime_fails(self) -> None:
+        """Should raise RuntimeError when runtime info command fails."""
+        with (
+            patch("shutil.which", return_value="/usr/bin/docker"),
+            patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "docker")),
+        ):
+            sandbox = ContainerSandbox(runtime="docker", image=_TEST_SANDBOX_IMAGE)
+            with pytest.raises(RuntimeError, match="docker preflight failed"):
+                sandbox.preflight()
 
-    def test_cleanup_is_noop(self) -> None:
-        """Should not raise on cleanup."""
-        sandbox = ContainerSandbox(runtime="docker")
-        sandbox.cleanup()  # Should not raise
+    def test_preflight_raises_when_image_missing(self) -> None:
+        """Should raise RuntimeError when sandbox image not found."""
+        with (
+            patch("shutil.which", return_value="/usr/bin/docker"),
+            patch("subprocess.run") as mock_run,
+        ):
+            # docker info succeeds, but image inspect fails
+            mock_run.side_effect = [
+                MagicMock(returncode=0),  # docker info
+                MagicMock(returncode=1),  # docker image inspect (not found)
+            ]
+            sandbox = ContainerSandbox(runtime="docker", image=_TEST_SANDBOX_IMAGE)
+            with pytest.raises(RuntimeError, match="Sandbox image .* not found"):
+                sandbox.preflight()
+
+    def test_create_cli_wrapper_generates_executable_script(self, tmp_path: Path) -> None:
+        """Should generate an executable script that invokes the container runtime."""
+        sandbox = ContainerSandbox(runtime="docker", image=_TEST_SANDBOX_IMAGE)
+        repo = str(tmp_path / "repo")
+        os.makedirs(repo)
+        path = sandbox.create_cli_wrapper(repo)
+        try:
+            assert os.access(path, os.X_OK)
+            with open(path) as f:
+                content = f.read()
+            assert content.startswith("#!/bin/sh\n")
+            assert "docker run --rm" in content
+            # Security: no secrets leak, repo mounted, caps dropped
+            assert "-e GITHUB_TOKEN" in content
+            assert "GITLAB_TOKEN" not in content
+            assert "--cap-drop=ALL" in content
+            assert "--pull=never" in content
+            assert _TEST_SANDBOX_IMAGE in content
+        finally:
+            sandbox.cleanup()
+
+    def test_create_cli_wrapper_script_is_executable(self, tmp_path: Path) -> None:
+        """Should create an executable script file."""
+        sandbox = ContainerSandbox(runtime="podman", image=_TEST_SANDBOX_IMAGE)
+        repo = str(tmp_path / "repo")
+        os.makedirs(repo)
+        path = sandbox.create_cli_wrapper(repo)
+        try:
+            assert os.path.exists(path)
+            assert os.stat(path).st_mode & stat.S_IXUSR  # executable
+        finally:
+            sandbox.cleanup()
+
+    def test_cleanup_removes_script(self, tmp_path: Path) -> None:
+        """Should remove the wrapper script on cleanup."""
+        sandbox = ContainerSandbox(runtime="docker", image=_TEST_SANDBOX_IMAGE)
+        repo = str(tmp_path / "repo")
+        os.makedirs(repo)
+        path = sandbox.create_cli_wrapper(repo)
+        assert os.path.exists(path)
+        sandbox.cleanup()
+        assert not os.path.exists(path)
+
+    def test_cleanup_idempotent(self, tmp_path: Path) -> None:
+        """Should not raise when cleanup called multiple times."""
+        sandbox = ContainerSandbox(runtime="docker", image=_TEST_SANDBOX_IMAGE)
+        repo = str(tmp_path / "repo")
+        os.makedirs(repo)
+        sandbox.create_cli_wrapper(repo)
+        sandbox.cleanup()
+        sandbox.cleanup()  # Second call should not raise
 
 
 class TestGetSandbox:

@@ -60,6 +60,10 @@ class Settings(BaseSettings):
         default="bwrap",
         description="Process sandbox method: bwrap, docker, podman, or noop",
     )
+    sandbox_image: str = Field(
+        default="copilot-cli-sandbox:latest",
+        description="Container image for docker/podman sandbox",
+    )
 
     # Jira (all optional — service runs review-only without these)
     jira_url: str | None = Field(default=None, description="Jira instance URL")

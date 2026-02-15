@@ -1,0 +1,8 @@
+FROM node:22-slim
+
+# Install Copilot CLI — version must match the CLI bundled by github-copilot-sdk
+RUN npm install -g @github/copilot@0.0.410 && npm cache clean --force
+
+USER 1000
+WORKDIR /workspace
+ENTRYPOINT ["copilot"]
