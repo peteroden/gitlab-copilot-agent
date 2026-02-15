@@ -29,6 +29,10 @@ JIRA_PROJECT_MAP_JSON = (
 )
 
 PROJECT_ID = 42
+
+# Example clone URL used across multiple tests
+EXAMPLE_CLONE_URL = "https://gitlab.example.com/group/project.git"
+
 MR_IID = 7
 
 DIFF_REFS = MRDiffRef(base_sha="aaa", start_sha="bbb", head_sha="ccc")

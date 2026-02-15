@@ -9,7 +9,7 @@ from gitlab_copilot_agent.config import JiraSettings
 from gitlab_copilot_agent.jira_models import JiraIssue, JiraIssueFields, JiraStatus
 from gitlab_copilot_agent.jira_poller import JiraPoller
 from gitlab_copilot_agent.project_mapping import GitLabProjectMapping, ProjectMap
-from tests.conftest import JIRA_EMAIL, JIRA_TOKEN, JIRA_URL
+from tests.conftest import EXAMPLE_CLONE_URL, JIRA_EMAIL, JIRA_TOKEN, JIRA_URL, PROJECT_ID
 
 
 def make_jira_settings(**overrides: str | int) -> JiraSettings:
@@ -47,8 +47,8 @@ def project_map() -> ProjectMap:
     return ProjectMap(
         mappings={
             "PROJ": GitLabProjectMapping(
-                gitlab_project_id=42,
-                clone_url="https://gitlab.example.com/group/project.git",
+                gitlab_project_id=PROJECT_ID,
+                clone_url=EXAMPLE_CLONE_URL,
                 target_branch="main",
             )
         }

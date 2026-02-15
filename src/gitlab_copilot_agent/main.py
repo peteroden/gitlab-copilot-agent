@@ -30,8 +30,8 @@ structlog.configure(
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
         structlog.processors.TimeStamper(fmt="iso"),
-        add_trace_context,
-        emit_to_otel_logs,
+        add_trace_context,  # type: ignore[list-item]
+        emit_to_otel_logs,  # type: ignore[list-item]
         structlog.processors.format_exc_info,
         structlog.dev.ConsoleRenderer(),
     ],

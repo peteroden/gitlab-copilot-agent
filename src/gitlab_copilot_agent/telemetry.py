@@ -59,7 +59,7 @@ def shutdown_telemetry() -> None:
 
         log_provider = get_logger_provider()
         if isinstance(log_provider, LoggerProvider):
-            log_provider.shutdown()
+            log_provider.shutdown()  # type: ignore[no-untyped-call]
 
 
 def get_tracer(name: str) -> trace.Tracer:

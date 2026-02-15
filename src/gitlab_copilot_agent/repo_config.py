@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import frontmatter
+import frontmatter  # type: ignore[import-untyped]
 import structlog
 
 log = structlog.get_logger()

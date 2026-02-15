@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from gitlab_copilot_agent.config import Settings
 from tests.conftest import (
+    GITHUB_TOKEN,
     GITLAB_TOKEN,
     GITLAB_URL,
     JIRA_EMAIL,
@@ -20,7 +21,7 @@ def test_settings_loads_required_env_vars(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
     monkeypatch.setenv("GITLAB_TOKEN", GITLAB_TOKEN)
     monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", WEBHOOK_SECRET)
-    monkeypatch.setenv("GITHUB_TOKEN", "gho_test")
+    monkeypatch.setenv("GITHUB_TOKEN", GITHUB_TOKEN)
 
     settings = Settings()  # type: ignore[call-arg]
 

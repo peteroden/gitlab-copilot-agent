@@ -105,7 +105,7 @@ class GitLabClient:
                 "title": title,
                 "description": description,
             })
-            return mr.iid
+            return mr.iid  # type: ignore[no-any-return]
         return await asyncio.to_thread(_create)
 
     async def post_mr_comment(self, project_id: int, mr_iid: int, body: str) -> None:

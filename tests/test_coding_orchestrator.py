@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
 from gitlab_copilot_agent.jira_models import JiraIssue, JiraIssueFields, JiraStatus
 from gitlab_copilot_agent.project_mapping import GitLabProjectMapping
-from tests.conftest import make_settings
+from tests.conftest import EXAMPLE_CLONE_URL, make_settings
 
 
 @patch("gitlab_copilot_agent.coding_orchestrator.run_coding_task")
@@ -21,7 +21,7 @@ async def test_handle_full_pipeline(mock_clone: AsyncMock, mock_branch: AsyncMoc
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
     mock_gitlab.create_merge_request.return_value = 1
     issue = JiraIssue(id="10042", key="PROJ-42", fields=JiraIssueFields(summary="Add feature", status=JiraStatus(name="AI Ready", id="1"), description="Impl"))
-    mapping = GitLabProjectMapping(gitlab_project_id=99, clone_url="https://gitlab.example.com/group/project.git", target_branch="main")
+    mapping = GitLabProjectMapping(gitlab_project_id=99, clone_url=EXAMPLE_CLONE_URL, target_branch="main")
     orch = CodingOrchestrator(settings, mock_gitlab, mock_jira)
     await orch.handle(issue, mapping)
     mock_clone.assert_awaited_once()

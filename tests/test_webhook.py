@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import AsyncClient
 
-from tests.conftest import HEADERS, MR_PAYLOAD, make_mr_payload
+from tests.conftest import HEADERS, MR_IID, MR_PAYLOAD, PROJECT_ID, make_mr_payload
 
 
 @pytest.mark.parametrize("token", [None, "wrong-token"])
@@ -40,9 +40,9 @@ def _note_body(note: str = "/copilot fix the bug") -> dict[str, object]:
     return {
         "object_kind": "note",
         "user": {"id": 1, "username": "reviewer"},
-        "project": {"id": 42, "path_with_namespace": "g/p", "git_http_url": "https://x.git"},
+        "project": {"id": PROJECT_ID, "path_with_namespace": "g/p", "git_http_url": "https://x.git"},
         "object_attributes": {"note": note, "noteable_type": "MergeRequest"},
-        "merge_request": {"iid": 7, "title": "Fix", "source_branch": "feat", "target_branch": "main"},
+        "merge_request": {"iid": MR_IID, "title": "Fix", "source_branch": "feat", "target_branch": "main"},
     }
 
 
