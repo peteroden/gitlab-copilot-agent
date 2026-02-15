@@ -67,14 +67,19 @@ def _run(tmp_path: Path) -> Callable[..., Any]:
 @patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
 @patch("gitlab_copilot_agent.copilot_session.CopilotClient")
 async def test_returns_last_message(
-    mock_client_class: MagicMock, mock_discover: MagicMock, _run: Any,
+    mock_client_class: MagicMock,
+    mock_discover: MagicMock,
+    _run: Any,
 ) -> None:
     mock_discover.return_value = RepoConfig()
-    mock_client = _setup_mock_session(mock_client_class, [
-        _make_event("assistant.message", "First"),
-        _make_event("assistant.message", "Last"),
-        _make_event("session.idle"),
-    ])
+    mock_client = _setup_mock_session(
+        mock_client_class,
+        [
+            _make_event("assistant.message", "First"),
+            _make_event("assistant.message", "Last"),
+            _make_event("session.idle"),
+        ],
+    )
 
     assert await _run() == "Last"
     mock_client.start.assert_awaited_once()
@@ -84,7 +89,9 @@ async def test_returns_last_message(
 @patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
 @patch("gitlab_copilot_agent.copilot_session.CopilotClient")
 async def test_empty_messages_returns_empty_string(
-    mock_client_class: MagicMock, mock_discover: MagicMock, _run: Any,
+    mock_client_class: MagicMock,
+    mock_discover: MagicMock,
+    _run: Any,
 ) -> None:
     mock_discover.return_value = RepoConfig()
     _setup_mock_session(mock_client_class, [_make_event("session.idle")])
@@ -95,17 +102,22 @@ async def test_empty_messages_returns_empty_string(
 @patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
 @patch("gitlab_copilot_agent.copilot_session.CopilotClient")
 async def test_passes_repo_config_to_session(
-    mock_client_class: MagicMock, mock_discover: MagicMock, _run: Any,
+    mock_client_class: MagicMock,
+    mock_discover: MagicMock,
+    _run: Any,
 ) -> None:
     mock_discover.return_value = RepoConfig(
         skill_directories=["/tmp/skills"],
         custom_agents=[{"name": "coder", "prompt": "Write code."}],
         instructions="Use strict typing.",
     )
-    mock_client = _setup_mock_session(mock_client_class, [
-        _make_event("assistant.message", "done"),
-        _make_event("session.idle"),
-    ])
+    mock_client = _setup_mock_session(
+        mock_client_class,
+        [
+            _make_event("assistant.message", "done"),
+            _make_event("session.idle"),
+        ],
+    )
 
     await _run()
 

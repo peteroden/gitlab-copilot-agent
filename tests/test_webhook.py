@@ -40,9 +40,18 @@ def _note_body(note: str = "/copilot fix the bug") -> dict[str, object]:
     return {
         "object_kind": "note",
         "user": {"id": 1, "username": "reviewer"},
-        "project": {"id": PROJECT_ID, "path_with_namespace": "g/p", "git_http_url": "https://x.git"},
+        "project": {
+            "id": PROJECT_ID,
+            "path_with_namespace": "g/p",
+            "git_http_url": "https://x.git",
+        },
         "object_attributes": {"note": note, "noteable_type": "MergeRequest"},
-        "merge_request": {"iid": MR_IID, "title": "Fix", "source_branch": "feat", "target_branch": "main"},
+        "merge_request": {
+            "iid": MR_IID,
+            "title": "Fix",
+            "source_branch": "feat",
+            "target_branch": "main",
+        },
     }
 
 
@@ -66,6 +75,7 @@ async def test_note_webhook_uses_shared_lock_manager(client: AsyncClient) -> Non
 
         # Wait for background task to complete
         import asyncio
+
         await asyncio.sleep(0.1)
 
         # Verify handle_copilot_comment was called with the lock manager from app state
@@ -73,4 +83,5 @@ async def test_note_webhook_uses_shared_lock_manager(client: AsyncClient) -> Non
         args, kwargs = mock_handle.call_args
         # Third argument should be the repo_locks from app.state
         from gitlab_copilot_agent.main import app
+
         assert args[2] is app.state.repo_locks

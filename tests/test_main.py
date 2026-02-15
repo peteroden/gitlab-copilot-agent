@@ -58,11 +58,13 @@ async def test_lifespan_with_jira_creates_shared_lock_manager(
 
     mock_orchestrator = AsyncMock()
 
-    with patch(
-        "gitlab_copilot_agent.main.JiraClient", return_value=mock_jira_client
-    ), patch("gitlab_copilot_agent.main.JiraPoller", return_value=mock_poller), patch(
-        "gitlab_copilot_agent.main.CodingOrchestrator", return_value=mock_orchestrator
-    ) as mock_orch_class:
+    with (
+        patch("gitlab_copilot_agent.main.JiraClient", return_value=mock_jira_client),
+        patch("gitlab_copilot_agent.main.JiraPoller", return_value=mock_poller),
+        patch(
+            "gitlab_copilot_agent.main.CodingOrchestrator", return_value=mock_orchestrator
+        ) as mock_orch_class,
+    ):
         async with lifespan(test_app):
             mock_poller.start.assert_called_once()
             assert test_app.state.repo_locks is not None

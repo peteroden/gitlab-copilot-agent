@@ -19,6 +19,7 @@ class MRDiffRef:
     start_sha: str
     head_sha: str
 
+
 @dataclass(frozen=True)
 class MRChange:
     old_path: str
@@ -27,6 +28,7 @@ class MRChange:
     new_file: bool = False
     deleted_file: bool = False
     renamed_file: bool = False
+
 
 @dataclass(frozen=True)
 class MRDetails:
@@ -40,7 +42,9 @@ class GitLabClientProtocol(Protocol):
     async def get_mr_details(self, project_id: int, mr_iid: int) -> MRDetails: ...
     async def clone_repo(self, clone_url: str, branch: str, token: str) -> Path: ...
     async def cleanup(self, repo_path: Path) -> None: ...
-    async def create_merge_request(self, project_id: int, source_branch: str, target_branch: str, title: str, description: str) -> int: ...
+    async def create_merge_request(
+        self, project_id: int, source_branch: str, target_branch: str, title: str, description: str
+    ) -> int: ...
     async def post_mr_comment(self, project_id: int, mr_iid: int, body: str) -> None: ...
 
 
@@ -85,33 +89,45 @@ class GitLabClient:
 
     async def clone_repo(self, clone_url: str, branch: str, token: str) -> Path:
         from gitlab_copilot_agent.git_operations import git_clone
+
         return await git_clone(clone_url, branch, token)
 
     async def cleanup(self, repo_path: Path) -> None:
         import shutil
+
         await asyncio.to_thread(shutil.rmtree, repo_path, True)
         await log.ainfo("repo_cleaned", path=str(repo_path))
 
     async def create_merge_request(
-        self, project_id: int, source_branch: str, target_branch: str,
-        title: str, description: str,
+        self,
+        project_id: int,
+        source_branch: str,
+        target_branch: str,
+        title: str,
+        description: str,
     ) -> int:
         """Create a merge request. Returns the MR IID."""
+
         def _create() -> int:
             project = self._gl.projects.get(project_id)
-            mr = project.mergerequests.create({
-                "source_branch": source_branch,
-                "target_branch": target_branch,
-                "title": title,
-                "description": description,
-            })
+            mr = project.mergerequests.create(
+                {
+                    "source_branch": source_branch,
+                    "target_branch": target_branch,
+                    "title": title,
+                    "description": description,
+                }
+            )
             return mr.iid  # type: ignore[no-any-return]
+
         return await asyncio.to_thread(_create)
 
     async def post_mr_comment(self, project_id: int, mr_iid: int, body: str) -> None:
         """Post a comment on a merge request."""
+
         def _post() -> None:
             project = self._gl.projects.get(project_id)
             mr = project.mergerequests.get(mr_iid)
             mr.notes.create({"body": body})
+
         await asyncio.to_thread(_post)

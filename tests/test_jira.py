@@ -113,9 +113,7 @@ class TestJiraClientSearch:
         page2_resp.json.return_value = SEARCH_RESPONSE
         page2_resp.raise_for_status = lambda: None
 
-        with patch.object(
-            client._client, "get", side_effect=[page1_resp, page2_resp]
-        ):
+        with patch.object(client._client, "get", side_effect=[page1_resp, page2_resp]):
             issues = await client.search_issues("project = PROJ")
 
         assert len(issues) == 2
@@ -133,8 +131,10 @@ class TestJiraClientTransition:
         post_resp = AsyncMock(spec=httpx.Response)
         post_resp.raise_for_status = lambda: None
 
-        with patch.object(client._client, "get", return_value=get_resp), \
-             patch.object(client._client, "post", return_value=post_resp) as mock_post:
+        with (
+            patch.object(client._client, "get", return_value=get_resp),
+            patch.object(client._client, "post", return_value=post_resp) as mock_post,
+        ):
             await client.transition_issue("PROJ-123", "In Progress")
 
         mock_post.assert_called_once_with(
@@ -153,8 +153,10 @@ class TestJiraClientTransition:
         post_resp = AsyncMock(spec=httpx.Response)
         post_resp.raise_for_status = lambda: None
 
-        with patch.object(client._client, "get", return_value=get_resp), \
-             patch.object(client._client, "post", return_value=post_resp):
+        with (
+            patch.object(client._client, "get", return_value=get_resp),
+            patch.object(client._client, "post", return_value=post_resp),
+        ):
             await client.transition_issue("PROJ-123", "in progress")
         await client.close()
 
@@ -165,9 +167,11 @@ class TestJiraClientTransition:
         get_resp.json.return_value = TRANSITIONS_RESPONSE
         get_resp.raise_for_status = lambda: None
 
-        with patch.object(client._client, "get", return_value=get_resp):
-            with pytest.raises(ValueError, match="No transition to 'Blocked'"):
-                await client.transition_issue("PROJ-123", "Blocked")
+        with (
+            patch.object(client._client, "get", return_value=get_resp),
+            pytest.raises(ValueError, match="No transition to 'Blocked'"),
+        ):
+            await client.transition_issue("PROJ-123", "Blocked")
         await client.close()
 
 
@@ -194,12 +198,14 @@ class TestJiraClientComment:
 
 class TestProjectMapping:
     def test_lookup_existing_project(self) -> None:
-        pm = ProjectMap(mappings={
-            "PROJ": GitLabProjectMapping(
-                gitlab_project_id=12345,
-                clone_url="https://gitlab.com/group/repo.git",
-            ),
-        })
+        pm = ProjectMap(
+            mappings={
+                "PROJ": GitLabProjectMapping(
+                    gitlab_project_id=12345,
+                    clone_url="https://gitlab.com/group/repo.git",
+                ),
+            }
+        )
         result = pm.get("PROJ")
         assert result is not None
         assert result.gitlab_project_id == 12345
@@ -210,11 +216,13 @@ class TestProjectMapping:
         assert pm.get("UNKNOWN") is None
 
     def test_contains(self) -> None:
-        pm = ProjectMap(mappings={
-            "PROJ": GitLabProjectMapping(
-                gitlab_project_id=1, clone_url="https://example.com/repo.git"
-            ),
-        })
+        pm = ProjectMap(
+            mappings={
+                "PROJ": GitLabProjectMapping(
+                    gitlab_project_id=1, clone_url="https://example.com/repo.git"
+                ),
+            }
+        )
         assert "PROJ" in pm
         assert "OTHER" not in pm
 

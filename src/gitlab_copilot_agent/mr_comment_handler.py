@@ -29,11 +29,13 @@ def parse_copilot_command(note: str) -> str | None:
     """Extract instruction from a /copilot command. Returns None if not a command."""
     stripped = note.strip()
     if stripped.lower().startswith(COPILOT_PREFIX):
-        return stripped[len(COPILOT_PREFIX):].strip() or None
+        return stripped[len(COPILOT_PREFIX) :].strip() or None
     return None
 
 
-def build_mr_coding_prompt(instruction: str, mr_title: str, source_branch: str, target_branch: str) -> str:
+def build_mr_coding_prompt(
+    instruction: str, mr_title: str, source_branch: str, target_branch: str
+) -> str:
     """Build user prompt for an MR comment coding task."""
     return (
         f"## MR: {mr_title}\n"
@@ -57,7 +59,9 @@ async def handle_copilot_comment(
     if not instruction:
         return
 
-    with _tracer.start_as_current_span("mr.copilot_command", attributes={"project_id": project.id, "mr_iid": mr.iid}):
+    with _tracer.start_as_current_span(
+        "mr.copilot_command", attributes={"project_id": project.id, "mr_iid": mr.iid}
+    ):
         bound_log = log.bind(project_id=project.id, mr_iid=mr.iid)
         await bound_log.ainfo("copilot_command_received", instruction=instruction[:100])
 
@@ -67,26 +71,41 @@ async def handle_copilot_comment(
         async def _execute() -> None:
             nonlocal repo_path
             try:
-                repo_path = await git_clone(project.git_http_url, mr.source_branch, settings.gitlab_token)
+                repo_path = await git_clone(
+                    project.git_http_url, mr.source_branch, settings.gitlab_token
+                )
                 result = await run_copilot_session(
-                    settings=settings, repo_path=str(repo_path),
+                    settings=settings,
+                    repo_path=str(repo_path),
                     system_prompt=CODING_SYSTEM_PROMPT,
-                    user_prompt=build_mr_coding_prompt(instruction, mr.title, mr.source_branch, mr.target_branch),
+                    user_prompt=build_mr_coding_prompt(
+                        instruction, mr.title, mr.source_branch, mr.target_branch
+                    ),
                 )
                 await bound_log.ainfo("copilot_coding_complete", summary=result[:200])
 
-                has_changes = await git_commit(repo_path, f"fix: {instruction[:50]}", AGENT_AUTHOR_NAME, AGENT_AUTHOR_EMAIL)
+                has_changes = await git_commit(
+                    repo_path, f"fix: {instruction[:50]}", AGENT_AUTHOR_NAME, AGENT_AUTHOR_EMAIL
+                )
                 if has_changes:
                     await git_push(repo_path, "origin", mr.source_branch, settings.gitlab_token)
-                    await gl_client.post_mr_comment(project.id, mr.iid, f"✅ Changes pushed.\n\n{result}")
+                    await gl_client.post_mr_comment(
+                        project.id, mr.iid, f"✅ Changes pushed.\n\n{result}"
+                    )
                 else:
-                    await gl_client.post_mr_comment(project.id, mr.iid, f"ℹ️ No file changes needed.\n\n{result}")
+                    await gl_client.post_mr_comment(
+                        project.id, mr.iid, f"ℹ️ No file changes needed.\n\n{result}"
+                    )
 
                 await bound_log.ainfo("copilot_command_complete")
             except Exception:
                 await bound_log.aexception("copilot_command_failed")
                 try:
-                    await gl_client.post_mr_comment(project.id, mr.iid, "❌ Agent encountered an error processing your request.")
+                    await gl_client.post_mr_comment(
+                        project.id,
+                        mr.iid,
+                        "❌ Agent encountered an error processing your request.",
+                    )
                 except Exception:
                     await bound_log.aexception("error_comment_failed")
                 raise

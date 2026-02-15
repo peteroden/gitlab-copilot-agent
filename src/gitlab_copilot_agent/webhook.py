@@ -18,7 +18,7 @@ HANDLED_ACTIONS = frozenset({"open", "update"})
 
 def _validate_webhook_token(received: str | None, expected: str) -> None:
     if received is None or not hmac.compare_digest(received, expected):
-        raise HTTPException(status_code = 401, detail="Invalid webhook token")
+        raise HTTPException(status_code=401, detail="Invalid webhook token")
 
 
 async def _process_review(request: Request, payload: MergeRequestWebhookPayload) -> None:
@@ -66,7 +66,10 @@ async def webhook(
             return {"status": "ignored", "reason": "not an MR note"}
         if not parse_copilot_command(note_payload.object_attributes.note):
             return {"status": "ignored", "reason": "not a /copilot command"}
-        if settings.agent_gitlab_username and note_payload.user.username == settings.agent_gitlab_username:
+        if (
+            settings.agent_gitlab_username
+            and note_payload.user.username == settings.agent_gitlab_username
+        ):
             return {"status": "ignored", "reason": "self-comment"}
         background_tasks.add_task(_process_copilot_comment, request, note_payload)
         return {"status": "queued"}

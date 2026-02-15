@@ -34,12 +34,14 @@ def _setup_mocks(
     mock_gl_instance = mock_client_class.return_value
     mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
     mock_gl_instance.cleanup = AsyncMock()
-    mock_gl_instance.get_mr_details = AsyncMock(return_value=MRDetails(
-        title="Add feature",
-        description="Implements X",
-        diff_refs=DIFF_REFS,
-        changes=[],
-    ))
+    mock_gl_instance.get_mr_details = AsyncMock(
+        return_value=MRDetails(
+            title="Add feature",
+            description="Implements X",
+            diff_refs=DIFF_REFS,
+            changes=[],
+        )
+    )
     mock_run_review.return_value = FAKE_REVIEW_OUTPUT
     return mock_gl_instance
 

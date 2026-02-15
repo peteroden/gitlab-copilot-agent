@@ -65,6 +65,7 @@ class NoteMergeRequest(BaseModel):
 
 class NoteWebhookPayload(BaseModel):
     """GitLab note webhook payload for MR comments."""
+
     model_config = ConfigDict(strict=True)
     object_kind: str
     user: WebhookUser

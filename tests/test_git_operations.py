@@ -171,9 +171,7 @@ class TestGitClone:
             return mock_proc
 
         with patch("asyncio.create_subprocess_exec", side_effect=mock_exec):
-            clone_path = await git_clone(
-                "https://gitlab.com/test/repo.git", "main", GITLAB_TOKEN
-            )
+            clone_path = await git_clone("https://gitlab.com/test/repo.git", "main", GITLAB_TOKEN)
             try:
                 assert clone_path.exists()
                 # Token should be in the auth URL arg, sanitized in errors
@@ -185,17 +183,15 @@ class TestGitClone:
 
     async def test_clone_cleans_up_on_failure(self) -> None:
         """Clone directory should be removed when clone fails."""
-        from gitlab_copilot_agent.git_operations import git_clone
-
         import tempfile
+
+        from gitlab_copilot_agent.git_operations import git_clone
 
         temp_dir = tempfile.gettempdir()
         before = set(Path(temp_dir).glob("mr-review-*"))
 
         with pytest.raises(RuntimeError, match="git clone failed"):
-            await git_clone(
-                "https://invalid.example.com/nonexistent.git", "main", GITLAB_TOKEN
-            )
+            await git_clone("https://invalid.example.com/nonexistent.git", "main", GITLAB_TOKEN)
 
         after = set(Path(temp_dir).glob("mr-review-*"))
         assert after - before == set(), "clone directories should be cleaned up on failure"
