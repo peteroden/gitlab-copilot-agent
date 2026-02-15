@@ -152,27 +152,76 @@ class NoopSandbox:
 
 
 class ContainerSandbox:
-    """Sandbox using Docker or Podman containers (not yet implemented).
+    """Sandbox using Docker or Podman containers.
 
-    Stub implementation for configuration dispatch — implementation deferred.
+    Runs the Copilot CLI inside a minimal container with read-only filesystem,
+    dropped capabilities, and resource limits.
     """
 
-    def __init__(self, runtime: Literal["docker", "podman"]) -> None:
+    def __init__(self, runtime: Literal["docker", "podman"], image: str) -> None:
         self._runtime = runtime
+        self._script_path: str | None = None
+        self._image_name = image
 
     def preflight(self) -> None:
-        """Fail fast — container sandbox is not yet implemented."""
-        raise NotImplementedError(
-            f"{self._runtime} sandbox is not yet implemented. "
-            f"Use SANDBOX_METHOD=bwrap or SANDBOX_METHOD=noop."
+        """Validate that the container runtime and sandbox image are available."""
+        if not shutil.which(self._runtime):
+            raise RuntimeError(f"{self._runtime} binary not found on PATH")
+        try:
+            subprocess.run(
+                [self._runtime, "info"],
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
+            raise RuntimeError(f"{self._runtime} preflight failed: {e}") from e
+        # Check sandbox image exists
+        result = subprocess.run(
+            [self._runtime, "image", "inspect", self._image_name],
+            capture_output=True,
+            timeout=10,
         )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Sandbox image '{self._image_name}' not found. "
+                f"Build it with: {self._runtime} build -t {self._image_name} "
+                f"-f Dockerfile.sandbox ."
+            )
 
-    def create_cli_wrapper(self, repo_path: str) -> str:  # noqa: ARG002
-        """Not yet implemented."""
-        raise NotImplementedError("Container sandbox not yet implemented")
+    def create_cli_wrapper(self, repo_path: str) -> str:
+        """Create a wrapper script that runs the CLI inside a container."""
+        log.debug("sandbox_wrapper_created", method=self._runtime, repo_path=repo_path)
+        safe_repo = shlex.quote(repo_path)
+
+        script_content = f"""#!/bin/sh
+exec {self._runtime} run --rm \\
+  --pull=never \\
+  --read-only --tmpfs /tmp \\
+  --cap-drop=ALL --security-opt=no-new-privileges \\
+  --user {os.getuid()}:{os.getgid()} \\
+  --network=bridge \\
+  --cpus=1 --memory=2g --pids-limit=256 \\
+  -v {safe_repo}:/workspace:rw \\
+  -w /workspace \\
+  -e GITHUB_TOKEN \\
+  {self._image_name} "$@"
+"""
+        fd, script_path = tempfile.mkstemp(prefix=f"copilot-{self._runtime}-", suffix=".sh")
+        try:
+            os.write(fd, script_content.encode())
+        finally:
+            os.close(fd)
+        os.chmod(script_path, stat.S_IRWXU)
+        self._script_path = script_path
+        return script_path
 
     def cleanup(self) -> None:
-        """Nothing to clean up yet."""
+        """Remove the wrapper script."""
+        if self._script_path:
+            with contextlib.suppress(OSError):
+                os.unlink(self._script_path)
+            self._script_path = None
 
 
 def get_sandbox(settings: Settings) -> ProcessSandbox:
@@ -184,9 +233,9 @@ def get_sandbox(settings: Settings) -> ProcessSandbox:
         case "bwrap":
             return BubblewrapSandbox()
         case "docker":
-            return ContainerSandbox(runtime="docker")
+            return ContainerSandbox(runtime="docker", image=settings.sandbox_image)
         case "podman":
-            return ContainerSandbox(runtime="podman")
+            return ContainerSandbox(runtime="podman", image=settings.sandbox_image)
         case "noop":
             return NoopSandbox()
         case _:  # pragma: no cover
