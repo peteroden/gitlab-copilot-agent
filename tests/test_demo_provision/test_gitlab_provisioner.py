@@ -63,7 +63,7 @@ class TestCreateProject:
                 "namespace_id": 10,
                 "visibility": "private",
                 "description": "",
-                "initialize_with_readme": False,
+                "initialize_with_readme": True,
             }
         )
         assert result.id == 99

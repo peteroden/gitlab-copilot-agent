@@ -34,7 +34,7 @@ def create_project(
             "namespace_id": namespace_id,
             "visibility": visibility,
             "description": description,
-            "initialize_with_readme": False,
+            "initialize_with_readme": True,
         }
     )
     log.info("gitlab_project_created", project=project.path_with_namespace, id=project.id)
@@ -42,12 +42,18 @@ def create_project(
 
 
 def get_namespace(gl: gitlab.Gitlab, group_path: str) -> Any:
-    """Look up a GitLab group/namespace by path. Raises if not found."""
+    """Look up a GitLab group/namespace by path. Falls back to user namespace."""
     try:
         return gl.groups.get(group_path)
-    except gitlab.exceptions.GitlabGetError as exc:
-        msg = f"GitLab group '{group_path}' not found. Check --gitlab-group."
-        raise SystemExit(msg) from exc
+    except gitlab.exceptions.GitlabGetError:
+        pass
+    # Fall back to namespace search (covers user namespaces)
+    namespaces = gl.namespaces.list(search=group_path)
+    for ns in namespaces:
+        if ns.full_path == group_path:
+            return ns
+    msg = f"GitLab namespace '{group_path}' not found. Check --gitlab-group."
+    raise SystemExit(msg)
 
 
 def push_files(
@@ -57,8 +63,21 @@ def push_files(
     commit_message: str,
 ) -> None:
     """Push files to a branch using the GitLab Commits API."""
+    # For projects initialized with README, that file already exists on the branch.
+    # Use "update" for README.md and "create" for everything else.
+    existing = set()
+    try:
+        tree = project.repository_tree(ref=branch, get_all=True)
+        existing = {item["path"] for item in tree}
+    except Exception:
+        pass
+
     actions = [
-        {"action": "create", "file_path": path, "content": content}
+        {
+            "action": "update" if path in existing else "create",
+            "file_path": path,
+            "content": content,
+        }
         for path, content in sorted(files.items())
     ]
     project.commits.create(
