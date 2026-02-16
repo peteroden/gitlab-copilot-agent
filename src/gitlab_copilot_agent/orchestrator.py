@@ -42,7 +42,10 @@ async def handle_review(settings: Settings, payload: MergeRequestWebhookPayload)
 
         try:
             repo_path = await gl_client.clone_repo(
-                project.git_http_url, mr.source_branch, settings.gitlab_token
+                project.git_http_url,
+                mr.source_branch,
+                settings.gitlab_token,
+                clone_dir=settings.clone_dir,
             )
 
             review_req = ReviewRequest(

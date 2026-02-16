@@ -87,10 +87,12 @@ class GitLabClient:
 
         return await asyncio.to_thread(_fetch)
 
-    async def clone_repo(self, clone_url: str, branch: str, token: str) -> Path:
+    async def clone_repo(
+        self, clone_url: str, branch: str, token: str, *, clone_dir: str | None = None
+    ) -> Path:
         from gitlab_copilot_agent.git_operations import git_clone
 
-        return await git_clone(clone_url, branch, token)
+        return await git_clone(clone_url, branch, token, clone_dir=clone_dir)
 
     async def cleanup(self, repo_path: Path) -> None:
         import shutil

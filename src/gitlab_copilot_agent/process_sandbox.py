@@ -152,10 +152,14 @@ class NoopSandbox:
 
 
 class ContainerSandbox:
-    """Sandbox using Docker or Podman containers.
+    """Sandbox using container isolation (Docker DinD or rootless Podman).
 
-    Runs the Copilot CLI inside a minimal container with read-only filesystem,
+    Runs the Copilot CLI inside a child container with read-only filesystem,
     dropped capabilities, and resource limits.
+
+    Docker mode: requires a docker:dind sidecar + DOCKER_HOST env var.
+    Podman mode: runs nested containers directly (--privileged on outer).
+    Both require --privileged on the host container.
     """
 
     def __init__(self, runtime: Literal["docker", "podman"], image: str) -> None:
@@ -195,16 +199,16 @@ class ContainerSandbox:
         safe_repo = shlex.quote(repo_path)
 
         script_content = f"""#!/bin/sh
-exec {self._runtime} run --rm \\
+exec {self._runtime} run --rm -i \\
   --pull=never \\
-  --read-only --tmpfs /tmp \\
+  --read-only --tmpfs /tmp --tmpfs /home/node/.copilot:exec \\
   --cap-drop=ALL --security-opt=no-new-privileges \\
   --user {os.getuid()}:{os.getgid()} \\
   --network=bridge \\
   --cpus=1 --memory=2g --pids-limit=256 \\
   -v {safe_repo}:/workspace:rw \\
   -w /workspace \\
-  -e GITHUB_TOKEN \\
+  -e GITHUB_TOKEN -e COPILOT_SDK_AUTH_TOKEN \\
   {self._image_name} "$@"
 """
         fd, script_path = tempfile.mkstemp(prefix=f"copilot-{self._runtime}-", suffix=".sh")

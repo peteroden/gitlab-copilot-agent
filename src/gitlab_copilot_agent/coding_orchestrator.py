@@ -72,6 +72,7 @@ class CodingOrchestrator:
                         project_mapping.clone_url,
                         project_mapping.target_branch,
                         self._settings.gitlab_token,
+                        clone_dir=self._settings.clone_dir,
                     )
                     await git_create_branch(repo_path, f"agent/{issue.key.lower()}")
                     result = await run_coding_task(

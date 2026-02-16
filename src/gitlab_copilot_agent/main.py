@@ -2,6 +2,7 @@
 
 import glob
 import shutil
+import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -41,17 +42,18 @@ structlog.configure(
 log = structlog.get_logger()
 
 
-def _cleanup_stale_repos() -> None:
-    """Remove leftover /tmp/mr-review-* dirs from prior crashes."""
-    for d in glob.glob(f"/tmp/{CLONE_DIR_PREFIX}*"):
+def _cleanup_stale_repos(clone_dir: str | None = None) -> None:
+    """Remove leftover mr-review-* dirs from prior crashes."""
+    base = clone_dir or tempfile.gettempdir()
+    for d in glob.glob(f"{base}/{CLONE_DIR_PREFIX}*"):
         shutil.rmtree(d, ignore_errors=True)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_telemetry()
-    _cleanup_stale_repos()
     settings = Settings()
+    _cleanup_stale_repos(settings.clone_dir)
     app.state.settings = settings
 
     # Validate sandbox configuration at startup

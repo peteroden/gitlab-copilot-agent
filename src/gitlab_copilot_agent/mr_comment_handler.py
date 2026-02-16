@@ -72,7 +72,10 @@ async def handle_copilot_comment(
             nonlocal repo_path
             try:
                 repo_path = await git_clone(
-                    project.git_http_url, mr.source_branch, settings.gitlab_token
+                    project.git_http_url,
+                    mr.source_branch,
+                    settings.gitlab_token,
+                    clone_dir=settings.clone_dir,
                 )
                 result = await run_copilot_session(
                     settings=settings,
