@@ -77,6 +77,17 @@ def env_vars(monkeypatch):
 | Inline `"https://gitlab.example.com"` | `GITLAB_URL` constant |
 | Testing that `pydantic.ValidationError` is raised by Pydantic | Test our validation logic, not Pydantic itself |
 | No `--cov-fail-under` in config | Add to `pyproject.toml` immediately |
+| Test passes with a no-op implementation of your code | You're testing the library, not your code — delete it |
+
+### Testing the Library (Don't)
+
+If your test would still pass after replacing your code with a no-op, it's verifying a third-party library works — not that your code is correct. Common examples:
+
+- Testing that an OTel counter increments (tests the OTel SDK, not your instrumentation logic)
+- Testing that Pydantic rejects invalid input (tests Pydantic, not your model design)
+- Testing that `httpx.post` makes a request (tests httpx, not your API client)
+
+Instead, test what **your code does** with the library: correct labels on metrics, correct validation error messages, correct URL construction.
 
 ## Test Layers
 
@@ -96,3 +107,23 @@ Before submitting tests, verify:
 - [ ] `pytest --cov-report=term-missing` shows ≥90% coverage
 - [ ] Tests assert behavior, not implementation details
 - [ ] Mocks are at the boundary, not on internals
+
+## E2E Gates
+
+For epics or features touching infrastructure, security, or external integrations: create a **gate issue** requiring E2E verification before the epic closes. Unit tests alone are insufficient — they mock the boundaries where bugs actually hide.
+
+Pattern:
+1. Create an issue: `test(e2e): live integration test before closing epic #N`
+2. Define what must be tested end-to-end (real APIs, real containers, real webhooks)
+3. Document results directly on the issue with timestamps and evidence
+4. Close the gate issue only when all E2E scenarios pass
+
+Example result documentation:
+```
+## E2E Results — Docker DinD Review
+
+- Webhook received: 18:01:53 UTC
+- Review completed: 18:03:24 UTC (91s)
+- 3 inline comments posted on MR !5
+- Findings: pickle deserialization (CWE-502), missing error handling
+```

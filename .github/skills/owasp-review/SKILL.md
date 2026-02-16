@@ -58,6 +58,15 @@ Before submitting a PR, review the code against each OWASP Top 10 category. Flag
 - [ ] Is user input ever used to construct URLs for server-side requests?
 - [ ] Are internal network addresses blocked from user-supplied URLs?
 
+### 11. Container Security (if applicable)
+- [ ] Is the Docker socket mounted? (equivalent to root access on host — document justification)
+- [ ] Is `--privileged` used? (document why and whether it can be scoped down)
+- [ ] Are environment variables propagated to child containers? (no service secrets to sandboxed processes)
+- [ ] Are base images pinned to digests, not mutable tags like `latest`?
+- [ ] Is the container filesystem read-only where possible? (`--read-only` + targeted `--tmpfs`)
+- [ ] Are capabilities dropped? (`--cap-drop=ALL`, add back only what's needed)
+- [ ] Are resource limits set? (`--cpus`, `--memory`, `--pids-limit`)
+
 ## Output
 
 Add a section to the PR description:

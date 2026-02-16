@@ -47,6 +47,13 @@ Confirm:
 - [ ] Task is ≤200 diff lines (split into stacked PRs if larger)
 - [ ] Devcontainer is running and commands will execute inside it
 
+## 6. Verification Strategy (if applicable)
+
+For infrastructure, security, or integration-heavy tasks:
+- [ ] E2E test approach defined (manual, automated, or gate issue)
+- [ ] Required infrastructure identified (tunnels, sidecars, test accounts)
+- [ ] Platform constraints documented (e.g., Docker Desktop vs Linux differences)
+
 ## When to Skip
 
 - **Single-line fixes** (typos, config tweaks): skip entirely.
