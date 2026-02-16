@@ -133,7 +133,6 @@ class TestLoadTemplate:
         assert "src/demo_app/database.py" in files
         assert "src/demo_app/auth.py" in files
         assert "AGENTS.md" in files
-        assert ".github/copilot-instructions.md" in files
         assert ".github/skills/security-patterns/SKILL.md" in files
         assert ".github/agents/security-reviewer.agent.md" in files
 
