@@ -15,7 +15,12 @@ from copilot.types import (
 )
 
 from gitlab_copilot_agent.config import Settings
-from gitlab_copilot_agent.metrics import sandbox_active, sandbox_duration
+from gitlab_copilot_agent.metrics import (
+    copilot_session_duration,
+    sandbox_active,
+    sandbox_duration,
+    sandbox_outcome_total,
+)
 from gitlab_copilot_agent.process_sandbox import get_sandbox
 from gitlab_copilot_agent.repo_config import discover_repo_config
 from gitlab_copilot_agent.telemetry import get_tracer
@@ -50,15 +55,19 @@ async def run_copilot_session(
     system_prompt: str,
     user_prompt: str,
     timeout: int = 300,
+    task_type: str = "review",
 ) -> str:
     """Run a Copilot agent session and return the last assistant message."""
     sandbox_start = time.monotonic()
+    outcome = "error"
+    method = settings.sandbox_method
     with _tracer.start_as_current_span(
         "copilot.session",
         attributes={
             "repo_path": repo_path,
             "timeout": timeout,
-            "sandbox.method": settings.sandbox_method,
+            "sandbox.method": method,
+            "task_type": task_type,
         },
     ):
         sandbox = get_sandbox(settings)
@@ -138,10 +147,18 @@ async def run_copilot_session(
                 finally:
                     await session.destroy()
 
-                return messages[-1] if messages else ""
+                result = messages[-1] if messages else ""
             finally:
                 await client.stop()
+            outcome = "success"
+            return result
+        except Exception:
+            raise
         finally:
             sandbox.cleanup()
             sandbox_active.add(-1)
-            sandbox_duration.record(time.monotonic() - sandbox_start)
+            elapsed = time.monotonic() - sandbox_start
+            labels = {"method": method, "outcome": outcome}
+            sandbox_duration.record(elapsed, labels)
+            sandbox_outcome_total.add(1, labels)
+            copilot_session_duration.record(elapsed, {"task_type": task_type})

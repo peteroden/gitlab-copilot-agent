@@ -6,7 +6,7 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from gitlab_copilot_agent.concurrency import ReviewedMRTracker
-from gitlab_copilot_agent.metrics import webhook_received_total
+from gitlab_copilot_agent.metrics import webhook_errors_total, webhook_received_total
 from gitlab_copilot_agent.models import MergeRequestWebhookPayload, NoteWebhookPayload
 from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
 from gitlab_copilot_agent.orchestrator import handle_review
@@ -34,6 +34,7 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
         await handle_review(settings, payload)
         review_tracker.mark(project_id, mr.iid, head_sha)
     except Exception:
+        webhook_errors_total.add(1, {"handler": "review"})
         await log.aexception("background_review_failed")
 
 
@@ -43,6 +44,7 @@ async def _process_copilot_comment(request: Request, payload: NoteWebhookPayload
     try:
         await handle_copilot_comment(settings, payload, repo_locks)
     except Exception:
+        webhook_errors_total.add(1, {"handler": "copilot_comment"})
         await log.aexception("background_copilot_comment_failed")
 
 
