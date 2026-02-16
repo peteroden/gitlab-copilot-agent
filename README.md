@@ -285,6 +285,10 @@ devcontainer exec --workspace-folder . uv run ruff check src/ tests/
 devcontainer exec --workspace-folder . uv run mypy src/
 ```
 
+## Demo
+
+See [`docs/DEMO.md`](docs/DEMO.md) for automated demo environment setup. One command provisions a GitLab repo + Jira project showcasing all agent capabilities.
+
 ## Architecture
 
 See `docs/PLAN.md` for full implementation plan and `docs/adr/` for architecture decisions.
