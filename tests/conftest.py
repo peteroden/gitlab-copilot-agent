@@ -132,10 +132,11 @@ def env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 async def client(env_vars: None) -> AsyncIterator[AsyncClient]:
     """AsyncClient wired to the FastAPI app with test settings."""
-    from gitlab_copilot_agent.concurrency import RepoLockManager
+    from gitlab_copilot_agent.concurrency import RepoLockManager, ReviewedMRTracker
 
     app.state.settings = make_settings()
     app.state.repo_locks = RepoLockManager()
+    app.state.review_tracker = ReviewedMRTracker()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

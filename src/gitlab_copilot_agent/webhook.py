@@ -5,6 +5,7 @@ import hmac
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
+from gitlab_copilot_agent.concurrency import ReviewedMRTracker
 from gitlab_copilot_agent.metrics import webhook_received_total
 from gitlab_copilot_agent.models import MergeRequestWebhookPayload, NoteWebhookPayload
 from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
@@ -23,10 +24,15 @@ def _validate_webhook_token(received: str | None, expected: str) -> None:
 
 
 async def _process_review(request: Request, payload: MergeRequestWebhookPayload) -> None:
-    """Run review in background task."""
+    """Run review in background task; marks head SHA as reviewed on success."""
     settings = request.app.state.settings
+    review_tracker: ReviewedMRTracker = request.app.state.review_tracker
+    mr = payload.object_attributes
+    project_id = payload.project.id
+    head_sha = mr.last_commit.id
     try:
         await handle_review(settings, payload)
+        review_tracker.mark(project_id, mr.iid, head_sha)
     except Exception:
         await log.aexception("background_review_failed")
 
@@ -56,9 +62,28 @@ async def webhook(
 
     if object_kind == "merge_request":
         payload = MergeRequestWebhookPayload.model_validate(body)
-        action = payload.object_attributes.action
+        mr = payload.object_attributes
+        action = mr.action
         if action not in HANDLED_ACTIONS:
             return {"status": "ignored", "reason": f"action '{action}' not handled"}
+
+        # Skip title/description-only updates (no new commits)
+        if action == "update" and mr.oldrev is None:
+            return {"status": "ignored", "reason": "no new commits"}
+
+        # Deduplicate by (project_id, mr_iid, head_sha)
+        review_tracker: ReviewedMRTracker = request.app.state.review_tracker
+        head_sha = mr.last_commit.id
+        if review_tracker.is_reviewed(payload.project.id, mr.iid, head_sha):
+            await log.ainfo(
+                "review_skipped",
+                reason="duplicate_head_sha",
+                project_id=payload.project.id,
+                mr_iid=mr.iid,
+                head_sha=head_sha,
+            )
+            return {"status": "skipped", "reason": "already reviewed"}
+
         background_tasks.add_task(_process_review, request, payload)
         return {"status": "queued"}
 

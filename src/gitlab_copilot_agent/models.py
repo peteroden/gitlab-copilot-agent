@@ -36,6 +36,10 @@ class MRObjectAttributes(BaseModel):
     target_branch: str
     last_commit: MRLastCommit
     url: str
+    oldrev: str | None = Field(
+        default=None,
+        description="Previous head SHA; present on 'update' only when commits changed",
+    )
 
 
 class MergeRequestWebhookPayload(BaseModel):
