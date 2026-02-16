@@ -1,4 +1,4 @@
-"""Per-repo locking and Jira issue deduplication."""
+"""Per-repo locking, Jira issue deduplication, and MR review deduplication."""
 
 from __future__ import annotations
 
@@ -104,3 +104,39 @@ class ProcessedIssueTracker:
 
     def __len__(self) -> int:
         return len(self._processed)
+
+
+class ReviewedMRTracker:
+    """Track reviewed (project_id, mr_iid, head_sha) tuples to avoid duplicate reviews.
+
+    In-memory only — a service restart allows re-review, which is acceptable.
+    Uses size-based eviction identical to ProcessedIssueTracker.
+    """
+
+    def __init__(self, max_size: int = _DEFAULT_MAX_PROCESSED) -> None:
+        self._reviewed: OrderedDict[tuple[int, int, str], None] = OrderedDict()
+        self._max_size = max_size
+
+    def _evict_if_needed(self) -> None:
+        if len(self._reviewed) <= self._max_size:
+            return
+        target_size = self._max_size // 2
+        evict_count = len(self._reviewed) - target_size
+        for _ in range(evict_count):
+            self._reviewed.popitem(last=False)
+        log.warning(
+            "reviewed_mr_eviction",
+            evicted_count=evict_count,
+            max_size=self._max_size,
+            current_size=len(self._reviewed),
+        )
+
+    def is_reviewed(self, project_id: int, mr_iid: int, head_sha: str) -> bool:
+        return (project_id, mr_iid, head_sha) in self._reviewed
+
+    def mark(self, project_id: int, mr_iid: int, head_sha: str) -> None:
+        self._reviewed[(project_id, mr_iid, head_sha)] = None
+        self._evict_if_needed()
+
+    def __len__(self) -> int:
+        return len(self._reviewed)

@@ -2,7 +2,11 @@
 
 import asyncio
 
-from gitlab_copilot_agent.concurrency import ProcessedIssueTracker, RepoLockManager
+from gitlab_copilot_agent.concurrency import (
+    ProcessedIssueTracker,
+    RepoLockManager,
+    ReviewedMRTracker,
+)
 
 
 async def test_repo_lock_serializes_same_repo() -> None:
@@ -159,3 +163,36 @@ async def test_processed_issue_tracker_preserves_insertion_order() -> None:
     assert tracker.is_processed("ISSUE-4")
     assert tracker.is_processed("ISSUE-5")
     assert tracker.is_processed("ISSUE-6")
+
+
+# -- ReviewedMRTracker tests --
+
+
+async def test_reviewed_mr_tracker_marks_and_checks() -> None:
+    tracker = ReviewedMRTracker()
+    assert not tracker.is_reviewed(42, 7, "abc123")
+    tracker.mark(42, 7, "abc123")
+    assert tracker.is_reviewed(42, 7, "abc123")
+    # Same MR, different SHA → not reviewed
+    assert not tracker.is_reviewed(42, 7, "def456")
+    # Same SHA, different MR → not reviewed
+    assert not tracker.is_reviewed(42, 8, "abc123")
+    # Same SHA, different project → not reviewed
+    assert not tracker.is_reviewed(99, 7, "abc123")
+
+
+async def test_reviewed_mr_tracker_evicts_when_full() -> None:
+    tracker = ReviewedMRTracker(max_size=4)
+    for i in range(4):
+        tracker.mark(1, i, f"sha{i}")
+    assert len(tracker) == 4
+
+    # Add one more → triggers eviction to max_size // 2 = 2
+    tracker.mark(1, 99, "sha99")
+    assert len(tracker) == 2
+    # Oldest entries evicted
+    assert not tracker.is_reviewed(1, 0, "sha0")
+    assert not tracker.is_reviewed(1, 1, "sha1")
+    # Newest entries kept
+    assert tracker.is_reviewed(1, 3, "sha3")
+    assert tracker.is_reviewed(1, 99, "sha99")

@@ -1,5 +1,6 @@
 """Tests for the webhook endpoint."""
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -28,9 +29,14 @@ async def test_webhook_ignores_unhandled_action(client: AsyncClient) -> None:
     assert resp.json()["status"] == "ignored"
 
 
-@pytest.mark.parametrize("action", ["open", "update"])
-async def test_webhook_queues_handled_actions(client: AsyncClient, action: str) -> None:
-    payload = make_mr_payload(action=action)
+@pytest.mark.parametrize(
+    ("action", "extra"),
+    [("open", {}), ("update", {"oldrev": "prev_sha"})],
+)
+async def test_webhook_queues_handled_actions(
+    client: AsyncClient, action: str, extra: dict[str, str]
+) -> None:
+    payload = make_mr_payload(action=action, **extra)
     resp = await client.post("/webhook", json=payload, headers=HEADERS)
     assert resp.status_code == 200
     assert resp.json() == {"status": "queued"}
@@ -85,3 +91,77 @@ async def test_note_webhook_uses_shared_lock_manager(client: AsyncClient) -> Non
         from gitlab_copilot_agent.main import app
 
         assert args[2] is app.state.repo_locks
+
+
+# -- Deduplication tests --
+
+
+async def test_webhook_skips_duplicate_head_sha(client: AsyncClient) -> None:
+    """Second webhook with same project/MR/SHA is skipped."""
+    from gitlab_copilot_agent.main import app
+
+    # Pre-mark this SHA as reviewed
+    app.state.review_tracker.mark(PROJECT_ID, MR_IID, "abc123")
+
+    resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "skipped", "reason": "already reviewed"}
+
+
+async def test_webhook_queues_new_head_sha(client: AsyncClient) -> None:
+    """New SHA on same MR is NOT skipped."""
+    from gitlab_copilot_agent.main import app
+
+    app.state.review_tracker.mark(PROJECT_ID, MR_IID, "old_sha")
+
+    payload = make_mr_payload(last_commit={"id": "new_sha", "message": "new commit"})
+    resp = await client.post("/webhook", json=payload, headers=HEADERS)
+    assert resp.json() == {"status": "queued"}
+
+
+async def test_webhook_marks_sha_after_successful_review(client: AsyncClient) -> None:
+    """SHA is marked as reviewed only after handle_review succeeds."""
+    from gitlab_copilot_agent.main import app
+
+    tracker = app.state.review_tracker
+    assert not tracker.is_reviewed(PROJECT_ID, MR_IID, "abc123")
+
+    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
+        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+        assert resp.json() == {"status": "queued"}
+        await asyncio.sleep(0.1)  # let background task complete
+
+    assert tracker.is_reviewed(PROJECT_ID, MR_IID, "abc123")
+
+
+async def test_webhook_does_not_mark_sha_on_review_failure(client: AsyncClient) -> None:
+    """SHA is NOT marked if handle_review raises."""
+    from gitlab_copilot_agent.main import app
+
+    tracker = app.state.review_tracker
+
+    with patch(
+        "gitlab_copilot_agent.webhook.handle_review",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("boom"),
+    ):
+        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+        assert resp.json() == {"status": "queued"}
+        await asyncio.sleep(0.1)
+
+    assert not tracker.is_reviewed(PROJECT_ID, MR_IID, "abc123")
+
+
+async def test_webhook_ignores_title_only_update(client: AsyncClient) -> None:
+    """Update events without oldrev (title/description change only) are ignored."""
+    payload = make_mr_payload(action="update")
+    # No oldrev → title/description-only change
+    resp = await client.post("/webhook", json=payload, headers=HEADERS)
+    assert resp.json() == {"status": "ignored", "reason": "no new commits"}
+
+
+async def test_webhook_queues_update_with_new_commits(client: AsyncClient) -> None:
+    """Update events WITH oldrev (new commits pushed) are queued."""
+    payload = make_mr_payload(action="update", oldrev="previous_sha_value")
+    resp = await client.post("/webhook", json=payload, headers=HEADERS)
+    assert resp.json() == {"status": "queued"}
