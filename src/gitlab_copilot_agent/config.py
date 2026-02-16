@@ -64,6 +64,11 @@ class Settings(BaseSettings):
         default="copilot-cli-sandbox:latest",
         description="Container image for docker/podman sandbox",
     )
+    clone_dir: str | None = Field(
+        default=None,
+        description="Base directory for repo clones. Required for Docker DinD "
+        "(must be a shared volume). Defaults to system temp.",
+    )
 
     # Jira (all optional — service runs review-only without these)
     jira_url: str | None = Field(default=None, description="Jira instance URL")
@@ -95,4 +100,9 @@ class Settings(BaseSettings):
     def _check_auth(self) -> "Settings":
         if not self.github_token and not self.copilot_provider_type:
             raise ValueError("Either GITHUB_TOKEN or COPILOT_PROVIDER_TYPE must be set")
+        if self.sandbox_method == "docker" and not self.clone_dir:
+            raise ValueError(
+                "CLONE_DIR is required when SANDBOX_METHOD=docker "
+                "(must be a shared volume with the DinD sidecar)"
+            )
         return self

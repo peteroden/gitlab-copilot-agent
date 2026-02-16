@@ -65,7 +65,7 @@ async def test_full_pipeline(
     assert resp.json() == {"status": "queued"}
 
     mock_gl_instance.clone_repo.assert_awaited_once_with(
-        "https://gitlab.com/group/my-project.git", "feature/x", GITLAB_TOKEN
+        "https://gitlab.com/group/my-project.git", "feature/x", GITLAB_TOKEN, clone_dir=None
     )
 
     mock_run_review.assert_awaited_once()

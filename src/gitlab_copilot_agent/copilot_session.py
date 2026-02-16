@@ -26,14 +26,19 @@ _tracer = get_tracer(__name__)
 # Env vars safe to pass to the SDK subprocess.
 _SDK_ENV_ALLOWLIST = frozenset({"PATH", "HOME", "LANG", "TERM", "TMPDIR", "USER"})
 
+# Extra vars forwarded only when sandbox_method=docker (DinD needs daemon access).
+_DOCKER_ENV_VARS = frozenset({"DOCKER_HOST", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"})
 
-def build_sdk_env(github_token: str | None) -> dict[str, str]:
+
+def build_sdk_env(github_token: str | None, *, sandbox_method: str = "bwrap") -> dict[str, str]:
     """Build a minimal env dict for the SDK subprocess.
 
     Only allowed vars + GITHUB_TOKEN are passed. Service secrets
     (GITLAB_TOKEN, JIRA_*, WEBHOOK_SECRET) are excluded.
+    DOCKER_* vars are only forwarded when sandbox_method is 'docker'.
     """
-    env = {k: v for k, v in os.environ.items() if k in _SDK_ENV_ALLOWLIST}
+    extra = _DOCKER_ENV_VARS if sandbox_method == "docker" else frozenset()
+    env = {k: v for k, v in os.environ.items() if k in _SDK_ENV_ALLOWLIST | extra}
     if github_token:
         env["GITHUB_TOKEN"] = github_token
     return env
@@ -62,7 +67,9 @@ async def run_copilot_session(
         try:
             client_opts: CopilotClientOptions = {
                 "cli_path": cli_wrapper,
-                "env": build_sdk_env(settings.github_token),
+                "env": build_sdk_env(
+                    settings.github_token, sandbox_method=settings.sandbox_method
+                ),
             }
             if settings.github_token:
                 client_opts["github_token"] = settings.github_token

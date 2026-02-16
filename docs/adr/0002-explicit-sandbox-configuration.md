@@ -2,7 +2,7 @@
 
 ## Status
 
-**PROPOSED** — Awaiting approval for Issue #35
+**ACCEPTED** — Implemented in PRs #51-#56
 
 ## Context
 
@@ -174,13 +174,16 @@ Estimated diff: **~150 lines**
 
 **Recommendation:** Fail. Observability without enforcement is theater.
 
-## Open Questions
+## Isolation Progression Roadmap
 
-None — design is complete pending approval.
+| Stage | Method | Isolation | When |
+|-------|--------|-----------|------|
+| Current | bwrap (default) | Process namespaces + seccomp | Single host, Linux |
+| Phase 1 | Docker/Podman | Container per session, resource limits | Multi-tenant, any OS |
+| Phase 2 | kind/k3d | Local K8s cluster, network policies | Dev/staging scale |
+| Phase 3 | Kubernetes Jobs | Full orchestration, RBAC, quotas | Production scale |
 
-## Approval Criteria
+Each phase extends the `ProcessSandbox` protocol — callers never change.
+The `SANDBOX_METHOD` config selects the active implementation at startup.
 
-- [ ] Default value (`bwrap` vs. `noop`) approved
-- [ ] Preflight behavior (fail vs. warn) approved
-- [ ] Scope estimate (~150 lines) accepted
-- [ ] Breaking change mitigation (default matches current behavior) accepted
+## Consequences

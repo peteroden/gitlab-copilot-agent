@@ -140,7 +140,9 @@ async def git_push(
         await log.ainfo("pushed", branch=branch, remote=remote, repo=str(repo_path))
 
 
-async def git_clone(clone_url: str, branch: str, token: str) -> Path:
+async def git_clone(
+    clone_url: str, branch: str, token: str, *, clone_dir: str | None = None
+) -> Path:
     """Clone repo to temp dir. Returns path.
 
     Embeds credentials in the clone URL. This is acceptable because the service
@@ -161,7 +163,7 @@ async def git_clone(clone_url: str, branch: str, token: str) -> Path:
     with _tracer.start_as_current_span("git.clone", attributes={"branch": branch}):
         _validate_clone_url(clone_url)
 
-        tmp_dir = Path(tempfile.mkdtemp(prefix=CLONE_DIR_PREFIX))
+        tmp_dir = Path(tempfile.mkdtemp(prefix=CLONE_DIR_PREFIX, dir=clone_dir))
         auth_url = clone_url.replace("https://", f"https://oauth2:{token}@")
         proc = await asyncio.create_subprocess_exec(
             "git",

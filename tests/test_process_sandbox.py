@@ -274,7 +274,7 @@ class TestGetSandbox:
 
     def test_returns_docker_when_configured(self) -> None:
         """Should return ContainerSandbox(docker) when sandbox_method=docker."""
-        settings = make_settings(sandbox_method="docker")
+        settings = make_settings(sandbox_method="docker", clone_dir="/data/workspaces")
         sandbox = get_sandbox(settings)
         assert isinstance(sandbox, ContainerSandbox)
         assert sandbox._runtime == "docker"

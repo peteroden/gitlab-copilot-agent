@@ -150,17 +150,76 @@ Active locks are never evicted — the lock manager allows temporary over-capaci
 
 ### Sandbox Configuration
 
-The service uses **bubblewrap (bwrap)** to isolate the Copilot SDK subprocess in a read-only filesystem sandbox with a throwaway `/tmp` and `/home`. This prevents the agent from modifying system directories or persisting state outside the cloned repo.
+The service isolates the Copilot SDK subprocess to prevent it from modifying system directories or persisting state outside the cloned repo. Multiple isolation methods are supported:
 
-When running in Docker, the container needs:
+#### Sandbox Methods
+
+| Method | Isolation | Setup Required | Use Case |
+|--------|-----------|---------------|----------|
+| `bwrap` | Process-level (namespaces, seccomp) | Linux + bubblewrap installed | Default, lightweight |
+| `docker` | Container-level (Docker-in-Docker) | `docker:dind` sidecar + shared volume | Production, multi-tenant |
+| `podman` | Container-level (Podman-in-Podman) | Podman machine or Linux host | Rootless container environments |
+| `noop` | None | Nothing | Testing, development only |
+
+#### Setup
+
+**bwrap** (default):
+- Pre-installed on most Linux distributions
+- Set `SANDBOX_METHOD=bwrap` (or omit — it's the default)
+- When running in Docker, add `--security-opt seccomp=unconfined` (you do NOT need `--cap-add=SYS_ADMIN`)
+
+**docker** (Docker-in-Docker):
+
+Both the service and DinD sidecar need `--privileged`. A shared volume ensures cloned repos are accessible to sandbox containers.
 
 ```bash
---security-opt seccomp=unconfined
+# Create shared resources
+docker volume create workspaces
+docker network create copilot-net
+
+# Start DinD sidecar
+docker run -d --name dind --privileged --network copilot-net \
+  -e DOCKER_TLS_CERTDIR="" \
+  -v workspaces:/data/workspaces \
+  docker:dind --tls=false
+
+# Start service
+docker run -d --name copilot-agent --network copilot-net \
+  -v workspaces:/data/workspaces \
+  -e DOCKER_HOST=tcp://dind:2375 \
+  -e CLONE_DIR=/data/workspaces \
+  -e SANDBOX_METHOD=docker \
+  -e SANDBOX_IMAGE=copilot-cli-sandbox:latest \
+  # ... other env vars ...
+  gitlab-copilot-agent
 ```
 
-**You do NOT need** `--cap-add=SYS_ADMIN`.
+The entrypoint automatically builds the sandbox image inside the DinD daemon on first start.
 
-If bwrap is unavailable or sandbox creation fails, the service automatically falls back to unsandboxed execution (and logs a warning). On macOS and some CI environments, bwrap isn't available — the fallback ensures the service still works.
+**podman** (Podman-in-Podman):
+
+Runs nested containers directly — no sidecar needed. Requires a host with user namespace support (Linux host or `podman machine`).
+
+> **Note:** Podman-in-Podman does NOT work when the service runs inside Docker Desktop. Docker Desktop's LinuxKit VM lacks nested user namespace support. Use Docker DinD instead, or run via `podman machine` / native Linux.
+
+```bash
+# On a Linux host or inside podman machine:
+podman run -d --name copilot-agent --privileged \
+  -e SANDBOX_METHOD=podman \
+  -e SANDBOX_IMAGE=copilot-cli-sandbox:latest \
+  # ... other env vars ...
+  gitlab-copilot-agent
+```
+
+**noop** (development only):
+- Set `SANDBOX_METHOD=noop`
+- No isolation — use only for local testing
+
+#### Container Hardening
+
+The `docker` and `podman` methods use these security flags:
+
+`--read-only`, `--tmpfs /tmp`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--cpus=1`, `--memory=2g`, `--pids-limit=256`, `--pull=never`
 
 ## Troubleshooting
 
@@ -183,10 +242,11 @@ If bwrap is unavailable or sandbox creation fails, the service automatically fal
 - Confirm the Jira user has permission to query and transition issues
 - Check logs for JQL query errors or API authentication failures
 
-**Sandbox creation failed** (bwrap errors in logs)
-- Ensure Docker is running with `--security-opt seccomp=unconfined`
-- The service will fall back to unsandboxed execution — check logs for fallback warnings
-- On macOS/Windows, bwrap isn't available — this is expected (uses NoopSandbox)
+**Sandbox creation failed** (startup crash)
+- The service fails fast if the configured `SANDBOX_METHOD` is unavailable — there is no automatic fallback
+- For `bwrap`: ensure bubblewrap is installed and Linux namespaces are available
+- For `docker`/`podman`: ensure the runtime is installed, daemon is running, and sandbox image is built
+- Set `SANDBOX_METHOD=noop` to explicitly disable sandboxing (development only)
 
 **Git clone timeout** or **authentication failures**
 - Verify `GITLAB_TOKEN` has `api` scope and read access to the target project
