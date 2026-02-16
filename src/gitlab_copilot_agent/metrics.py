@@ -37,6 +37,19 @@ webhook_received_total = meter.create_counter(
     unit="1",
 )
 
+webhook_errors_total = meter.create_counter(
+    name="webhook_errors_total",
+    description="Webhook background processing errors",
+    unit="1",
+)
+
+# Copilot session metrics
+copilot_session_duration = meter.create_histogram(
+    name="copilot_session_duration_seconds",
+    description="Duration of Copilot SDK session (review or coding)",
+    unit="s",
+)
+
 # Sandbox metrics
 sandbox_duration = meter.create_histogram(
     name="sandbox_duration_seconds",
@@ -47,5 +60,11 @@ sandbox_duration = meter.create_histogram(
 sandbox_active = meter.create_up_down_counter(
     name="sandbox_active",
     description="Currently active sandbox sessions",
+    unit="1",
+)
+
+sandbox_outcome_total = meter.create_counter(
+    name="sandbox_outcome_total",
+    description="Sandbox session outcomes",
     unit="1",
 )

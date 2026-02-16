@@ -57,4 +57,5 @@ async def run_coding_task(
         repo_path=repo_path,
         system_prompt=CODING_SYSTEM_PROMPT,
         user_prompt=build_jira_coding_prompt(issue_key, summary, description),
+        task_type="coding",
     )
