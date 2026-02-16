@@ -7,9 +7,14 @@ then outputs the configuration needed to connect them to the agent service.
 Usage:
     uv run scripts/demo_provision.py \\
         --gitlab-group myorg \\
-        --jira-project-key DEMO
+        --jira-project-key DEMO \\
+        --gitlab-url https://gitlab.com \\
+        --gitlab-token glpat-xxx \\
+        --jira-url https://myorg.atlassian.net \\
+        --jira-email user@example.com \\
+        --jira-api-token xxx
 
-Environment variables required:
+Credentials can also be provided via environment variables:
     GITLAB_URL, GITLAB_TOKEN, JIRA_URL, JIRA_EMAIL, JIRA_API_TOKEN
 """
 
@@ -59,11 +64,11 @@ from demo_provision.jira_provisioner import (
 TEMPLATE_DIR = Path(__file__).parent / "demo_templates" / "blog-api"
 
 
-def _require_env(name: str) -> str:
-    """Get a required environment variable or exit."""
-    value = os.environ.get(name, "").strip()
+def _require_value(cli_value: str | None, env_name: str) -> str:
+    """Get a value from CLI arg (preferred) or environment variable, or exit."""
+    value = (cli_value or "").strip() or os.environ.get(env_name, "").strip()
     if not value:
-        print(f"Error: {name} environment variable is required.", file=sys.stderr)
+        print(f"Error: --{env_name.lower().replace('_', '-')} or {env_name} env var is required.", file=sys.stderr)
         sys.exit(1)
     return value
 
@@ -112,14 +117,19 @@ def main() -> None:
         default="AI Ready",
         help='Jira status that triggers the agent (default: "AI Ready")',
     )
+    parser.add_argument("--gitlab-url", default=None, help="GitLab instance URL (or GITLAB_URL env)")
+    parser.add_argument("--gitlab-token", default=None, help="GitLab API token (or GITLAB_TOKEN env)")
+    parser.add_argument("--jira-url", default=None, help="Jira instance URL (or JIRA_URL env)")
+    parser.add_argument("--jira-email", default=None, help="Jira user email (or JIRA_EMAIL env)")
+    parser.add_argument("--jira-api-token", default=None, help="Jira API token (or JIRA_API_TOKEN env)")
     args = parser.parse_args()
 
-    # Gather credentials
-    gitlab_url = _require_env("GITLAB_URL")
-    gitlab_token = _require_env("GITLAB_TOKEN")
-    jira_url = _require_env("JIRA_URL")
-    jira_email = _require_env("JIRA_EMAIL")
-    jira_api_token = _require_env("JIRA_API_TOKEN")
+    # Gather credentials (CLI flags take precedence over env vars)
+    gitlab_url = _require_value(args.gitlab_url, "GITLAB_URL")
+    gitlab_token = _require_value(args.gitlab_token, "GITLAB_TOKEN")
+    jira_url = _require_value(args.jira_url, "JIRA_URL")
+    jira_email = _require_value(args.jira_email, "JIRA_EMAIL")
+    jira_api_token = _require_value(args.jira_api_token, "JIRA_API_TOKEN")
 
     # --- GitLab provisioning ---
     import gitlab
