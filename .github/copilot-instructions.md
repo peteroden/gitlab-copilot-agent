@@ -62,6 +62,7 @@ Yolo agents: document assumptions in commit messages and PR descriptions.
 
 - ≤200 diff lines (additions + deletions). If larger, split into stacked PRs.
 - Each stacked PR must be fully functional and standalone.
+- **Code review before push**: invoke a code review agent (ideally a different model than the one that wrote the code) on every PR. Fix all High/Critical findings before merge. Create follow-up issues for Medium findings.
 - PR description format:
   ```
   ## What
