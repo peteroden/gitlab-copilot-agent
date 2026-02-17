@@ -5,7 +5,7 @@ import json
 import os
 import shutil
 import sys
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
 import structlog
 
@@ -36,10 +36,10 @@ def _parse_task_payload(raw: str) -> dict[str, str]:
         raise RuntimeError(f"Invalid JSON in {ENV_TASK_PAYLOAD}: {exc}") from exc
     if not isinstance(data, dict):
         raise RuntimeError(f"{ENV_TASK_PAYLOAD} must be a JSON object, got {type(data).__name__}")
-    return data  # type: ignore[return-value]
+    return data
 
 
-def _effective_port(parsed: "urlparse") -> int:  # type: ignore[name-defined]
+def _effective_port(parsed: ParseResult) -> int:
     """Return explicit port or default for scheme (443 for https, 80 for http)."""
     if parsed.port:
         return parsed.port
@@ -75,7 +75,7 @@ async def run_task() -> int:
     if task_type not in VALID_TASK_TYPES:
         await bound_log.aerror("invalid_task_type", valid=sorted(VALID_TASK_TYPES))
         return 1
-    settings = Settings()  # type: ignore[call-arg]
+    settings = Settings()
     _validate_repo_url(repo_url, settings.gitlab_url)
     await bound_log.ainfo("task_start", repo=_sanitize_url(repo_url), branch=branch)
     user_prompt = _parse_task_payload(payload_raw).get("prompt", payload_raw)
