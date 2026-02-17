@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from typing import TYPE_CHECKING
@@ -24,10 +25,10 @@ _ANNOTATION_KEY = "results.copilot-agent/summary"
 
 
 def _sanitize_job_name(task_type: str, task_id: str) -> str:
-    """Build a k8s-compliant Job name: ``copilot-{task_type}-{task_id[:8]}``."""
-    raw = f"copilot-{task_type}-{task_id[:8]}"
-    sanitized = re.sub(r"[^a-z0-9\-]", "-", raw.lower())
-    return sanitized.strip("-")[:63]
+    """Build a k8s-compliant Job name using a hash of the task_id."""
+    id_hash = hashlib.sha256(task_id.encode()).hexdigest()[:16]
+    task_type = re.sub(r"[^a-z0-9\-]", "-", task_type.lower()).strip("-")
+    return f"copilot-{task_type}-{id_hash}"[:63]
 
 
 def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
@@ -70,7 +71,12 @@ class KubernetesTaskExecutor:
                 return cached.decode() if isinstance(cached, bytes) else str(cached)
 
             job_name = _sanitize_job_name(task.task_type, task.task_id)
-            await asyncio.to_thread(self._create_job, job_name, task)
+            try:
+                await asyncio.to_thread(self._create_job, job_name, task)
+            except Exception as exc:  # noqa: BLE001
+                if getattr(exc, "status", None) != 409:
+                    raise
+                log.info("job_already_exists", job_name=job_name)
             return await self._wait_for_result(client, job_name, task)
         finally:
             await client.aclose()
@@ -130,7 +136,12 @@ class KubernetesTaskExecutor:
         from kubernetes import client as k8s
 
         ns = self._settings.k8s_namespace
-        job = k8s.BatchV1Api().read_namespaced_job(name=job_name, namespace=ns)
+        try:
+            job = k8s.BatchV1Api().read_namespaced_job(name=job_name, namespace=ns)
+        except Exception as exc:  # noqa: BLE001
+            if getattr(exc, "status", None) == 404:
+                return "failed"  # Job deleted by concurrent caller or TTL
+            raise
         if job.status and job.status.succeeded:
             return "succeeded"
         if job.status and job.status.failed:
@@ -192,6 +203,10 @@ class KubernetesTaskExecutor:
 
             if status == "failed":
                 logs = await asyncio.to_thread(self._read_pod_logs, job_name)
+                try:
+                    await asyncio.to_thread(self._delete_job, job_name)
+                except Exception:  # noqa: BLE001
+                    log.warning("failed_job_cleanup_error", job_name=job_name, exc_info=True)
                 msg = f"Job {job_name} failed. Pod logs:\n{logs}"
                 raise RuntimeError(msg)
 
