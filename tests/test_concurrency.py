@@ -3,14 +3,33 @@
 import asyncio
 
 from gitlab_copilot_agent.concurrency import (
+    DeduplicationStore,
+    DistributedLock,
+    MemoryDedup,
+    MemoryLock,
     ProcessedIssueTracker,
-    RepoLockManager,
     ReviewedMRTracker,
 )
 
 
+# -- Protocol conformance tests --
+
+
+def test_memory_lock_implements_distributed_lock() -> None:
+    """MemoryLock should implement DistributedLock protocol."""
+    assert isinstance(MemoryLock(), DistributedLock)
+
+
+def test_memory_dedup_implements_deduplication_store() -> None:
+    """MemoryDedup should implement DeduplicationStore protocol."""
+    assert isinstance(MemoryDedup(), DeduplicationStore)
+
+
+# -- MemoryLock tests --
+
+
 async def test_repo_lock_serializes_same_repo() -> None:
-    locks = RepoLockManager()
+    locks = MemoryLock()
     order: list[int] = []
 
     async def task(n: int) -> None:
@@ -24,7 +43,7 @@ async def test_repo_lock_serializes_same_repo() -> None:
 
 
 async def test_repo_lock_allows_parallel_different_repos() -> None:
-    locks = RepoLockManager()
+    locks = MemoryLock()
     started: list[str] = []
 
     async def task(url: str) -> None:
@@ -37,8 +56,8 @@ async def test_repo_lock_allows_parallel_different_repos() -> None:
 
 
 async def test_repo_lock_evicts_when_max_size_exceeded() -> None:
-    """Test that RepoLockManager evicts oldest unlocked entries when max_size exceeded."""
-    locks = RepoLockManager(max_size=3)
+    """Test that MemoryLock evicts oldest unlocked entries when max_size exceeded."""
+    locks = MemoryLock(max_size=3)
 
     # Add 3 repos (at max_size)
     async with locks.acquire("https://repo1.git"):
@@ -61,7 +80,7 @@ async def test_repo_lock_evicts_when_max_size_exceeded() -> None:
 
 async def test_repo_lock_does_not_evict_locked_entries() -> None:
     """Test that locked entries are never evicted, even when max_size exceeded."""
-    locks = RepoLockManager(max_size=2)
+    locks = MemoryLock(max_size=2)
 
     # Acquire repo1 and hold it
     async with locks.acquire("https://repo1.git"):
@@ -82,8 +101,8 @@ async def test_repo_lock_does_not_evict_locked_entries() -> None:
 
 
 async def test_repo_lock_lru_behavior() -> None:
-    """Test that RepoLockManager uses LRU (moves accessed items to end)."""
-    locks = RepoLockManager(max_size=3)
+    """Test that MemoryLock uses LRU (moves accessed items to end)."""
+    locks = MemoryLock(max_size=3)
 
     # Add 3 repos
     async with locks.acquire("https://repo1.git"):
@@ -105,6 +124,39 @@ async def test_repo_lock_lru_behavior() -> None:
     assert "https://repo2.git" not in locks._locks
     assert "https://repo3.git" in locks._locks
     assert "https://repo4.git" in locks._locks
+
+
+# -- MemoryDedup tests --
+
+
+async def test_memory_dedup_basic() -> None:
+    """Test basic MemoryDedup functionality."""
+    store = MemoryDedup()
+    assert not await store.is_seen("key1")
+    await store.mark_seen("key1")
+    assert await store.is_seen("key1")
+    assert not await store.is_seen("key2")
+
+
+async def test_memory_dedup_evicts_when_full() -> None:
+    """Test that MemoryDedup evicts oldest half when max_size exceeded."""
+    store = MemoryDedup(max_size=4)
+    for i in range(4):
+        await store.mark_seen(f"key{i}")
+    assert len(store) == 4
+
+    # Add one more → triggers eviction to max_size // 2 = 2
+    await store.mark_seen("key99")
+    assert len(store) == 2
+    # Oldest entries evicted
+    assert not await store.is_seen("key0")
+    assert not await store.is_seen("key1")
+    # Newest entries kept
+    assert await store.is_seen("key3")
+    assert await store.is_seen("key99")
+
+
+# -- ProcessedIssueTracker tests --
 
 
 async def test_processed_issue_tracker() -> None:

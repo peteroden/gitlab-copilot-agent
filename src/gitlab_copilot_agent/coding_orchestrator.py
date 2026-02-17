@@ -10,7 +10,11 @@ from pathlib import Path
 import structlog
 
 from gitlab_copilot_agent.coding_engine import run_coding_task
-from gitlab_copilot_agent.concurrency import ProcessedIssueTracker, RepoLockManager
+from gitlab_copilot_agent.concurrency import (
+    DistributedLock,
+    MemoryLock,
+    ProcessedIssueTracker,
+)
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.git_operations import git_clone, git_commit, git_create_branch, git_push
 from gitlab_copilot_agent.gitlab_client import GitLabClient
@@ -33,13 +37,13 @@ class CodingOrchestrator:
         settings: Settings,
         gitlab: GitLabClient,
         jira: JiraClient,
-        repo_locks: RepoLockManager | None = None,
+        repo_locks: DistributedLock | None = None,
         tracker: ProcessedIssueTracker | None = None,
     ) -> None:
         self._settings = settings
         self._gitlab = gitlab
         self._jira = jira
-        self._repo_locks = repo_locks or RepoLockManager()
+        self._repo_locks = repo_locks or MemoryLock()
         self._tracker = tracker or ProcessedIssueTracker()
 
     async def handle(self, issue: JiraIssue, project_mapping: GitLabProjectMapping) -> None:
