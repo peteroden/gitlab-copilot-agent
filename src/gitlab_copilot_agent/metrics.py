@@ -49,22 +49,3 @@ copilot_session_duration = meter.create_histogram(
     description="Duration of Copilot SDK session (review or coding)",
     unit="s",
 )
-
-# Sandbox metrics
-sandbox_duration = meter.create_histogram(
-    name="sandbox_duration_seconds",
-    description="Duration of sandbox CLI execution",
-    unit="s",
-)
-
-sandbox_active = meter.create_up_down_counter(
-    name="sandbox_active",
-    description="Currently active sandbox sessions",
-    unit="1",
-)
-
-sandbox_outcome_total = meter.create_counter(
-    name="sandbox_outcome_total",
-    description="Sandbox session outcomes",
-    unit="1",
-)

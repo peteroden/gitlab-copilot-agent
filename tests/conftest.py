@@ -126,7 +126,6 @@ def env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITLAB_TOKEN", GITLAB_TOKEN)
     monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", WEBHOOK_SECRET)
     monkeypatch.setenv("GITHUB_TOKEN", GITHUB_TOKEN)
-    monkeypatch.setenv("SANDBOX_METHOD", "noop")
 
 
 @pytest.fixture
