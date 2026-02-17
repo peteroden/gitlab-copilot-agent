@@ -296,3 +296,41 @@ See `docs/PLAN.md` for full implementation plan and `docs/adr/` for architecture
 ```
 GitLab Webhook → FastAPI /webhook → Clone repo → Copilot agent review → Parse output → Post inline comments + summary
 ```
+
+## Local Kubernetes Development
+
+Run the full stack locally using [k3d](https://k3d.io) (k3s-in-Docker).
+
+### Prerequisites
+
+Docker, [k3d](https://k3d.io), kubectl, Helm 3.
+
+### Quick start
+
+```bash
+cp .env.k3d.example .env.k3d   # fill in real values
+make k3d-up                     # create k3d cluster
+make k3d-build                  # build & import image
+make k3d-deploy                 # deploy via Helm
+```
+
+### Commands
+
+| Command            | Description                        |
+|--------------------|------------------------------------|
+| `make k3d-up`      | Create k3d cluster                |
+| `make k3d-down`    | Delete k3d cluster                |
+| `make k3d-build`   | Build image & import into cluster |
+| `make k3d-deploy`  | Deploy/upgrade via Helm           |
+| `make k3d-redeploy`| Rebuild + redeploy (one step)     |
+| `make k3d-logs`    | Tail controller logs              |
+| `make k3d-status`  | Show pods, jobs, and services     |
+
+### Webhook testing
+
+The controller is exposed on `localhost:8080` via the k3d loadbalancer (override with `K3D_HOST_PORT=9000 make k3d-up`).
+For direct port-forward:
+
+```bash
+kubectl port-forward svc/copilot-agent 8000:8000
+```
