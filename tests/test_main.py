@@ -6,7 +6,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
 
-from gitlab_copilot_agent.concurrency import RepoLockManager
+from gitlab_copilot_agent.concurrency import MemoryDedup, RepoLockManager
 from gitlab_copilot_agent.main import _create_executor, lifespan
 from gitlab_copilot_agent.task_executor import LocalTaskExecutor, TaskExecutor
 from tests.conftest import (
@@ -58,6 +58,7 @@ async def test_lifespan_without_jira_starts_and_stops(env_vars: None) -> None:
         assert test_app.state.settings.jira is None
         assert test_app.state.repo_locks is not None
         assert isinstance(test_app.state.repo_locks, RepoLockManager)
+        assert isinstance(test_app.state.dedup_store, MemoryDedup)
         assert isinstance(test_app.state.executor, LocalTaskExecutor)
 
 
@@ -102,3 +103,62 @@ async def test_lifespan_with_jira_creates_shared_lock_manager(
             assert args[4] is test_app.state.repo_locks
 
         mock_poller.stop.assert_called_once()
+
+
+EXPECTED_SHUTDOWN_ORDER = [
+    "poller.stop",
+    "jira.close",
+    "dedup.aclose",
+    "repo_locks.aclose",
+    "shutdown_telemetry",
+]
+
+
+@pytest.mark.asyncio
+async def test_shutdown_call_ordering(
+    env_vars: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify shutdown calls happen in the correct order.
+
+    Expected: poller.stop → jira.close → dedup.aclose → repo_locks.aclose → shutdown_telemetry.
+    """
+    call_order: list[str] = []
+
+    mock_poller = AsyncMock()
+    mock_poller.start = AsyncMock()
+    mock_poller.stop = AsyncMock(side_effect=lambda: call_order.append("poller.stop"))
+
+    mock_jira = AsyncMock()
+    mock_jira.close = AsyncMock(side_effect=lambda: call_order.append("jira.close"))
+
+    mock_dedup = AsyncMock()
+    mock_dedup.aclose = AsyncMock(side_effect=lambda: call_order.append("dedup.aclose"))
+
+    mock_locks = AsyncMock()
+    mock_locks.aclose = AsyncMock(side_effect=lambda: call_order.append("repo_locks.aclose"))
+
+    monkeypatch.setenv("JIRA_URL", JIRA_URL)
+    monkeypatch.setenv("JIRA_EMAIL", JIRA_EMAIL)
+    monkeypatch.setenv("JIRA_API_TOKEN", JIRA_TOKEN)
+    monkeypatch.setenv("JIRA_TRIGGER_STATUS", "AI Ready")
+    monkeypatch.setenv("JIRA_IN_PROGRESS_STATUS", "In Progress")
+    monkeypatch.setenv("JIRA_PROJECT_MAP", JIRA_PROJECT_MAP_JSON)
+
+    test_app = FastAPI()
+
+    with (
+        patch("gitlab_copilot_agent.main.JiraClient", return_value=mock_jira),
+        patch("gitlab_copilot_agent.main.JiraPoller", return_value=mock_poller),
+        patch("gitlab_copilot_agent.main.CodingOrchestrator"),
+        patch("gitlab_copilot_agent.main.create_lock", return_value=mock_locks),
+        patch("gitlab_copilot_agent.main.create_dedup", return_value=mock_dedup),
+        patch(
+            "gitlab_copilot_agent.main.shutdown_telemetry",
+            side_effect=lambda: call_order.append("shutdown_telemetry"),
+        ),
+    ):
+        async with lifespan(test_app):
+            pass
+
+    assert call_order == EXPECTED_SHUTDOWN_ORDER
