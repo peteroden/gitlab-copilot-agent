@@ -22,6 +22,7 @@ from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_poller import JiraPoller
 from gitlab_copilot_agent.project_mapping import ProjectMap
+from gitlab_copilot_agent.task_executor import LocalTaskExecutor
 from gitlab_copilot_agent.telemetry import (
     add_trace_context,
     emit_to_otel_logs,
@@ -59,6 +60,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _cleanup_stale_repos(settings.clone_dir)
     app.state.settings = settings
 
+    # Create task executor based on config (only local supported for now)
+    if settings.task_executor == "local":
+        executor = LocalTaskExecutor()
+    else:
+        raise ValueError(f"Unsupported task executor: {settings.task_executor}")
+    app.state.executor = executor
+
     # Shared lock manager for both webhook and Jira flows
     repo_locks = RepoLockManager()
     app.state.repo_locks = repo_locks
@@ -71,7 +79,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         project_map = ProjectMap.model_validate_json(settings.jira.project_map_json)
         gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
         tracker = ProcessedIssueTracker()
-        handler = CodingOrchestrator(settings, gl_client, jira_client, repo_locks, tracker)
+        handler = CodingOrchestrator(settings, gl_client, jira_client, repo_locks, tracker, executor)
         poller = JiraPoller(jira_client, settings.jira, project_map, handler)
         await poller.start()
         await log.ainfo("jira_poller_started", interval=settings.jira.poll_interval)

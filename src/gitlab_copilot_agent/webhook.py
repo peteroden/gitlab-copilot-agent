@@ -26,12 +26,13 @@ def _validate_webhook_token(received: str | None, expected: str) -> None:
 async def _process_review(request: Request, payload: MergeRequestWebhookPayload) -> None:
     """Run review in background task; marks head SHA as reviewed on success."""
     settings = request.app.state.settings
+    executor = request.app.state.executor
     review_tracker: ReviewedMRTracker = request.app.state.review_tracker
     mr = payload.object_attributes
     project_id = payload.project.id
     head_sha = mr.last_commit.id
     try:
-        await handle_review(settings, payload)
+        await handle_review(settings, payload, executor)
         review_tracker.mark(project_id, mr.iid, head_sha)
     except Exception:
         webhook_errors_total.add(1, {"handler": "review"})

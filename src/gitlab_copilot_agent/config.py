@@ -60,6 +60,10 @@ class Settings(BaseSettings):
         default=None,
         description="Base directory for repo clones. Defaults to system temp.",
     )
+    task_executor: Literal["local", "k8s"] = Field(
+        default="local",
+        description="Task execution backend: local (in-process) or k8s (Job dispatch)",
+    )
 
     # Jira (all optional — service runs review-only without these)
     jira_url: str | None = Field(default=None, description="Jira instance URL")

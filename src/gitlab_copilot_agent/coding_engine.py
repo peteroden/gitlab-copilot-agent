@@ -1,7 +1,14 @@
 """Shared coding system prompt and Jira-specific prompt builder."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.copilot_session import run_copilot_session
+
+if TYPE_CHECKING:
+    from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams
 
 CODING_SYSTEM_PROMPT = """\
 You are a senior software engineer implementing requested changes.
@@ -50,8 +57,28 @@ async def run_coding_task(
     issue_key: str,
     summary: str,
     description: str | None,
+    executor: TaskExecutor | None = None,
 ) -> str:
-    """Run a Copilot agent session to implement changes from a Jira issue."""
+    """Run a Copilot agent session to implement changes from a Jira issue.
+    
+    If executor is provided, delegates to executor.execute(). Otherwise falls
+    back to direct run_copilot_session() call for backward compatibility.
+    """
+    if executor:
+        from gitlab_copilot_agent.task_executor import TaskParams
+
+        task = TaskParams(
+            task_type="coding",
+            task_id=f"coding-{issue_key}",
+            repo_url=repo_path,
+            branch="",  # Not used for local executor
+            system_prompt=CODING_SYSTEM_PROMPT,
+            user_prompt=build_jira_coding_prompt(issue_key, summary, description),
+            settings=settings,
+        )
+        return await executor.execute(task)
+
+    # Fallback for backward compatibility
     return await run_copilot_session(
         settings=settings,
         repo_path=repo_path,

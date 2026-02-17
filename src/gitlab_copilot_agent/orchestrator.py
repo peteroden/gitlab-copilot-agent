@@ -19,12 +19,15 @@ from gitlab_copilot_agent.telemetry import get_tracer
 if TYPE_CHECKING:
     from gitlab_copilot_agent.config import Settings
     from gitlab_copilot_agent.models import MergeRequestWebhookPayload
+    from gitlab_copilot_agent.task_executor import TaskExecutor
 
 log = structlog.get_logger()
 _tracer = get_tracer(__name__)
 
 
-async def handle_review(settings: Settings, payload: MergeRequestWebhookPayload) -> None:
+async def handle_review(
+    settings: Settings, payload: MergeRequestWebhookPayload, executor: TaskExecutor | None = None
+) -> None:
     """Full review pipeline: clone → review → parse → post comments."""
     mr = payload.object_attributes
     project = payload.project
@@ -55,7 +58,7 @@ async def handle_review(settings: Settings, payload: MergeRequestWebhookPayload)
                 target_branch=mr.target_branch,
             )
 
-            raw_review = await run_review(settings, str(repo_path), review_req)
+            raw_review = await run_review(settings, str(repo_path), review_req, executor)
             parsed = parse_review(raw_review)
 
             await bound_log.ainfo(

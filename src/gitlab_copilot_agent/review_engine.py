@@ -1,9 +1,15 @@
 """Copilot review engine — runs an agent review session on an MR."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.copilot_session import run_copilot_session
+
+if TYPE_CHECKING:
+    from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams
 
 SYSTEM_PROMPT = """\
 You are a senior code reviewer. Review the merge request diff thoroughly.
@@ -73,8 +79,28 @@ async def run_review(
     settings: Settings,
     repo_path: str,
     review_request: ReviewRequest,
+    executor: TaskExecutor | None = None,
 ) -> str:
-    """Run a Copilot agent review and return the raw response text."""
+    """Run a Copilot agent review and return the raw response text.
+    
+    If executor is provided, delegates to executor.execute(). Otherwise falls
+    back to direct run_copilot_session() call for backward compatibility.
+    """
+    if executor:
+        from gitlab_copilot_agent.task_executor import TaskParams
+
+        task = TaskParams(
+            task_type="review",
+            task_id=f"review-{id(review_request)}",
+            repo_url=repo_path,
+            branch=review_request.source_branch,
+            system_prompt=SYSTEM_PROMPT,
+            user_prompt=build_review_prompt(review_request),
+            settings=settings,
+        )
+        return await executor.execute(task)
+
+    # Fallback for backward compatibility
     return await run_copilot_session(
         settings=settings,
         repo_path=repo_path,

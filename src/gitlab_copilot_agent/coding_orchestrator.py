@@ -6,6 +6,7 @@ import asyncio
 import shutil
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
 
@@ -19,6 +20,9 @@ from gitlab_copilot_agent.jira_models import JiraIssue
 from gitlab_copilot_agent.metrics import coding_tasks_duration, coding_tasks_total
 from gitlab_copilot_agent.project_mapping import GitLabProjectMapping
 from gitlab_copilot_agent.telemetry import get_tracer
+
+if TYPE_CHECKING:
+    from gitlab_copilot_agent.task_executor import TaskExecutor
 
 log = structlog.get_logger()
 _tracer = get_tracer(__name__)
@@ -35,12 +39,14 @@ class CodingOrchestrator:
         jira: JiraClient,
         repo_locks: RepoLockManager | None = None,
         tracker: ProcessedIssueTracker | None = None,
+        executor: TaskExecutor | None = None,
     ) -> None:
         self._settings = settings
         self._gitlab = gitlab
         self._jira = jira
         self._repo_locks = repo_locks or RepoLockManager()
         self._tracker = tracker or ProcessedIssueTracker()
+        self._executor = executor
 
     async def handle(self, issue: JiraIssue, project_mapping: GitLabProjectMapping) -> None:
         if self._tracker.is_processed(issue.key):
@@ -81,6 +87,7 @@ class CodingOrchestrator:
                         issue.key,
                         issue.fields.summary,
                         description,
+                        self._executor,
                     )
                     await bound_log.ainfo("coding_complete", summary=result[:200])
                     has_changes = await git_commit(
