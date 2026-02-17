@@ -8,12 +8,13 @@ from httpx import AsyncClient
 
 from gitlab_copilot_agent.concurrency import RepoLockManager
 from gitlab_copilot_agent.main import _create_executor, lifespan
-from gitlab_copilot_agent.task_executor import LocalTaskExecutor
+from gitlab_copilot_agent.task_executor import LocalTaskExecutor, TaskExecutor
 from tests.conftest import (
     JIRA_EMAIL,
     JIRA_PROJECT_MAP_JSON,
     JIRA_TOKEN,
     JIRA_URL,
+    make_settings,
 )
 
 
@@ -21,9 +22,24 @@ def test_create_executor_local() -> None:
     assert isinstance(_create_executor("local"), LocalTaskExecutor)
 
 
-def test_create_executor_k8s_not_implemented() -> None:
-    with pytest.raises(NotImplementedError, match="kubernetes"):
+def test_create_executor_k8s_requires_settings() -> None:
+    with pytest.raises(ValueError, match="redis_url"):
         _create_executor("kubernetes")
+
+
+def test_create_executor_k8s_returns_executor(
+    env_vars: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.setenv("STATE_BACKEND", "redis")
+    monkeypatch.setenv("TASK_EXECUTOR", "kubernetes")
+    settings = make_settings(
+        redis_url="redis://localhost:6379/0",
+        state_backend="redis",
+        task_executor="kubernetes",
+    )
+    executor = _create_executor("kubernetes", settings)
+    assert isinstance(executor, TaskExecutor)
 
 
 @pytest.mark.usefixtures("env_vars")

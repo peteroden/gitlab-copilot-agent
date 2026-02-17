@@ -53,11 +53,15 @@ def _cleanup_stale_repos(clone_dir: str | None = None) -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
-def _create_executor(backend: str) -> TaskExecutor:
+def _create_executor(backend: str, settings: Settings | None = None) -> TaskExecutor:
     """Factory: create a TaskExecutor for the given backend."""
     if backend == "kubernetes":
-        msg = "kubernetes task executor not yet implemented (see #81)"
-        raise NotImplementedError(msg)
+        if settings is None or not settings.redis_url:
+            msg = "Settings with redis_url required for kubernetes executor"
+            raise ValueError(msg)
+        from gitlab_copilot_agent.k8s_executor import KubernetesTaskExecutor
+
+        return KubernetesTaskExecutor(settings=settings, redis_url=settings.redis_url)
     return LocalTaskExecutor()
 
 
@@ -67,7 +71,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
     _cleanup_stale_repos(settings.clone_dir)
     app.state.settings = settings
-    app.state.executor = _create_executor(settings.task_executor)
+    app.state.executor = _create_executor(settings.task_executor, settings)
 
     # Shared lock manager for both webhook and Jira flows
     repo_locks = create_lock(settings.state_backend, settings.redis_url)
