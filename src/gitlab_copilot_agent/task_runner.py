@@ -20,7 +20,7 @@ log = structlog.get_logger()
 ENV_TASK_TYPE, ENV_TASK_ID, ENV_REPO_URL = "TASK_TYPE", "TASK_ID", "REPO_URL"
 ENV_BRANCH, ENV_TASK_PAYLOAD = "BRANCH", "TASK_PAYLOAD"
 ENV_REDIS_URL = "REDIS_URL"
-VALID_TASK_TYPES: frozenset[str] = frozenset({"review", "coding"})
+VALID_TASK_TYPES: frozenset[str] = frozenset({"review", "coding", "echo"})
 _RESULT_KEY_PREFIX = "result:"
 _RESULT_TTL = 3600  # 1 hour
 
@@ -92,6 +92,12 @@ async def run_task() -> int:
     if task_type not in VALID_TASK_TYPES:
         await bound_log.aerror("invalid_task_type", valid=sorted(VALID_TASK_TYPES))
         return 1
+    if task_type == "echo":
+        user_prompt = _parse_task_payload(payload_raw).get("prompt", payload_raw)
+        result = json.dumps({"echo": user_prompt, "task_id": task_id})
+        await _store_result(task_id, result)
+        await bound_log.ainfo("echo_complete")
+        return 0
     settings = Settings()
     _validate_repo_url(repo_url, settings.gitlab_url)
     await bound_log.ainfo("task_start", repo=_sanitize_url(repo_url), branch=branch)
