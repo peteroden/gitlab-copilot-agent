@@ -3,9 +3,15 @@
 Run:  pytest tests/test_k8s_integration.py -m k8s
 Skip: pytest -m 'not k8s'  (default via pyproject.toml addopts)
 """
+
 from __future__ import annotations
 
-import asyncio, json, subprocess, uuid
+import asyncio
+import contextlib
+import json
+import subprocess
+import uuid
+
 import pytest
 
 k8s = pytest.importorskip("kubernetes")
@@ -48,12 +54,11 @@ def redis_cluster_url() -> str:
 def redis_local_url() -> str:
     proc = subprocess.Popen(
         ["kubectl", "port-forward", f"svc/{REDIS_SVC}", f"{FWD_PORT}:6379", "-n", NS],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
-    try:
+    with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=0.5)
-    except subprocess.TimeoutExpired:
-        pass
     yield f"redis://localhost:{FWD_PORT}"
     proc.terminate()
     proc.wait(timeout=5)
@@ -72,23 +77,37 @@ def _make_job(name: str, env: list[k8s.client.V1EnvVar]) -> k8s.client.V1Job:
         spec=k8s.client.V1JobSpec(
             template=k8s.client.V1PodTemplateSpec(
                 spec=k8s.client.V1PodSpec(
-                    containers=[k8s.client.V1Container(
-                        name="task", image=JOB_IMAGE,
-                        command=["python", "-m", "gitlab_copilot_agent.task_runner"],
-                        env=env,
-                        resources=k8s.client.V1ResourceRequirements(
-                            limits={"cpu": "500m", "memory": "512Mi"}),
-                    )],
+                    containers=[
+                        k8s.client.V1Container(
+                            name="task",
+                            image=JOB_IMAGE,
+                            command=[
+                                "uv",
+                                "run",
+                                "python",
+                                "-m",
+                                "gitlab_copilot_agent.task_runner",
+                            ],
+                            env=env,
+                            resources=k8s.client.V1ResourceRequirements(
+                                limits={"cpu": "500m", "memory": "512Mi"}
+                            ),
+                        )
+                    ],
                     restart_policy="Never",
-                )),
-            backoff_limit=0, ttl_seconds_after_finished=60,
-        ))
+                )
+            ),
+            backoff_limit=0,
+            ttl_seconds_after_finished=60,
+        ),
+    )
 
 
 def _echo_env(task_id: str, redis_url: str, prompt: str) -> list[k8s.client.V1EnvVar]:
     E = k8s.client.V1EnvVar
     return [
-        E(name="TASK_TYPE", value="echo"), E(name="TASK_ID", value=task_id),
+        E(name="TASK_TYPE", value="echo"),
+        E(name="TASK_ID", value=task_id),
         E(name="REPO_URL", value="https://unused.test/r.git"),
         E(name="BRANCH", value="main"),
         E(name="TASK_PAYLOAD", value=json.dumps({"prompt": prompt})),
@@ -97,11 +116,12 @@ def _echo_env(task_id: str, redis_url: str, prompt: str) -> list[k8s.client.V1En
 
 
 def _delete_job(api: k8s.client.BatchV1Api, name: str) -> None:
-    try:
-        api.delete_namespaced_job(name=name, namespace=NS,
-            body=k8s.client.V1DeleteOptions(propagation_policy="Background"))
-    except k8s.client.ApiException:
-        pass
+    with contextlib.suppress(k8s.client.ApiException):
+        api.delete_namespaced_job(
+            name=name,
+            namespace=NS,
+            body=k8s.client.V1DeleteOptions(propagation_policy="Background"),
+        )
 
 
 async def _wait_job(api: k8s.client.BatchV1Api, name: str) -> str:
@@ -117,6 +137,7 @@ async def _wait_job(api: k8s.client.BatchV1Api, name: str) -> str:
 
 async def _redis_get(url: str, task_id: str) -> str | None:
     import redis.asyncio as aioredis
+
     c = aioredis.from_url(url)
     try:
         v = await c.get(f"{RESULT_PREFIX}{task_id}")
@@ -127,6 +148,7 @@ async def _redis_get(url: str, task_id: str) -> str | None:
 
 async def _redis_del(url: str, task_id: str) -> None:
     import redis.asyncio as aioredis
+
     c = aioredis.from_url(url)
     try:
         await c.delete(f"{RESULT_PREFIX}{task_id}")
@@ -137,8 +159,11 @@ async def _redis_del(url: str, task_id: str) -> None:
 # -- tests -------------------------------------------------------------------
 class TestJobDispatch:
     async def test_echo_job_writes_result(
-        self, batch_api: k8s.client.BatchV1Api,
-        task_id: str, redis_cluster_url: str, redis_local_url: str,
+        self,
+        batch_api: k8s.client.BatchV1Api,
+        task_id: str,
+        redis_cluster_url: str,
+        redis_local_url: str,
     ) -> None:
         job_name, prompt = f"echo-{task_id}", "integration test payload"
         try:
@@ -155,7 +180,9 @@ class TestJobDispatch:
             await _redis_del(redis_local_url, task_id)
 
     async def test_job_failure_on_missing_env(
-        self, batch_api: k8s.client.BatchV1Api, task_id: str,
+        self,
+        batch_api: k8s.client.BatchV1Api,
+        task_id: str,
     ) -> None:
         job_name = f"fail-{task_id}"
         env = [k8s.client.V1EnvVar(name="TASK_ID", value=task_id)]
