@@ -59,6 +59,14 @@ class Settings(BaseSettings):
         description="Base directory for repo clones. Defaults to system temp.",
     )
 
+    # State backend
+    state_backend: Literal["memory", "redis"] = Field(
+        default="memory", description="State backend: 'memory' or 'redis'"
+    )
+    redis_url: str | None = Field(
+        default=None, description="Redis URL (required when STATE_BACKEND=redis)"
+    )
+
     # Jira (all optional — service runs review-only without these)
     jira_url: str | None = Field(default=None, description="Jira instance URL")
     jira_email: str | None = Field(default=None, description="Jira user email")
@@ -89,4 +97,11 @@ class Settings(BaseSettings):
     def _check_auth(self) -> "Settings":
         if not self.github_token and not self.copilot_provider_type:
             raise ValueError("Either GITHUB_TOKEN or COPILOT_PROVIDER_TYPE must be set")
+        if self.sandbox_method == "docker" and not self.clone_dir:
+            raise ValueError(
+                "CLONE_DIR is required when SANDBOX_METHOD=docker "
+                "(must be a shared volume with the DinD sidecar)"
+            )
+        if self.state_backend == "redis" and not self.redis_url:
+            raise ValueError("REDIS_URL is required when STATE_BACKEND=redis")
         return self
