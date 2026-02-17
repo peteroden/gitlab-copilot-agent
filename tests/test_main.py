@@ -7,13 +7,23 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 
 from gitlab_copilot_agent.concurrency import RepoLockManager
-from gitlab_copilot_agent.main import lifespan
+from gitlab_copilot_agent.main import _create_executor, lifespan
+from gitlab_copilot_agent.task_executor import LocalTaskExecutor
 from tests.conftest import (
     JIRA_EMAIL,
     JIRA_PROJECT_MAP_JSON,
     JIRA_TOKEN,
     JIRA_URL,
 )
+
+
+def test_create_executor_local() -> None:
+    assert isinstance(_create_executor("local"), LocalTaskExecutor)
+
+
+def test_create_executor_k8s_not_implemented() -> None:
+    with pytest.raises(NotImplementedError, match="kubernetes"):
+        _create_executor("kubernetes")
 
 
 @pytest.mark.usefixtures("env_vars")
@@ -32,6 +42,7 @@ async def test_lifespan_without_jira_starts_and_stops(env_vars: None) -> None:
         assert test_app.state.settings.jira is None
         assert test_app.state.repo_locks is not None
         assert isinstance(test_app.state.repo_locks, RepoLockManager)
+        assert isinstance(test_app.state.executor, LocalTaskExecutor)
 
 
 @pytest.mark.asyncio
@@ -71,6 +82,7 @@ async def test_lifespan_with_jira_creates_shared_lock_manager(
             assert isinstance(test_app.state.repo_locks, RepoLockManager)
             mock_orch_class.assert_called_once()
             args, _kwargs = mock_orch_class.call_args
-            assert args[3] is test_app.state.repo_locks
+            assert isinstance(args[3], LocalTaskExecutor)
+            assert args[4] is test_app.state.repo_locks
 
         mock_poller.stop.assert_called_once()

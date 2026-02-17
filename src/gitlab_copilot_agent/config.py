@@ -61,6 +61,11 @@ class Settings(BaseSettings):
         description="Base directory for repo clones. Defaults to system temp.",
     )
 
+    # Task execution
+    task_executor: Literal["local", "kubernetes"] = Field(
+        default="local", description="Task executor backend: 'local' or 'k8s'"
+    )
+
     # State backend
     state_backend: Literal["memory", "redis"] = Field(
         default="memory", description="State backend: 'memory' or 'redis'"

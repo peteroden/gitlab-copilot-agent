@@ -11,10 +11,10 @@ import structlog
 from gitlab_copilot_agent.coding_engine import CODING_SYSTEM_PROMPT
 from gitlab_copilot_agent.concurrency import DistributedLock
 from gitlab_copilot_agent.config import Settings
-from gitlab_copilot_agent.copilot_session import run_copilot_session
 from gitlab_copilot_agent.git_operations import git_clone, git_commit, git_push
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.models import NoteWebhookPayload
+from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams
 from gitlab_copilot_agent.telemetry import get_tracer
 
 log = structlog.get_logger()
@@ -50,6 +50,7 @@ def build_mr_coding_prompt(
 async def handle_copilot_comment(
     settings: Settings,
     payload: NoteWebhookPayload,
+    executor: TaskExecutor,
     repo_locks: DistributedLock | None = None,
 ) -> None:
     """Handle a /copilot command from an MR comment."""
@@ -77,14 +78,19 @@ async def handle_copilot_comment(
                     settings.gitlab_token,
                     clone_dir=settings.clone_dir,
                 )
-                result = await run_copilot_session(
-                    settings=settings,
-                    repo_path=str(repo_path),
+                task = TaskParams(
+                    task_type="coding",
+                    task_id=f"mr-{project.id}-{mr.iid}",
+                    repo_url=project.git_http_url,
+                    branch=mr.source_branch,
                     system_prompt=CODING_SYSTEM_PROMPT,
                     user_prompt=build_mr_coding_prompt(
                         instruction, mr.title, mr.source_branch, mr.target_branch
                     ),
+                    settings=settings,
+                    repo_path=str(repo_path),
                 )
+                result = await executor.execute(task)
                 await bound_log.ainfo("copilot_coding_complete", summary=result[:200])
 
                 has_changes = await git_commit(

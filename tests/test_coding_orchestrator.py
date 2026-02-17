@@ -57,7 +57,7 @@ async def test_handle_full_pipeline(
     mock_coding.return_value = "Changes made"
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
     mock_gitlab.create_merge_request.return_value = 1
-    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira)
+    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
     await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
     mock_clone.assert_awaited_once()
     mock_branch.assert_awaited_once_with(tmp_path, "agent/proj-42")
@@ -75,7 +75,7 @@ async def test_coding_failure_posts_comment_to_jira(
     """Verify that coding task failures post a comment to Jira."""
     mock_clone.side_effect = Exception("Git clone failed")
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
-    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira)
+    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
 
     with pytest.raises(Exception, match="Git clone failed"):
         await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
@@ -94,7 +94,7 @@ async def test_coding_failure_comment_posting_failure_is_logged(
     mock_clone.side_effect = Exception("Git clone failed")
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
     mock_jira.add_comment.side_effect = Exception("Jira API error")
-    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira)
+    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
 
     with pytest.raises(Exception, match="Git clone failed"):
         await orch.handle(_TEST_ISSUE, _TEST_MAPPING)

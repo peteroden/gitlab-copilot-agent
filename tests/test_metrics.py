@@ -161,7 +161,7 @@ async def test_review_pipeline_records_success_metrics(
         patch("gitlab_copilot_agent.orchestrator.reviews_total", mock_total),
         patch("gitlab_copilot_agent.orchestrator.reviews_duration", mock_duration),
     ):
-        await handle_review(make_settings(), _make_payload())
+        await handle_review(make_settings(), _make_payload(), AsyncMock())
 
     mock_total.add.assert_called_once_with(1, {"outcome": "success"})
     mock_duration.record.assert_called_once()
@@ -191,7 +191,7 @@ async def test_review_pipeline_records_error_metrics(
         patch("gitlab_copilot_agent.orchestrator.reviews_duration", mock_duration),
         pytest.raises(RuntimeError),
     ):
-        await handle_review(make_settings(), _make_payload())
+        await handle_review(make_settings(), _make_payload(), AsyncMock())
 
     mock_total.add.assert_called_once_with(1, {"outcome": "error"})
     mock_duration.record.assert_called_once()

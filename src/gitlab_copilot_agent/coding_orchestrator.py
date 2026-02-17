@@ -18,6 +18,7 @@ from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_models import JiraIssue
 from gitlab_copilot_agent.metrics import coding_tasks_duration, coding_tasks_total
 from gitlab_copilot_agent.project_mapping import GitLabProjectMapping
+from gitlab_copilot_agent.task_executor import TaskExecutor
 from gitlab_copilot_agent.telemetry import get_tracer
 
 log = structlog.get_logger()
@@ -33,12 +34,14 @@ class CodingOrchestrator:
         settings: Settings,
         gitlab: GitLabClient,
         jira: JiraClient,
+        executor: TaskExecutor,
         repo_locks: DistributedLock | None = None,
         tracker: ProcessedIssueTracker | None = None,
     ) -> None:
         self._settings = settings
         self._gitlab = gitlab
         self._jira = jira
+        self._executor = executor
         self._repo_locks = repo_locks or MemoryLock()
         self._tracker = tracker or ProcessedIssueTracker()
 
@@ -76,8 +79,11 @@ class CodingOrchestrator:
                     )
                     await git_create_branch(repo_path, f"agent/{issue.key.lower()}")
                     result = await run_coding_task(
+                        self._executor,
                         self._settings,
                         str(repo_path),
+                        project_mapping.clone_url,
+                        f"agent/{issue.key.lower()}",
                         issue.key,
                         issue.fields.summary,
                         description,

@@ -1,7 +1,7 @@
 """Shared coding system prompt and Jira-specific prompt builder."""
 
 from gitlab_copilot_agent.config import Settings
-from gitlab_copilot_agent.copilot_session import run_copilot_session
+from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams
 
 CODING_SYSTEM_PROMPT = """\
 You are a senior software engineer implementing requested changes.
@@ -45,17 +45,24 @@ def build_jira_coding_prompt(issue_key: str, summary: str, description: str | No
 
 
 async def run_coding_task(
+    executor: TaskExecutor,
     settings: Settings,
     repo_path: str,
+    repo_url: str,
+    branch: str,
     issue_key: str,
     summary: str,
     description: str | None,
 ) -> str:
     """Run a Copilot agent session to implement changes from a Jira issue."""
-    return await run_copilot_session(
-        settings=settings,
-        repo_path=repo_path,
+    task = TaskParams(
+        task_type="coding",
+        task_id=issue_key,
+        repo_url=repo_url,
+        branch=branch,
         system_prompt=CODING_SYSTEM_PROMPT,
         user_prompt=build_jira_coding_prompt(issue_key, summary, description),
-        task_type="coding",
+        settings=settings,
+        repo_path=repo_path,
     )
+    return await executor.execute(task)
