@@ -12,8 +12,8 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
 from gitlab_copilot_agent.concurrency import (
+    MemoryLock,
     ProcessedIssueTracker,
-    RepoLockManager,
     ReviewedMRTracker,
 )
 from gitlab_copilot_agent.config import Settings
@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await log.ainfo("sandbox_method_configured", method=settings.sandbox_method)
 
     # Shared lock manager for both webhook and Jira flows
-    repo_locks = RepoLockManager()
+    repo_locks = MemoryLock()
     app.state.repo_locks = repo_locks
     app.state.review_tracker = ReviewedMRTracker()
 

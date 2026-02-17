@@ -6,6 +6,7 @@ import asyncio
 from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Protocol, runtime_checkable
 
 import structlog
 
@@ -15,11 +16,43 @@ _DEFAULT_MAX_LOCKS = 1024
 _DEFAULT_MAX_PROCESSED = 10_000
 
 
-class RepoLockManager:
-    """Async lock per repo URL — serializes operations on the same repo.
+@runtime_checkable
+class DistributedLock(Protocol):
+    """Protocol for distributed locking.
 
-    Uses LRU eviction to prevent unbounded memory growth when max_size is exceeded.
-    Locked entries are never evicted.
+    Implementations provide async context managers for acquiring locks on arbitrary keys.
+    The ttl_seconds parameter allows backends like Redis to set expiration (in-memory
+    implementations may ignore it).
+    """
+
+    @asynccontextmanager
+    async def acquire(self, key: str, ttl_seconds: int = 300) -> AsyncIterator[None]:
+        """Acquire lock on key with optional TTL."""
+        ...
+
+
+@runtime_checkable
+class DeduplicationStore(Protocol):
+    """Protocol for deduplication state.
+
+    Tracks whether keys have been seen before. Implementations may optionally
+    support TTL-based expiration.
+    """
+
+    async def is_seen(self, key: str) -> bool:
+        """Check if key has been seen."""
+        ...
+
+    async def mark_seen(self, key: str, ttl_seconds: int = 3600) -> None:
+        """Mark key as seen with optional TTL."""
+        ...
+
+
+class MemoryLock:
+    """In-memory distributed lock implementation.
+
+    Async lock per key with LRU eviction. Locked entries are never evicted.
+    Implements DistributedLock protocol (ttl_seconds is ignored in memory).
     """
 
     def __init__(self, max_size: int = _DEFAULT_MAX_LOCKS) -> None:
@@ -32,32 +65,33 @@ class RepoLockManager:
             return
 
         to_evict: list[str] = []
-        for repo_url, lock in self._locks.items():
+        for key, lock in self._locks.items():
             if len(self._locks) - len(to_evict) <= self._max_size:
                 break
             if not lock.locked():
-                to_evict.append(repo_url)
+                to_evict.append(key)
 
-        for repo_url in to_evict:
-            del self._locks[repo_url]
+        for key in to_evict:
+            del self._locks[key]
 
         if to_evict:
             log.warning(
-                "repo_lock_eviction",
+                "lock_eviction",
                 evicted_count=len(to_evict),
                 max_size=self._max_size,
                 current_size=len(self._locks),
             )
 
     @asynccontextmanager
-    async def acquire(self, repo_url: str) -> AsyncIterator[None]:
-        if repo_url not in self._locks:
-            self._locks[repo_url] = asyncio.Lock()
+    async def acquire(self, key: str, ttl_seconds: int = 300) -> AsyncIterator[None]:
+        """Acquire lock on key. ttl_seconds is ignored in memory implementation."""
+        if key not in self._locks:
+            self._locks[key] = asyncio.Lock()
         else:
             # Move to end (LRU)
-            self._locks.move_to_end(repo_url)
+            self._locks.move_to_end(key)
 
-        async with self._locks[repo_url]:
+        async with self._locks[key]:
             yield
 
         # Evict after release
@@ -67,43 +101,81 @@ class RepoLockManager:
         return len(self._locks)
 
 
-class ProcessedIssueTracker:
-    """Track processed Jira issue keys to avoid re-processing within a run.
+# Backward compatibility alias
+RepoLockManager = MemoryLock
 
-    Uses size-based eviction to prevent unbounded memory growth when max_size is exceeded.
+
+class MemoryDedup:
+    """In-memory deduplication store implementation.
+
+    Tracks seen keys with size-based eviction (oldest half evicted when max_size exceeded).
+    Implements DeduplicationStore protocol (ttl_seconds is ignored in memory).
     """
 
     def __init__(self, max_size: int = _DEFAULT_MAX_PROCESSED) -> None:
-        self._processed: OrderedDict[str, None] = OrderedDict()
+        self._seen: OrderedDict[str, None] = OrderedDict()
         self._max_size = max_size
 
     def _evict_if_needed(self) -> None:
         """Clear oldest half of entries when max_size is exceeded."""
-        if len(self._processed) <= self._max_size:
+        if len(self._seen) <= self._max_size:
             return
 
         target_size = self._max_size // 2
-        evict_count = len(self._processed) - target_size
+        evict_count = len(self._seen) - target_size
 
         for _ in range(evict_count):
-            self._processed.popitem(last=False)
+            self._seen.popitem(last=False)
 
         log.warning(
-            "processed_issue_eviction",
+            "dedup_eviction",
             evicted_count=evict_count,
             max_size=self._max_size,
-            current_size=len(self._processed),
+            current_size=len(self._seen),
         )
 
-    def is_processed(self, key: str) -> bool:
-        return key in self._processed
+    async def is_seen(self, key: str) -> bool:
+        """Check if key has been seen."""
+        return key in self._seen
 
-    def mark(self, key: str) -> None:
-        self._processed[key] = None
+    async def mark_seen(self, key: str, ttl_seconds: int = 3600) -> None:
+        """Mark key as seen. ttl_seconds is ignored in memory implementation."""
+        self._seen[key] = None
         self._evict_if_needed()
 
     def __len__(self) -> int:
-        return len(self._processed)
+        return len(self._seen)
+
+
+class ProcessedIssueTracker:
+    """Track processed Jira issue keys to avoid re-processing within a run.
+
+    Thin wrapper around MemoryDedup for backward compatibility.
+    Uses size-based eviction to prevent unbounded memory growth when max_size is exceeded.
+    """
+
+    def __init__(self, max_size: int = _DEFAULT_MAX_PROCESSED) -> None:
+        self._store = MemoryDedup(max_size=max_size)
+        # For backward compat, expose internal state for tests
+        self._processed = self._store._seen
+        self._max_size = max_size
+
+    def _evict_if_needed(self) -> None:
+        """Clear oldest half of entries when max_size is exceeded."""
+        self._store._evict_if_needed()
+
+    def is_processed(self, key: str) -> bool:
+        # Synchronous wrapper for backward compat
+        return key in self._store._seen
+
+    def mark(self, key: str) -> None:
+        # Synchronous wrapper for backward compat
+        self._store._seen[key] = None
+        self._store._evict_if_needed()
+
+    def __len__(self) -> int:
+        return len(self._store)
+
 
 
 class ReviewedMRTracker:
@@ -111,6 +183,9 @@ class ReviewedMRTracker:
 
     In-memory only — a service restart allows re-review, which is acceptable.
     Uses size-based eviction identical to ProcessedIssueTracker.
+
+    Note: This maintains the tuple-based API for backward compatibility but internally
+    converts to string keys for protocol compatibility.
     """
 
     def __init__(self, max_size: int = _DEFAULT_MAX_PROCESSED) -> None:
@@ -140,3 +215,4 @@ class ReviewedMRTracker:
 
     def __len__(self) -> int:
         return len(self._reviewed)
+
