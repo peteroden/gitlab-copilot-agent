@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "app.fullname" . }}
+  labels: {{- include "app.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "app.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        {{- include "app.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: controller
+    spec:
+      serviceAccountName: {{ include "app.serviceAccountName" . }}
+      containers:
+        - name: controller
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ containerPort: {{ .Values.controller.port }} }]
+          envFrom:
+            - configMapRef: { name: {{ include "app.fullname" . }} }
+            - secretRef: { name: {{ include "app.fullname" . }} }
+          resources: {{- toYaml .Values.controller.resources | nindent 12 }}
+          livenessProbe: { httpGet: { path: /health, port: {{ .Values.controller.port }} }, initialDelaySeconds: 10 }
+          readinessProbe: { httpGet: { path: /health, port: {{ .Values.controller.port }} } }

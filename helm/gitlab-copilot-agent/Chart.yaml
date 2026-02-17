@@ -1,0 +1,6 @@
+apiVersion: v2
+name: gitlab-copilot-agent
+description: GitLab Copilot Agent — AI code review and task execution
+version: 0.1.0
+appVersion: "0.1.0"
+type: application

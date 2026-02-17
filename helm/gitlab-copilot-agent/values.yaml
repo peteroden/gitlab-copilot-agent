@@ -1,0 +1,26 @@
+replicaCount: 1
+image: { repository: ghcr.io/peteroden/gitlab-copilot-agent, tag: latest, pullPolicy: IfNotPresent }
+controller:
+  port: 8000
+  logLevel: info
+  taskExecutor: kubernetes
+  stateBackend: redis
+  copilotModel: gpt-4
+  copilotProviderType: ""
+  copilotProviderBaseUrl: ""
+  copilotProviderApiKey: ""
+  resources:
+    limits: { cpu: 500m, memory: 512Mi }
+    requests: { cpu: 100m, memory: 256Mi }
+redis:
+  enabled: true
+  image: { repository: redis, tag: "7-alpine" }
+  port: 6379
+  resources:
+    limits: { cpu: 250m, memory: 256Mi }
+    requests: { cpu: 50m, memory: 64Mi }
+  storage: 1Gi
+jobRunner: { image: "", cpuLimit: "1", memoryLimit: 1Gi, timeout: 600 }
+serviceAccount: { create: true, name: "" }
+gitlab: { url: "", token: "", webhookSecret: "" }
+github: { token: "" }

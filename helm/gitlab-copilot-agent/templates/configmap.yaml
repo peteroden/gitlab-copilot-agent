@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "app.fullname" . }}
+  labels: {{- include "app.labels" . | nindent 4 }}
+data:
+  GITLAB_URL: {{ required "gitlab.url is required" .Values.gitlab.url | quote }}
+  HOST: "0.0.0.0"
+  PORT: {{ .Values.controller.port | quote }}
+  LOG_LEVEL: {{ .Values.controller.logLevel | quote }}
+  TASK_EXECUTOR: {{ .Values.controller.taskExecutor | quote }}
+  STATE_BACKEND: {{ .Values.controller.stateBackend | quote }}
+  REDIS_URL: {{ include "app.redisUrl" . | quote }}
+  COPILOT_MODEL: {{ .Values.controller.copilotModel | quote }}
+  K8S_NAMESPACE: {{ .Release.Namespace | quote }}
+  K8S_JOB_IMAGE: {{ include "app.jobImage" . | quote }}
+  K8S_JOB_CPU_LIMIT: {{ .Values.jobRunner.cpuLimit | quote }}
+  K8S_JOB_MEMORY_LIMIT: {{ .Values.jobRunner.memoryLimit | quote }}
+  K8S_JOB_TIMEOUT: {{ .Values.jobRunner.timeout | quote }}
+  {{- with .Values.controller.copilotProviderType }}
+  COPILOT_PROVIDER_TYPE: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.controller.copilotProviderBaseUrl }}
+  COPILOT_PROVIDER_BASE_URL: {{ . | quote }}
+  {{- end }}
