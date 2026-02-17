@@ -70,6 +70,18 @@ class Settings(BaseSettings):
         "(must be a shared volume). Defaults to system temp.",
     )
 
+    # State backends
+    state_backend: Literal["memory", "redis"] = Field(
+        default="memory",
+        description=(
+            "State backend for locks and dedup: memory (single-process) or redis (distributed)"
+        ),
+    )
+    redis_url: str | None = Field(
+        default=None,
+        description="Redis URL (required when STATE_BACKEND=redis). Example: redis://localhost:6379/0",
+    )
+
     # Jira (all optional — service runs review-only without these)
     jira_url: str | None = Field(default=None, description="Jira instance URL")
     jira_email: str | None = Field(default=None, description="Jira user email")
@@ -105,4 +117,6 @@ class Settings(BaseSettings):
                 "CLONE_DIR is required when SANDBOX_METHOD=docker "
                 "(must be a shared volume with the DinD sidecar)"
             )
+        if self.state_backend == "redis" and not self.redis_url:
+            raise ValueError("REDIS_URL is required when STATE_BACKEND=redis")
         return self
