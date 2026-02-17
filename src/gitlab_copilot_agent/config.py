@@ -66,6 +66,13 @@ class Settings(BaseSettings):
         default="local", description="Task executor backend: 'local' or 'k8s'"
     )
 
+    # K8s executor settings (only used when task_executor="kubernetes")
+    k8s_namespace: str = Field(default="default", description="Kubernetes namespace for Jobs")
+    k8s_job_image: str = Field(default="", description="Docker image for Job pods")
+    k8s_job_cpu_limit: str = Field(default="1", description="CPU limit for Job pods")
+    k8s_job_memory_limit: str = Field(default="1Gi", description="Memory limit for Job pods")
+    k8s_job_timeout: int = Field(default=600, description="Job timeout in seconds")
+
     # State backend
     state_backend: Literal["memory", "redis"] = Field(
         default="memory", description="State backend: 'memory' or 'redis'"

@@ -19,7 +19,24 @@ from gitlab_copilot_agent.review_engine import SYSTEM_PROMPT as REVIEW_SYSTEM_PR
 log = structlog.get_logger()
 ENV_TASK_TYPE, ENV_TASK_ID, ENV_REPO_URL = "TASK_TYPE", "TASK_ID", "REPO_URL"
 ENV_BRANCH, ENV_TASK_PAYLOAD = "BRANCH", "TASK_PAYLOAD"
+ENV_REDIS_URL = "REDIS_URL"
 VALID_TASK_TYPES: frozenset[str] = frozenset({"review", "coding"})
+_RESULT_KEY_PREFIX = "result:"
+_RESULT_TTL = 3600  # 1 hour
+
+
+async def _store_result(task_id: str, result: str) -> None:
+    """Persist result to Redis if REDIS_URL is set."""
+    redis_url = os.environ.get(ENV_REDIS_URL, "").strip()
+    if not redis_url:
+        return
+    import redis.asyncio as aioredis
+
+    client = aioredis.from_url(redis_url)
+    try:
+        await client.set(f"{_RESULT_KEY_PREFIX}{task_id}", result, ex=_RESULT_TTL)
+    finally:
+        await client.aclose()
 
 
 def _get_required_env(name: str) -> str:
@@ -87,6 +104,7 @@ async def run_task() -> int:
         result = await run_copilot_session(
             settings, str(repo_path), prompt, user_prompt, task_type=task_type
         )
+        await _store_result(task_id, result)
         print(json.dumps({"task_id": task_id, "result": result}), flush=True)  # noqa: T201
         await bound_log.ainfo("task_complete")
         return 0
