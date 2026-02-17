@@ -1,0 +1,8 @@
+image:
+  pullPolicy: Never
+controller:
+  resources:
+    limits: { cpu: 250m, memory: 256Mi }
+redis:
+  storage: 256Mi
+jobRunner: { cpuLimit: "500m", memoryLimit: 512Mi }

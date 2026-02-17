@@ -1,0 +1,38 @@
+{{- if .Values.redis.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "app.fullname" . }}-redis
+  labels: {{- include "app.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "app.fullname" . }}-redis
+  replicas: 1
+  selector:
+    matchLabels: {{- include "app.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels: {{- include "app.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redis
+    spec:
+      containers:
+        - name: redis
+          image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
+          ports: [{ containerPort: {{ .Values.redis.port }} }]
+          args: ["--appendonly", "yes"]
+          resources: {{- toYaml .Values.redis.resources | nindent 12 }}
+          volumeMounts: [{ name: data, mountPath: /data }]
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec: { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: {{ .Values.redis.storage }} } } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "app.fullname" . }}-redis
+spec:
+  clusterIP: None
+  ports: [{ port: {{ .Values.redis.port }} }]
+  selector: {{- include "app.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+{{- end }}
