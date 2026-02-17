@@ -8,6 +8,8 @@ from contextlib import asynccontextmanager, suppress
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+import structlog
+
 from gitlab_copilot_agent.concurrency import (
     DeduplicationStore,
     Lock,
@@ -17,6 +19,8 @@ from gitlab_copilot_agent.concurrency import (
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
+
+log = structlog.get_logger()
 
 # Lua: atomically release lock only if we still own it
 _UNLOCK_SCRIPT = (
@@ -60,18 +64,23 @@ class RedisLock:
             renewal_task.cancel()
             with suppress(asyncio.CancelledError):
                 await renewal_task
-            await self._client.eval(  # type: ignore[union-attr]
-                _UNLOCK_SCRIPT, 1, lock_key, token
-            )
+            with suppress(ConnectionError, OSError):
+                await self._client.eval(  # type: ignore[union-attr]
+                    _UNLOCK_SCRIPT, 1, lock_key, token
+                )
 
     async def _renew_loop(self, lock_key: str, token: str, ttl_seconds: int) -> None:
         """Periodically extend the lock TTL while it is held."""
         interval = max(1, int(ttl_seconds * _RENEWAL_FACTOR))
         while True:
             await asyncio.sleep(interval)
-            await self._client.eval(  # type: ignore[union-attr]
-                _EXTEND_SCRIPT, 1, lock_key, token, str(ttl_seconds)
-            )
+            try:
+                await self._client.eval(  # type: ignore[union-attr]
+                    _EXTEND_SCRIPT, 1, lock_key, token, str(ttl_seconds)
+                )
+            except (ConnectionError, OSError):
+                log.warning("lock_renewal_failed", key=lock_key)
+                return
 
     async def aclose(self) -> None:
         """Close the underlying Redis connection."""
