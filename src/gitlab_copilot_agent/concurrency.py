@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import Protocol, runtime_checkable
 
 import structlog
 
@@ -15,11 +16,26 @@ _DEFAULT_MAX_LOCKS = 1024
 _DEFAULT_MAX_PROCESSED = 10_000
 
 
-class RepoLockManager:
-    """Async lock per repo URL — serializes operations on the same repo.
+@runtime_checkable
+class DistributedLock(Protocol):
+    """Protocol for distributed locking backends."""
+
+    def acquire(self, key: str, ttl_seconds: int = 300) -> AbstractAsyncContextManager[None]: ...
+
+
+@runtime_checkable
+class DeduplicationStore(Protocol):
+    """Protocol for deduplication backends."""
+
+    async def is_seen(self, key: str) -> bool: ...
+    async def mark_seen(self, key: str, ttl_seconds: int = 3600) -> None: ...
+
+
+class MemoryLock:
+    """Async lock per key — serializes operations on the same key.
 
     Uses LRU eviction to prevent unbounded memory growth when max_size is exceeded.
-    Locked entries are never evicted.
+    Locked entries are never evicted. Implements DistributedLock protocol.
     """
 
     def __init__(self, max_size: int = _DEFAULT_MAX_LOCKS) -> None:
@@ -32,14 +48,14 @@ class RepoLockManager:
             return
 
         to_evict: list[str] = []
-        for repo_url, lock in self._locks.items():
+        for key, lock in self._locks.items():
             if len(self._locks) - len(to_evict) <= self._max_size:
                 break
             if not lock.locked():
-                to_evict.append(repo_url)
+                to_evict.append(key)
 
-        for repo_url in to_evict:
-            del self._locks[repo_url]
+        for key in to_evict:
+            del self._locks[key]
 
         if to_evict:
             log.warning(
@@ -50,14 +66,14 @@ class RepoLockManager:
             )
 
     @asynccontextmanager
-    async def acquire(self, repo_url: str) -> AsyncIterator[None]:
-        if repo_url not in self._locks:
-            self._locks[repo_url] = asyncio.Lock()
+    async def acquire(self, key: str, ttl_seconds: int = 300) -> AsyncIterator[None]:
+        if key not in self._locks:
+            self._locks[key] = asyncio.Lock()
         else:
             # Move to end (LRU)
-            self._locks.move_to_end(repo_url)
+            self._locks.move_to_end(key)
 
-        async with self._locks[repo_url]:
+        async with self._locks[key]:
             yield
 
         # Evict after release
@@ -65,6 +81,45 @@ class RepoLockManager:
 
     def __len__(self) -> int:
         return len(self._locks)
+
+
+# Backward compatibility alias
+RepoLockManager = MemoryLock
+
+
+class MemoryDedup:
+    """In-memory deduplication store implementing DeduplicationStore protocol.
+
+    Uses size-based eviction to prevent unbounded memory growth.
+    """
+
+    def __init__(self, max_size: int = _DEFAULT_MAX_PROCESSED) -> None:
+        self._seen: OrderedDict[str, None] = OrderedDict()
+        self._max_size = max_size
+
+    def _evict_if_needed(self) -> None:
+        if len(self._seen) <= self._max_size:
+            return
+        target_size = self._max_size // 2
+        evict_count = len(self._seen) - target_size
+        for _ in range(evict_count):
+            self._seen.popitem(last=False)
+        log.warning(
+            "dedup_store_eviction",
+            evicted_count=evict_count,
+            max_size=self._max_size,
+            current_size=len(self._seen),
+        )
+
+    async def is_seen(self, key: str) -> bool:
+        return key in self._seen
+
+    async def mark_seen(self, key: str, ttl_seconds: int = 3600) -> None:
+        self._seen[key] = None
+        self._evict_if_needed()
+
+    def __len__(self) -> int:
+        return len(self._seen)
 
 
 class ProcessedIssueTracker:

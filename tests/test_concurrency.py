@@ -3,10 +3,31 @@
 import asyncio
 
 from gitlab_copilot_agent.concurrency import (
+    DeduplicationStore,
+    DistributedLock,
+    MemoryDedup,
+    MemoryLock,
     ProcessedIssueTracker,
     RepoLockManager,
     ReviewedMRTracker,
 )
+
+# -- Protocol conformance tests --
+
+
+async def test_memory_lock_implements_distributed_lock() -> None:
+    assert isinstance(MemoryLock(), DistributedLock)
+
+
+async def test_memory_dedup_implements_deduplication_store() -> None:
+    assert isinstance(MemoryDedup(), DeduplicationStore)
+
+
+async def test_backward_compat_alias() -> None:
+    assert RepoLockManager is MemoryLock
+
+
+# -- MemoryLock tests (formerly RepoLockManager) --
 
 
 async def test_repo_lock_serializes_same_repo() -> None:
@@ -196,3 +217,29 @@ async def test_reviewed_mr_tracker_evicts_when_full() -> None:
     # Newest entries kept
     assert tracker.is_reviewed(1, 3, "sha3")
     assert tracker.is_reviewed(1, 99, "sha99")
+
+
+# -- MemoryDedup tests --
+
+
+async def test_memory_dedup_marks_and_checks() -> None:
+    store = MemoryDedup()
+    assert not await store.is_seen("key-1")
+    await store.mark_seen("key-1")
+    assert await store.is_seen("key-1")
+    assert not await store.is_seen("key-2")
+
+
+async def test_memory_dedup_evicts_when_full() -> None:
+    store = MemoryDedup(max_size=4)
+    for i in range(4):
+        await store.mark_seen(f"k-{i}")
+    assert len(store) == 4
+
+    # Add one more → triggers eviction to max_size // 2 = 2
+    await store.mark_seen("k-99")
+    assert len(store) == 2
+    assert not await store.is_seen("k-0")
+    assert not await store.is_seen("k-1")
+    assert await store.is_seen("k-3")
+    assert await store.is_seen("k-99")
