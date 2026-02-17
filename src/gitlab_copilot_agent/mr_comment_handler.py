@@ -9,7 +9,7 @@ from pathlib import Path
 import structlog
 
 from gitlab_copilot_agent.coding_engine import CODING_SYSTEM_PROMPT
-from gitlab_copilot_agent.concurrency import RepoLockManager
+from gitlab_copilot_agent.concurrency import DistributedLock
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.copilot_session import run_copilot_session
 from gitlab_copilot_agent.git_operations import git_clone, git_commit, git_push
@@ -50,7 +50,7 @@ def build_mr_coding_prompt(
 async def handle_copilot_comment(
     settings: Settings,
     payload: NoteWebhookPayload,
-    repo_locks: RepoLockManager | None = None,
+    repo_locks: DistributedLock | None = None,
 ) -> None:
     """Handle a /copilot command from an MR comment."""
     mr = payload.merge_request
