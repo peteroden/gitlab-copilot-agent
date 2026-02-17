@@ -1,6 +1,6 @@
 """Tests for the review engine prompt construction and run_review."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from gitlab_copilot_agent.review_engine import (
     SYSTEM_PROMPT,
@@ -8,7 +8,7 @@ from gitlab_copilot_agent.review_engine import (
     build_review_prompt,
     run_review,
 )
-from tests.conftest import make_settings
+from tests.conftest import EXAMPLE_CLONE_URL, make_settings
 
 
 def _make_request() -> ReviewRequest:
@@ -38,18 +38,16 @@ def test_build_review_prompt_handles_no_description() -> None:
     assert "(none)" in prompt
 
 
-@patch("gitlab_copilot_agent.review_engine.run_copilot_session")
-async def test_run_review_delegates_to_copilot_session(
-    mock_run_session: AsyncMock,
-) -> None:
-    mock_run_session.return_value = "Review result"
+async def test_run_review_delegates_to_executor() -> None:
+    mock_executor = AsyncMock()
+    mock_executor.execute.return_value = "Review result"
 
     settings = make_settings()
     req = _make_request()
-    result = await run_review(settings, "/tmp/repo", req)
+    result = await run_review(mock_executor, settings, "/tmp/repo", EXAMPLE_CLONE_URL, req)
 
     assert result == "Review result"
-    call_args = mock_run_session.call_args[1]
-    assert call_args["system_prompt"] == SYSTEM_PROMPT
-    assert "Add feature X" in call_args["user_prompt"]
-    assert "git diff main...feature/x" in call_args["user_prompt"]
+    task = mock_executor.execute.call_args[0][0]
+    assert task.system_prompt == SYSTEM_PROMPT
+    assert "Add feature X" in task.user_prompt
+    assert "git diff main...feature/x" in task.user_prompt

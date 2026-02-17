@@ -87,10 +87,10 @@ async def test_note_webhook_uses_shared_lock_manager(client: AsyncClient) -> Non
         # Verify handle_copilot_comment was called with the lock manager from app state
         mock_handle.assert_awaited_once()
         args, kwargs = mock_handle.call_args
-        # Third argument should be the repo_locks from app.state
+        # Third argument should be the executor, fourth should be repo_locks
         from gitlab_copilot_agent.main import app
 
-        assert args[2] is app.state.repo_locks
+        assert args[3] is app.state.repo_locks
 
 
 # -- Deduplication tests --

@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.gitlab_client import MRChange, MRDiffRef
 from gitlab_copilot_agent.main import app
+from gitlab_copilot_agent.task_executor import LocalTaskExecutor
 
 # -- Constants --
 
@@ -134,6 +135,7 @@ async def client(env_vars: None) -> AsyncIterator[AsyncClient]:
     from gitlab_copilot_agent.concurrency import RepoLockManager, ReviewedMRTracker
 
     app.state.settings = make_settings()
+    app.state.executor = LocalTaskExecutor()
     app.state.repo_locks = RepoLockManager()
     app.state.review_tracker = ReviewedMRTracker()
     transport = ASGITransport(app=app)

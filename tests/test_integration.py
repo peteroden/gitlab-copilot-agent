@@ -70,8 +70,8 @@ async def test_full_pipeline(
 
     mock_run_review.assert_awaited_once()
     review_args = mock_run_review.call_args
-    assert review_args[0][1] == "/tmp/fake-repo"
-    assert review_args[0][2].title == "Add feature"
+    assert review_args[0][2] == "/tmp/fake-repo"
+    assert review_args[0][4].title == "Add feature"
 
     mock_post_review.assert_awaited_once()
     post_args = mock_post_review.call_args[0]
@@ -118,6 +118,6 @@ async def test_orchestrator_cleans_up_on_error(
     )
 
     with pytest.raises(RuntimeError, match="SDK crashed"):
-        await handle_review(make_settings(), payload)
+        await handle_review(make_settings(), payload, AsyncMock())
 
     mock_gl_instance.cleanup.assert_awaited_once()

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 from gitlab_copilot_agent.config import Settings
-from gitlab_copilot_agent.copilot_session import run_copilot_session
+from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams
 
 SYSTEM_PROMPT = """\
 You are a senior code reviewer. Review the merge request diff thoroughly.
@@ -70,14 +70,21 @@ def build_review_prompt(req: ReviewRequest) -> str:
 
 
 async def run_review(
+    executor: TaskExecutor,
     settings: Settings,
     repo_path: str,
+    repo_url: str,
     review_request: ReviewRequest,
 ) -> str:
     """Run a Copilot agent review and return the raw response text."""
-    return await run_copilot_session(
-        settings=settings,
-        repo_path=repo_path,
+    task = TaskParams(
+        task_type="review",
+        task_id=f"review-{review_request.source_branch}",
+        repo_url=repo_url,
+        branch=review_request.source_branch,
         system_prompt=SYSTEM_PROMPT,
         user_prompt=build_review_prompt(review_request),
+        settings=settings,
+        repo_path=repo_path,
     )
+    return await executor.execute(task)

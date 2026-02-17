@@ -22,6 +22,7 @@ from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_poller import JiraPoller
 from gitlab_copilot_agent.project_mapping import ProjectMap
 from gitlab_copilot_agent.redis_state import create_lock
+from gitlab_copilot_agent.task_executor import LocalTaskExecutor, TaskExecutor
 from gitlab_copilot_agent.telemetry import (
     add_trace_context,
     emit_to_otel_logs,
@@ -52,12 +53,21 @@ def _cleanup_stale_repos(clone_dir: str | None = None) -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def _create_executor(backend: str) -> TaskExecutor:
+    """Factory: create a TaskExecutor for the given backend."""
+    if backend == "kubernetes":
+        msg = "kubernetes task executor not yet implemented (see #81)"
+        raise NotImplementedError(msg)
+    return LocalTaskExecutor()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_telemetry()
     settings = Settings()
     _cleanup_stale_repos(settings.clone_dir)
     app.state.settings = settings
+    app.state.executor = _create_executor(settings.task_executor)
 
     # Shared lock manager for both webhook and Jira flows
     repo_locks = create_lock(settings.state_backend, settings.redis_url)
@@ -71,7 +81,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         project_map = ProjectMap.model_validate_json(settings.jira.project_map_json)
         gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
         tracker = ProcessedIssueTracker()
-        handler = CodingOrchestrator(settings, gl_client, jira_client, repo_locks, tracker)
+        handler = CodingOrchestrator(
+            settings, gl_client, jira_client, app.state.executor, repo_locks, tracker
+        )
         poller = JiraPoller(jira_client, settings.jira, project_map, handler)
         await poller.start()
         await log.ainfo("jira_poller_started", interval=settings.jira.poll_interval)

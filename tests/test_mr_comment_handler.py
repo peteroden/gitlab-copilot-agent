@@ -45,7 +45,6 @@ def _make_note_payload(note: str = "/copilot fix bug") -> NoteWebhookPayload:
 
 
 @patch("gitlab_copilot_agent.mr_comment_handler.GitLabClient")
-@patch("gitlab_copilot_agent.mr_comment_handler.run_copilot_session")
 @patch("gitlab_copilot_agent.mr_comment_handler.git_push")
 @patch("gitlab_copilot_agent.mr_comment_handler.git_commit")
 @patch("gitlab_copilot_agent.mr_comment_handler.git_clone")
@@ -53,19 +52,19 @@ async def test_handle_full_pipeline(
     mock_clone: AsyncMock,
     mock_commit: AsyncMock,
     mock_push: AsyncMock,
-    mock_session: AsyncMock,
     mock_gl_class: AsyncMock,
     tmp_path: Path,
 ) -> None:
     mock_clone.return_value = tmp_path
-    mock_session.return_value = "Fixed the bug"
+    mock_executor = AsyncMock()
+    mock_executor.execute.return_value = "Fixed the bug"
     mock_commit.return_value = True
     mock_gl = AsyncMock()
     mock_gl_class.return_value = mock_gl
 
-    await handle_copilot_comment(make_settings(), _make_note_payload())
+    await handle_copilot_comment(make_settings(), _make_note_payload(), executor=mock_executor)
 
     mock_clone.assert_awaited_once()
-    mock_session.assert_awaited_once()
+    mock_executor.execute.assert_awaited_once()
     mock_push.assert_awaited_once()
     mock_gl.post_mr_comment.assert_awaited_once()
