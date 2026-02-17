@@ -28,7 +28,7 @@ K8S_JOB_IMAGE = "registry.example.com/agent:latest"
 K8S_JOB_CPU = "500m"
 K8S_JOB_MEM = "512Mi"
 K8S_JOB_TIMEOUT = 5  # short for tests
-EXPECTED_JOB_NAME = "copilot-review-abc12345"
+EXPECTED_JOB_NAME = "copilot-review-72a7b9961a8635bf"
 RESULT_KEY = f"result:{TASK_ID}"
 CACHED_RESULT = "cached review output"
 ANNOTATION_RESULT = "annotation fallback result"
@@ -96,6 +96,14 @@ def _install_k8s_stub() -> tuple[MagicMock, MagicMock, MagicMock]:
         "V1DeleteOptions",
     ):
         setattr(client_mod, cls_name, _passthrough_cls(cls_name))
+
+    class _ApiException(Exception):
+        def __init__(self, status: int = 0, reason: str = "") -> None:
+            self.status = status
+            self.reason = reason
+            super().__init__(f"({status}) {reason}")
+
+    client_mod.ApiException = _ApiException  # type: ignore[attr-defined]
 
     config_mod.load_incluster_config = config_mock.load_incluster_config  # type: ignore[attr-defined]
     config_mod.load_kube_config = config_mock.load_kube_config  # type: ignore[attr-defined]
@@ -385,19 +393,99 @@ class TestTimeout:
         batch_v1.delete_namespaced_job.assert_called_once()
 
 
+class TestAlreadyExists:
+    async def test_409_falls_through_to_poll(
+        self,
+        batch_v1: MagicMock,
+        fake_redis: fakeredis.aioredis.FakeRedis,
+    ) -> None:
+        """409 on create falls through to poll loop and returns result."""
+        batch_v1.create_namespaced_job.side_effect = sys.modules["kubernetes.client"].ApiException(
+            status=409, reason="AlreadyExists"
+        )
+
+        job_mock = MagicMock()
+        job_mock.status.succeeded = 1
+        job_mock.status.failed = None
+        job_mock.metadata.annotations = {"results.copilot-agent/summary": ANNOTATION_RESULT}
+        batch_v1.read_namespaced_job.return_value = job_mock
+
+        executor = _make_executor()
+        with patch("redis.asyncio.from_url", return_value=fake_redis):
+            result = await executor.execute(_make_task())
+
+        assert result == ANNOTATION_RESULT
+
+
+class TestFailedJobCleanup:
+    async def test_failed_job_is_deleted(
+        self,
+        batch_v1: MagicMock,
+        core_v1: MagicMock,
+        fake_redis: fakeredis.aioredis.FakeRedis,
+    ) -> None:
+        """Failed Job is explicitly deleted after reading pod logs."""
+        job_mock = MagicMock()
+        job_mock.status.succeeded = None
+        job_mock.status.failed = 1
+        batch_v1.read_namespaced_job.return_value = job_mock
+
+        pod_mock = MagicMock()
+        pod_mock.metadata.name = "copilot-review-abc12345-xyz"
+        core_v1.list_namespaced_pod.return_value = MagicMock(items=[pod_mock])
+        core_v1.read_namespaced_pod_log.return_value = POD_LOGS
+
+        executor = _make_executor()
+        with (
+            patch("redis.asyncio.from_url", return_value=fake_redis),
+            pytest.raises(RuntimeError, match="failed"),
+        ):
+            await executor.execute(_make_task())
+
+        batch_v1.delete_namespaced_job.assert_called_once()
+
+    async def test_deleted_job_treated_as_failed(
+        self,
+        batch_v1: MagicMock,
+        core_v1: MagicMock,
+        fake_redis: fakeredis.aioredis.FakeRedis,
+    ) -> None:
+        """404 from read_job_status (Job deleted) is treated as failure."""
+        api_exc_cls = sys.modules["kubernetes.client"].ApiException
+        batch_v1.read_namespaced_job.side_effect = api_exc_cls(status=404)
+
+        pod_mock = MagicMock()
+        pod_mock.metadata.name = "copilot-review-abc12345-pod"
+        core_v1.list_namespaced_pod.return_value = MagicMock(items=[pod_mock])
+        core_v1.read_namespaced_pod_log.return_value = POD_LOGS
+
+        executor = _make_executor()
+        with (
+            patch("redis.asyncio.from_url", return_value=fake_redis),
+            pytest.raises(RuntimeError, match="failed"),
+        ):
+            await executor.execute(_make_task())
+
+
 class TestJobNameSanitization:
-    def test_basic_name(self) -> None:
+    def test_deterministic(self) -> None:
         from gitlab_copilot_agent.k8s_executor import _sanitize_job_name
 
-        assert _sanitize_job_name("review", "abc12345-rest") == "copilot-review-abc12345"
+        name = _sanitize_job_name("review", "abc12345-rest")
+        assert name == _sanitize_job_name("review", "abc12345-rest")
 
-    def test_uppercased_input(self) -> None:
+    def test_different_ids_differ(self) -> None:
         from gitlab_copilot_agent.k8s_executor import _sanitize_job_name
 
-        assert _sanitize_job_name("REVIEW", "ABC12345") == "copilot-review-abc12345"
+        assert _sanitize_job_name("review", "id-a") != _sanitize_job_name("review", "id-b")
 
-    def test_special_chars_replaced(self) -> None:
+    def test_uppercased_task_type(self) -> None:
         from gitlab_copilot_agent.k8s_executor import _sanitize_job_name
 
-        result = _sanitize_job_name("review", "a@b#c$d%")
-        assert result == "copilot-review-a-b-c-d-"[:63].rstrip("-")
+        assert _sanitize_job_name("REVIEW", "x").startswith("copilot-review-")
+
+    def test_max_63_chars(self) -> None:
+        from gitlab_copilot_agent.k8s_executor import _sanitize_job_name
+
+        result = _sanitize_job_name("review", "a" * 200)
+        assert len(result) <= 63
