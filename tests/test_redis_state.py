@@ -9,7 +9,7 @@ import pytest
 
 from gitlab_copilot_agent.concurrency import (
     DeduplicationStore,
-    Lock,
+    DistributedLock,
     MemoryDedup,
     MemoryLock,
 )
@@ -41,7 +41,7 @@ def fake_redis() -> fakeredis.FakeAsyncRedis:
 
 
 async def test_redis_lock_implements_protocol(fake_redis: fakeredis.FakeAsyncRedis) -> None:
-    assert isinstance(RedisLock(fake_redis), Lock)
+    assert isinstance(RedisLock(fake_redis), DistributedLock)
 
 
 async def test_redis_dedup_implements_protocol(fake_redis: fakeredis.FakeAsyncRedis) -> None:
