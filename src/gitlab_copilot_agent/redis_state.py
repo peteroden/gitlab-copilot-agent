@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from gitlab_copilot_agent.concurrency import (
     DeduplicationStore,
-    DistributedLock,
+    Lock,
     MemoryDedup,
     MemoryLock,
 )
@@ -73,6 +73,10 @@ class RedisLock:
                 _EXTEND_SCRIPT, 1, lock_key, token, str(ttl_seconds)
             )
 
+    async def aclose(self) -> None:
+        """Close the underlying Redis connection."""
+        await self._client.aclose()  # type: ignore[union-attr]
+
 
 class RedisDedup:
     """Redis-backed deduplication store using SET + TTL."""
@@ -87,9 +91,13 @@ class RedisDedup:
     async def mark_seen(self, key: str, ttl_seconds: int = 3600) -> None:
         await self._client.set(f"{_DEDUP_PREFIX}{key}", "1", ex=ttl_seconds)  # type: ignore[misc]
 
+    async def aclose(self) -> None:
+        """Close the underlying Redis connection."""
+        await self._client.aclose()  # type: ignore[union-attr]
 
-def create_lock(backend: str, redis_url: str | None = None) -> DistributedLock:
-    """Factory: create a DistributedLock for the given backend."""
+
+def create_lock(backend: str, redis_url: str | None = None) -> Lock:
+    """Factory: create a Lock for the given backend."""
     if backend == "redis":
         import redis.asyncio as aioredis
 

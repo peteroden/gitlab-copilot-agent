@@ -9,7 +9,7 @@ import pytest
 
 from gitlab_copilot_agent.concurrency import (
     DeduplicationStore,
-    DistributedLock,
+    Lock,
     MemoryDedup,
     MemoryLock,
 )
@@ -41,7 +41,7 @@ def fake_redis() -> fakeredis.FakeAsyncRedis:
 
 
 async def test_redis_lock_implements_protocol(fake_redis: fakeredis.FakeAsyncRedis) -> None:
-    assert isinstance(RedisLock(fake_redis), DistributedLock)
+    assert isinstance(RedisLock(fake_redis), Lock)
 
 
 async def test_redis_dedup_implements_protocol(fake_redis: fakeredis.FakeAsyncRedis) -> None:
@@ -132,6 +132,37 @@ async def test_dedup_different_keys_independent(fake_redis: fakeredis.FakeAsyncR
     await store.mark_seen("key-a", ttl_seconds=DEDUP_TTL)
     assert await store.is_seen("key-a")
     assert not await store.is_seen("key-b")
+
+
+# -- aclose() lifecycle tests --
+
+
+async def test_redis_lock_aclose(fake_redis: fakeredis.FakeAsyncRedis) -> None:
+    """RedisLock.aclose() delegates to the Redis client without error."""
+    lock = RedisLock(fake_redis)
+    await lock.aclose()
+
+
+async def test_redis_dedup_aclose(fake_redis: fakeredis.FakeAsyncRedis) -> None:
+    """RedisDedup.aclose() delegates to the Redis client without error."""
+    store = RedisDedup(fake_redis)
+    await store.aclose()
+
+
+async def test_memory_lock_aclose() -> None:
+    """MemoryLock.aclose() is a no-op and does not raise."""
+    lock = MemoryLock()
+    await lock.aclose()
+    # Still usable after aclose — in-memory has no connection to close
+    async with lock.acquire("key"):
+        pass
+
+
+async def test_memory_dedup_aclose() -> None:
+    """MemoryDedup.aclose() is a no-op and does not raise."""
+    store = MemoryDedup()
+    await store.aclose()
+    assert not await store.is_seen("key")
 
 
 # -- Factory tests --
