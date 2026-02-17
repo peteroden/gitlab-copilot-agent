@@ -1,5 +1,6 @@
 """Tests for TaskExecutor protocol and LocalTaskExecutor."""
 
+from dataclasses import FrozenInstanceError
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -86,6 +87,6 @@ async def test_task_params_immutable() -> None:
         settings=settings,
     )
 
-    # Attempting to modify should raise
-    with pytest.raises(Exception):  # dataclass frozen raises FrozenInstanceError or AttributeError
+    # Attempting to modify should raise FrozenInstanceError or AttributeError
+    with pytest.raises((FrozenInstanceError, AttributeError)):
         task.task_id = "new-id"  # type: ignore[misc]

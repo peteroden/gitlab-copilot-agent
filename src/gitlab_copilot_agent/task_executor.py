@@ -16,7 +16,7 @@ from gitlab_copilot_agent.copilot_session import run_copilot_session
 @dataclass(frozen=True)
 class TaskParams:
     """Parameters for a Copilot task execution.
-    
+
     For LocalTaskExecutor, repo_url should be a local filesystem path to an
     already-cloned repository. For KubernetesTaskExecutor (future), it's a URL.
     """
