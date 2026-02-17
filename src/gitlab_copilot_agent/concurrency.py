@@ -22,6 +22,8 @@ class DistributedLock(Protocol):
 
     def acquire(self, key: str, ttl_seconds: int = 300) -> AbstractAsyncContextManager[None]: ...
 
+    async def aclose(self) -> None: ...
+
 
 @runtime_checkable
 class DeduplicationStore(Protocol):
@@ -29,6 +31,8 @@ class DeduplicationStore(Protocol):
 
     async def is_seen(self, key: str) -> bool: ...
     async def mark_seen(self, key: str, ttl_seconds: int = 3600) -> None: ...
+
+    async def aclose(self) -> None: ...
 
 
 class MemoryLock:
@@ -82,6 +86,9 @@ class MemoryLock:
     def __len__(self) -> int:
         return len(self._locks)
 
+    async def aclose(self) -> None:
+        """No-op — in-memory locks need no cleanup."""
+
 
 # Backward compatibility alias
 RepoLockManager = MemoryLock
@@ -120,6 +127,9 @@ class MemoryDedup:
 
     def __len__(self) -> int:
         return len(self._seen)
+
+    async def aclose(self) -> None:
+        """No-op — in-memory store needs no cleanup."""
 
 
 class ProcessedIssueTracker:

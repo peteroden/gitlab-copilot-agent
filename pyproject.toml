@@ -22,6 +22,7 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-grpc==1.30.0",
     "opentelemetry-instrumentation-fastapi==0.51b0",
     "opentelemetry-instrumentation-httpx==0.51b0",
+    "redis[hiredis]>=7.2.0",
 ]
 
 [project.optional-dependencies]
@@ -54,5 +55,9 @@ packages = ["src/gitlab_copilot_agent"]
 
 [dependency-groups]
 dev = [
+    "fakeredis>=2.34.0",
+    "lupa>=2.6",
+    "pytest-asyncio>=0.25.3",
     "pytest-cov>=7.0.0",
+    "ruff>=0.9.6",
 ]
