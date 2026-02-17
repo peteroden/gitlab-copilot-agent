@@ -2,7 +2,7 @@
 
 ## Status
 
-**ACCEPTED** — Implemented in PRs #51-#56
+**SUPERSEDED** by [ADR-0003](0003-kubernetes-migration-plan.md) — Implemented in PRs #51-#56
 
 ## Context
 

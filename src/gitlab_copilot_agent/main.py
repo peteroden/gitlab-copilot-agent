@@ -21,7 +21,6 @@ from gitlab_copilot_agent.git_operations import CLONE_DIR_PREFIX
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_poller import JiraPoller
-from gitlab_copilot_agent.process_sandbox import get_sandbox
 from gitlab_copilot_agent.project_mapping import ProjectMap
 from gitlab_copilot_agent.telemetry import (
     add_trace_context,
@@ -59,11 +58,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = Settings()
     _cleanup_stale_repos(settings.clone_dir)
     app.state.settings = settings
-
-    # Validate sandbox configuration at startup
-    sandbox = get_sandbox(settings)
-    sandbox.preflight()
-    await log.ainfo("sandbox_method_configured", method=settings.sandbox_method)
 
     # Shared lock manager for both webhook and Jira flows
     repo_locks = RepoLockManager()
