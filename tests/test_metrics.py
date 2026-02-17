@@ -50,9 +50,6 @@ def _setup_test_meter() -> InMemoryMetricReader:
     app_metrics.copilot_session_duration = meter.create_histogram(
         "copilot_session_duration_seconds", unit="s"
     )
-    app_metrics.sandbox_duration = meter.create_histogram("sandbox_duration_seconds", unit="s")
-    app_metrics.sandbox_active = meter.create_up_down_counter("sandbox_active", unit="1")
-    app_metrics.sandbox_outcome_total = meter.create_counter("sandbox_outcome_total", unit="1")
     return reader
 
 
@@ -111,25 +108,6 @@ def test_copilot_session_duration_records_task_type() -> None:
     points = _get_metric_value(reader, "copilot_session_duration_seconds")
     task_types = {p["attributes"]["task_type"] for p in points}
     assert task_types == {"review", "coding"}
-
-
-def test_sandbox_outcome_with_method_and_outcome() -> None:
-    reader = _setup_test_meter()
-    app_metrics.sandbox_outcome_total.add(1, {"method": "docker", "outcome": "success"})
-    app_metrics.sandbox_outcome_total.add(1, {"method": "docker", "outcome": "error"})
-    app_metrics.sandbox_outcome_total.add(1, {"method": "bwrap", "outcome": "success"})
-
-    points = _get_metric_value(reader, "sandbox_outcome_total")
-    assert len(points) == 3
-
-
-def test_sandbox_duration_includes_labels() -> None:
-    reader = _setup_test_meter()
-    app_metrics.sandbox_duration.record(5.0, {"method": "docker", "outcome": "success"})
-
-    points = _get_metric_value(reader, "sandbox_duration_seconds")
-    assert len(points) == 1
-    assert points[0]["attributes"] == {"method": "docker", "outcome": "success"}
 
 
 # -- Integration tests: verify metrics recorded through real code paths --

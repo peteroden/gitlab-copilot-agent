@@ -2,7 +2,7 @@
 
 ## Status
 
-**ACCEPTED** — Implemented in PRs #51-#56
+**SUPERSEDED by ADR-0003** — K8s pod boundary provides isolation. Process-level sandboxing removed in Issue #87.
 
 ## Context
 
