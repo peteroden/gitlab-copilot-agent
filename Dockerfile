@@ -56,5 +56,10 @@ RUN uv sync --no-dev --frozen && \
 COPY --chown=app:app src/ src/
 COPY --chown=app:app scripts/entrypoint.sh /opt/entrypoint.sh
 EXPOSE 8000
+
+# Default entrypoint for the webhook server
 ENTRYPOINT ["/opt/entrypoint.sh"]
 CMD ["uv", "run", "uvicorn", "gitlab_copilot_agent.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Task runner entrypoint for k8s Job pods
+# Usage: docker run --entrypoint python <image> -m gitlab_copilot_agent.task_runner
