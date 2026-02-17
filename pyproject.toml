@@ -38,7 +38,10 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--cov=gitlab_copilot_agent --cov-report=term-missing --cov-fail-under=90"
+addopts = "--cov=gitlab_copilot_agent --cov-report=term-missing --cov-fail-under=90 --ignore=tests/test_k8s_integration.py -m 'not k8s'"
+markers = [
+    "k8s: requires a running k8s cluster (deselect with '-m \"not k8s\"')",
+]
 
 [tool.mypy]
 strict = true

@@ -98,7 +98,7 @@ class KubernetesTaskExecutor:
         container = k8s.V1Container(
             name="task",
             image=self._settings.k8s_job_image,
-            command=["python", "-m", "gitlab_copilot_agent.task_runner"],
+            command=["uv", "run", "python", "-m", "gitlab_copilot_agent.task_runner"],
             env=env,
             resources=k8s.V1ResourceRequirements(
                 limits={
