@@ -84,7 +84,7 @@ class KubernetesTaskExecutor:
     # -- k8s helpers (synchronous, called via to_thread) ------------------
 
     def _load_config(self) -> None:
-        from kubernetes import config as k8s_config  # type: ignore[import-not-found]
+        from kubernetes import config as k8s_config  # type: ignore[import-not-found,import-untyped,unused-ignore]  # noqa: I001
 
         try:
             k8s_config.load_incluster_config()
