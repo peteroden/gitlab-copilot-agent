@@ -299,13 +299,46 @@ GitLab Webhook → FastAPI /webhook → Clone repo → Copilot agent review → 
 
 ## Local Kubernetes Development
 
-Run the full stack locally using [k3d](https://k3d.io) (k3s-in-Docker).
+Run the full stack locally using [k3d](https://k3d.io) (k3s-in-Docker). All tooling runs inside the devcontainer — no host-side k8s tools required.
 
-### Prerequisites
+### Devcontainer Tooling
 
-Docker, [k3d](https://k3d.io), kubectl, Helm 3.
+The devcontainer includes everything needed for local k8s development:
 
-### Quick start
+| Tool | Installed via | Purpose |
+|------|--------------|---------|
+| Docker | `docker-in-docker` devcontainer feature | Container runtime for k3d nodes |
+| kubectl | `kubectl-helm-minikube` devcontainer feature | Cluster interaction |
+| Helm 3 | `kubectl-helm-minikube` devcontainer feature | Chart deployment |
+| k3d v5.7.5 | `postCreateCommand` install script | Local k3s cluster management |
+
+**Docker-in-Docker** (not Docker-outside-of-Docker) is required because k3d creates its own Docker containers, networks, and port bindings. DooD would cause path and networking mismatches between the devcontainer and host.
+
+### Dev Flow
+
+```
+┌─────────────────────────────────────────────────┐
+│                 Devcontainer                     │
+│                                                  │
+│  1. Start devcontainer (tools auto-installed)    │
+│  2. make k3d-up       → k3d cluster (~30s)       │
+│  3. make k3d-build     → docker build + import    │
+│  4. make k3d-deploy    → helm install             │
+│  5. Edit code → make k3d-redeploy (iterate)       │
+│  6. make k3d-down      → teardown when done       │
+│                                                  │
+│  Docker-in-Docker daemon (persists across sleep)  │
+│  └── k3d cluster (k3s nodes as containers)        │
+│      └── Controller pod + Redis pod + Job pods    │
+└─────────────────────────────────────────────────┘
+```
+
+**Cluster lifecycle:**
+- `make k3d-up` creates a fresh cluster (~30-40s first time).
+- Devcontainer **sleep/restart**: cluster recovers in ~5-10s (DinD volume persists).
+- Devcontainer **rebuild**: full cold start (DinD volume destroyed, re-run `make k3d-up`).
+
+### Quick Start
 
 ```bash
 cp .env.k3d.example .env.k3d   # fill in real values
@@ -326,7 +359,7 @@ make k3d-deploy                 # deploy via Helm
 | `make k3d-logs`    | Tail controller logs              |
 | `make k3d-status`  | Show pods, jobs, and services     |
 
-### Webhook testing
+### Webhook Testing
 
 The controller is exposed on `localhost:8080` via the k3d loadbalancer (override with `K3D_HOST_PORT=9000 make k3d-up`).
 For direct port-forward:
@@ -334,3 +367,38 @@ For direct port-forward:
 ```bash
 kubectl port-forward svc/copilot-agent 8000:8000
 ```
+
+### Live E2E Verification
+
+After deploying to the k3d cluster, verify the full system end-to-end:
+
+```bash
+# 1. Check all pods are running
+make k3d-status
+
+# 2. Verify webhook endpoint responds
+curl -s http://localhost:8080/health
+
+# 3. Send a test webhook payload (dry run)
+curl -X POST http://localhost:8080/webhook \
+  -H "Content-Type: application/json" \
+  -H "X-Gitlab-Token: $(grep GITLAB_WEBHOOK_SECRET .env.k3d | cut -d= -f2)" \
+  -d '{"object_kind": "merge_request", "event_type": "merge_request"}'
+
+# 4. Watch logs during a live MR event
+make k3d-logs
+```
+
+**Full live E2E** (requires GitLab + ngrok/tunnel):
+
+1. Start tunnel: `ngrok http 8080` (or use VS Code port forwarding)
+2. Configure webhook in GitLab project pointing to tunnel URL
+3. Open/update an MR → observe agent review in `make k3d-logs`
+4. Verify inline comments appear on the MR
+
+**Jira live E2E** (requires Jira credentials in `.env.k3d`):
+
+1. Transition a Jira issue to the trigger status
+2. Watch `make k3d-logs` for poller pickup
+3. Verify branch + MR creation in GitLab
+4. Verify agent self-review on the new MR
