@@ -101,7 +101,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await poller.stop()
     if jira_client:
         await jira_client.close()
-    await dedup_store.aclose()
+    try:
+        await dedup_store.aclose()
+    except Exception:
+        await log.aexception("dedup_store_close_failed")
     await repo_locks.aclose()
     await log.ainfo("service stopped")
     shutdown_telemetry()

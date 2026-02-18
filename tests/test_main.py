@@ -162,3 +162,34 @@ async def test_shutdown_call_ordering(
             pass
 
     assert call_order == EXPECTED_SHUTDOWN_ORDER
+
+
+@pytest.mark.asyncio
+async def test_shutdown_continues_when_dedup_close_fails(
+    env_vars: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify repo_locks and telemetry shut down even if dedup.aclose() raises."""
+    call_order: list[str] = []
+
+    mock_dedup = AsyncMock()
+    mock_dedup.aclose = AsyncMock(side_effect=RuntimeError("redis gone"))
+
+    mock_locks = AsyncMock()
+    mock_locks.aclose = AsyncMock(side_effect=lambda: call_order.append("repo_locks.aclose"))
+
+    test_app = FastAPI()
+
+    with (
+        patch("gitlab_copilot_agent.main.create_lock", return_value=mock_locks),
+        patch("gitlab_copilot_agent.main.create_dedup", return_value=mock_dedup),
+        patch(
+            "gitlab_copilot_agent.main.shutdown_telemetry",
+            side_effect=lambda: call_order.append("shutdown_telemetry"),
+        ),
+    ):
+        async with lifespan(test_app):
+            pass
+
+    assert "repo_locks.aclose" in call_order
+    assert "shutdown_telemetry" in call_order
