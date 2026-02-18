@@ -32,3 +32,16 @@ If `devcontainer exec` fails:
 1. Run `devcontainer up --workspace-folder .`
 2. Retry with `devcontainer exec`
 3. Never fall back to host execution
+
+## Worktree Isolation
+
+**Inside the devcontainer** (VS Code, Codespaces, or any container-native context): worktrees are local directories. Use them directly — no `docker` or `devcontainer` commands needed. Run lint, test, and build from the worktree path as normal.
+
+**On the host**: each worktree should ideally have its own devcontainer instance (`devcontainer up --workspace-folder <worktree-path>`). This provides full isolation.
+
+If multiple worktrees share a single devcontainer on the host (e.g., to save resources):
+
+1. The container only mounts one workspace. Use `docker cp` to transfer files in for lint/test.
+2. **Always restore the container's workspace after running commands**: `git checkout -- <files>` inside the container, or `docker cp` the originals back.
+3. Never leave modified files from a worktree inside a shared container — subsequent agents will see stale or conflicting state.
+4. Prefer dedicated containers when parallelizing agents to avoid this complexity entirely.

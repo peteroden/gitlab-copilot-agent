@@ -37,3 +37,11 @@ Real examples from production sessions:
 - Skipping review for "small" changes (small changes cause big outages)
 - Treating all findings as blocking (Medium findings can be follow-up issues)
 - Reviewing style instead of substance (formatters handle style)
+
+## Pre-Review Gate
+
+Before reviewing logic, verify the author ran both linter and formatter:
+
+1. Check the diff for formatting-only changes (inconsistent whitespace, import ordering). If present, reject — the author didn't run the formatter.
+2. If you can run commands, execute the project's lint and format-check commands on the changed files. Report any failures as **High** severity (broken CI pipeline).
+3. Only proceed to logic review after lint/format is clean.
