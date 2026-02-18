@@ -21,7 +21,7 @@ from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_poller import JiraPoller
 from gitlab_copilot_agent.project_mapping import ProjectMap
-from gitlab_copilot_agent.redis_state import create_lock
+from gitlab_copilot_agent.redis_state import create_dedup, create_lock
 from gitlab_copilot_agent.task_executor import LocalTaskExecutor, TaskExecutor
 from gitlab_copilot_agent.telemetry import (
     add_trace_context,
@@ -76,6 +76,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Shared lock manager for both webhook and Jira flows
     repo_locks = create_lock(settings.state_backend, settings.redis_url)
     app.state.repo_locks = repo_locks
+    dedup_store = create_dedup(settings.state_backend, settings.redis_url)
+    app.state.dedup_store = dedup_store
     app.state.review_tracker = ReviewedMRTracker()
 
     poller: JiraPoller | None = None
@@ -99,6 +101,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await poller.stop()
     if jira_client:
         await jira_client.close()
+    try:
+        await dedup_store.aclose()
+    except Exception:
+        await log.aexception("dedup_store_close_failed")
     await repo_locks.aclose()
     await log.ainfo("service stopped")
     shutdown_telemetry()
