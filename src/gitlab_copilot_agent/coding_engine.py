@@ -65,8 +65,12 @@ def ensure_gitignore(repo_root: str) -> bool:
     """Ensure .gitignore at *repo_root* contains standard Python ignore patterns.
 
     Returns True if the file was created or modified.
+    Refuses to write if .gitignore is a symlink or resolves outside repo_root.
     """
     path = Path(repo_root) / ".gitignore"
+    root_resolved = Path(repo_root).resolve()
+    if path.is_symlink() or (path.exists() and not path.resolve().is_relative_to(root_resolved)):
+        return False
     content = path.read_text() if path.exists() else ""
     existing = set(content.splitlines())
     missing = [p for p in _PYTHON_GITIGNORE_PATTERNS if p not in existing]

@@ -36,6 +36,13 @@ class TestEnsureGitignore:
         for pattern in _PYTHON_GITIGNORE_PATTERNS:
             assert pattern in content
 
+    def test_refuses_symlink(self, tmp_path: Path) -> None:
+        target = tmp_path / "elsewhere.txt"
+        target.write_text("original")
+        (tmp_path / ".gitignore").symlink_to(target)
+        assert ensure_gitignore(str(tmp_path)) is False
+        assert target.read_text() == "original"
+
 
 async def test_run_coding_task_delegates_to_executor(tmp_path: Path) -> None:
     mock_executor = AsyncMock()
