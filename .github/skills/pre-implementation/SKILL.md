@@ -59,3 +59,11 @@ For infrastructure, security, or integration-heavy tasks:
 - **Single-line fixes** (typos, config tweaks): skip entirely.
 - **Documentation-only changes** (README updates, comment fixes): skip steps 2 and 3. Note: new skills, instructions, or agent files are NOT documentation-only — they define process and require product/architecture review.
 - **Exploratory/spike work**: skip, but re-run before converting to a real PR.
+
+## Fast Path
+
+For issues that already have testable acceptance criteria in the GitHub Issue AND the expected diff is ≤100 lines:
+
+- Skip steps 1–3 (requirements, design, and UX are already validated).
+- Start at step 4 (Work Tracked).
+- Still complete steps 5 and 6.

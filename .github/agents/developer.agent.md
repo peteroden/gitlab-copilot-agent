@@ -65,6 +65,17 @@ Before finishing any implementation:
 - Would a senior dev say "why didn't you just..."?
 - Prefer boring, obvious solutions — cleverness is expensive.
 
+### Simplicity Budget
+
+Hard limits on diff size by commit type. If you exceed the limit, **stop and report** before continuing — do not try to trim after the fact.
+
+| Type | Max diff lines | Action if exceeded |
+|------|---------------|--------------------|
+| `fix` / `chore` | 100 | Stop. Re-evaluate approach — you are likely overengineering. |
+| `feat` / `refactor` | 200 | Split into stacked PRs. |
+
+These are additions + deletions combined. Test files count.
+
 ### Scope Discipline
 
 Surgical precision only:
@@ -99,10 +110,27 @@ Only clean up dead/obsolete code when specifically directed. Never as a side eff
 | C++ | C++ Core Guidelines | clang-format + clang-tidy | cppcheck, `-Wall -Wextra -Werror` |
 | Rust | Rust API Guidelines | rustfmt | clippy (deny warnings) |
 
+## Pre-Commit Verification
+
+**Run BOTH the linter AND the formatter in check mode before every commit.** These are separate tools with separate failure modes. Running one does not guarantee the other passes.
+
+```bash
+# Example (Python — adapt for your stack):
+ruff check .
+ruff format --check .
+
+# Example (TypeScript):
+eslint .
+prettier --check .
+```
+
+If either fails, fix before committing. Do not rely on CI to catch formatting issues.
+
 ## Definition of Done
 
 - [ ] Code builds with zero errors and zero warnings
-- [ ] Linters and formatters pass
+- [ ] Linter passes (zero errors, zero warnings)
+- [ ] Formatter passes in check mode (zero reformatting needed)
 - [ ] Unit tests written and passing (≥90% coverage on project)
 - [ ] No magic strings in tests — all test data uses named constants or shared fixtures
 - [ ] Integration tests written and passing
@@ -110,6 +138,6 @@ Only clean up dead/obsolete code when specifically directed. Never as a side eff
 - [ ] Documentation updated
 - [ ] PR opened with conventional commit messages
 - [ ] PR description includes: what, why, and how to test
-- [ ] PR ≤200 diff lines
+- [ ] PR ≤200 diff lines (fix/chore ≤100 lines)
 - [ ] OWASP self-review completed
 - [ ] No new dependencies without justification

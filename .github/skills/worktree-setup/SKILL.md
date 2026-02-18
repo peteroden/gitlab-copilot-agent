@@ -64,3 +64,13 @@ git branch -d <branch-name>
 - One worktree = one task = one agent = one devcontainer.
 - Worktrees share the same repo objects but have independent working directories.
 - Multiple worktrees can run concurrently — monitor machine resources.
+
+## Shared Devcontainer Warning
+
+If resource constraints prevent one-devcontainer-per-worktree, a single devcontainer can be shared. This introduces friction:
+
+- Files must be `docker cp`'d into the container for lint/test runs.
+- The container workspace must be restored after each run (`git checkout -- .` inside the container).
+- Agents can accidentally pollute each other's state if restoration is skipped.
+
+**Prefer dedicated containers.** Only share when machine resources (RAM, CPU) make it necessary. If sharing, document which container ID is shared and add restoration steps to every agent's workflow.
