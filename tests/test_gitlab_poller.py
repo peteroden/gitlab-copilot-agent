@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -93,3 +94,42 @@ async def test_backoff_increases_and_resets() -> None:
         await poller._poll_once()
     poller._failures = 0
     assert poller._failures == 0
+
+
+@pytest.mark.asyncio
+async def test_start_stop_lifecycle() -> None:
+    poller, cl, _ = _poller()
+    cl.list_project_mrs.return_value = []
+    await poller.start()
+    assert poller._task is not None
+    assert not poller._task.done()
+    await poller.stop()
+    assert poller._task.done()
+
+
+@pytest.mark.asyncio
+async def test_stop_is_noop_when_not_started() -> None:
+    poller, _, _ = _poller()
+    await poller.stop()  # should not raise
+
+
+@pytest.mark.asyncio
+@patch(_HANDLE, new_callable=AsyncMock)
+async def test_poll_loop_resets_failures_on_success(mock_hr: AsyncMock) -> None:
+    poller, cl, _ = _poller()
+    call_count = 0
+
+    async def _fail_then_succeed(pid: int, **kwargs: object) -> list[MRListItem]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("transient")
+        return []
+
+    cl.list_project_mrs.side_effect = _fail_then_succeed
+    poller._interval = 0  # no delay in test
+    await poller.start()
+    # Let the loop run a few iterations
+    await asyncio.sleep(0.15)
+    await poller.stop()
+    assert poller._failures == 0  # reset after success
