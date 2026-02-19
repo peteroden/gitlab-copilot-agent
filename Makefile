@@ -56,3 +56,36 @@ k3d-status:
 	@kubectl get jobs -n $(HELM_NS) --sort-by=.metadata.creationTimestamp
 	@echo "\n=== Services ==="
 	@kubectl get svc -n $(HELM_NS) -l app.kubernetes.io/instance=$(HELM_RELEASE)
+
+# --- E2E integration tests ---
+E2E_CLUSTER := copilot-e2e
+E2E_ENV     := tests/e2e/.env.e2e
+
+.PHONY: e2e-test e2e-up e2e-down
+
+e2e-up:
+	k3d cluster create $(E2E_CLUSTER) -p "8080:8000@loadbalancer" --wait
+
+e2e-down:
+	-k3d cluster delete $(E2E_CLUSTER) 2>/dev/null
+
+e2e-test: K3D_CLUSTER := $(E2E_CLUSTER)
+e2e-test: K3D_ENV_FILE := $(E2E_ENV)
+e2e-test:
+	@echo "=== Starting mock services ==="
+	@uv run python tests/e2e/mock_gitlab.py &
+	@uv run python tests/e2e/mock_llm.py &
+	@echo "=== Building and deploying ==="
+	$(MAKE) k3d-build K3D_CLUSTER=$(E2E_CLUSTER)
+	@./scripts/gen-k3d-values.sh $(E2E_ENV) > /tmp/k3d-values.yaml
+	@HOST_IP=$$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' k3d-$(E2E_CLUSTER)-server-0 | head -1) && \
+		helm upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
+			-f $(HELM_CHART)/values-local.yaml \
+			-f /tmp/k3d-values.yaml \
+			--set 'extraEnv.ALLOW_HTTP_CLONE=true' \
+			--set "hostAliases[0].ip=$$HOST_IP" \
+			--set 'hostAliases[0].hostnames[0]=host.k3d.internal' \
+			-n $(HELM_NS) --wait --timeout 120s
+	@rm -f /tmp/k3d-values.yaml
+	@echo "=== Running E2E tests ==="
+	@./tests/e2e/run.sh http://localhost:8080 http://localhost:9999

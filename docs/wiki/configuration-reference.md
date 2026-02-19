@@ -445,5 +445,30 @@ Helm `values.yaml` maps to env vars via `configmap.yaml` and `secret.yaml`:
 | `jira.inProgressStatus` | `JIRA_IN_PROGRESS_STATUS` | ❌ |
 | `jira.inReviewStatus` | `JIRA_IN_REVIEW_STATUS` | ❌ |
 | `jira.pollInterval` | `JIRA_POLL_INTERVAL` | ❌ |
+| `extraEnv` | (arbitrary key-value pairs) | ❌ |
+| `hostAliases` | Pod `/etc/hosts` entries | ❌ |
 
 See `helm/gitlab-copilot-agent/values.yaml` for full reference.
+
+---
+
+## Testing-Only Configuration
+
+These settings are used exclusively for E2E testing and must never be enabled in production.
+
+### `ALLOW_HTTP_CLONE`
+- **Type**: `str`
+- **Required**: ❌ No
+- **Default**: unset (HTTP clone disabled)
+- **Description**: When set to `true`, `1`, or `yes`, allows git clone over HTTP instead of requiring HTTPS. Used by E2E tests with mock git servers.
+- **⚠️ Security**: Never enable in production — disables TLS verification for clone URLs.
+
+### `extraEnv` (Helm)
+- **Type**: `map`
+- **Default**: `{}`
+- **Description**: Arbitrary key-value pairs injected into the ConfigMap. Empty values are skipped. Used to pass test-only env vars like `ALLOW_HTTP_CLONE` without adding them to the chart schema.
+
+### `hostAliases` (Helm)
+- **Type**: `list`
+- **Default**: `[]`
+- **Description**: Pod-level `/etc/hosts` entries. Used in E2E tests to resolve `host.k3d.internal` to the Docker host gateway IP so the agent pod can reach mock services running on the host.

@@ -44,3 +44,5 @@ jira:
   inProgressStatus: "In Progress"
   inReviewStatus: "In Review"
   pollInterval: 30
+extraEnv: {}
+hostAliases: []

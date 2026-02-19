@@ -1,0 +1,73 @@
+name: E2E Tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: "v1.29.0"
+
+      - name: Install k3d
+        run: |
+          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.8.3 bash
+          k3d version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Create cluster
+        run: |
+          k3d cluster create copilot-e2e \
+            -p "8080:8000@loadbalancer" \
+            --wait
+          kubectl get nodes
+
+      - name: Build and deploy
+        run: |
+          # Detect host IP accessible from k3d pods
+          HOST_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' k3d-copilot-e2e-server-0 | head -1)
+          echo "Host IP: $HOST_IP"
+          docker build -t gitlab-copilot-agent:local .
+          k3d image import gitlab-copilot-agent:local -c copilot-e2e
+          ./scripts/gen-k3d-values.sh tests/e2e/.env.e2e > /tmp/k3d-values.yaml
+          helm upgrade --install copilot-agent helm/gitlab-copilot-agent \
+            -f helm/gitlab-copilot-agent/values-local.yaml \
+            -f /tmp/k3d-values.yaml \
+            --set 'extraEnv.ALLOW_HTTP_CLONE=true' \
+            --set "hostAliases[0].ip=$HOST_IP" \
+            --set 'hostAliases[0].hostnames[0]=host.k3d.internal' \
+            --wait --timeout 120s
+
+      - name: Start mock services
+        run: |
+          uv run python tests/e2e/mock_gitlab.py &
+          uv run python tests/e2e/mock_llm.py &
+
+      - name: Run E2E tests
+        run: ./tests/e2e/run.sh http://localhost:8080 http://localhost:9999
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/e2e-logs
+          kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=200 > /tmp/e2e-logs/agent.log 2>&1 || true
+          kubectl describe pods -l app.kubernetes.io/name=gitlab-copilot-agent > /tmp/e2e-logs/describe.log 2>&1 || true
+          kubectl get events --sort-by='.lastTimestamp' > /tmp/e2e-logs/events.log 2>&1 || true
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-pod-logs
+          path: /tmp/e2e-logs/
+
+      - name: Teardown
+        if: always()
+        run: k3d cluster delete copilot-e2e
