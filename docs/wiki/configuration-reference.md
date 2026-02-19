@@ -429,5 +429,12 @@ Helm `values.yaml` maps to env vars via `configmap.yaml` and `secret.yaml`:
 | `redis.enabled` | `REDIS_URL` (auto-generated) | ❌ |
 | `telemetry.otlpEndpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | ❌ |
 | `telemetry.environment` | `DEPLOYMENT_ENV` | ❌ |
+| `jira.url` | `JIRA_URL` | ❌ |
+| `jira.email` | `JIRA_EMAIL` | ✅ |
+| `jira.apiToken` | `JIRA_API_TOKEN` | ✅ |
+| `jira.projectMap` | `JIRA_PROJECT_MAP` | ❌ |
+| `jira.triggerStatus` | `JIRA_TRIGGER_STATUS` | ❌ |
+| `jira.inProgressStatus` | `JIRA_IN_PROGRESS_STATUS` | ❌ |
+| `jira.pollInterval` | `JIRA_POLL_INTERVAL` | ❌ |
 
 See `helm/gitlab-copilot-agent/values.yaml` for full reference.
