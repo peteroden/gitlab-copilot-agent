@@ -36,7 +36,13 @@ def init_telemetry() -> None:
     from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
     from opentelemetry.sdk.resources import Resource
 
-    resource = Resource.create({"service.name": _SERVICE_NAME})
+    resource = Resource.create(
+        {
+            "service.name": _SERVICE_NAME,
+            "service.version": os.environ.get("SERVICE_VERSION", "0.1.0"),
+            "deployment.environment": os.environ.get("DEPLOYMENT_ENV", ""),
+        }
+    )
 
     # Traces
     tracer_provider = TracerProvider(resource=resource)
