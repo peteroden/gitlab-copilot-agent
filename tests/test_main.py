@@ -193,3 +193,32 @@ async def test_shutdown_continues_when_dedup_close_fails(
 
     assert "repo_locks.aclose" in call_order
     assert "shutdown_telemetry" in call_order
+
+
+# -- Allowlist tests --
+
+RESOLVED_PROJECT_ID = 42
+
+
+@pytest.mark.asyncio
+async def test_lifespan_resolves_allowlist(
+    env_vars: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When GITLAB_PROJECTS is set, lifespan resolves project IDs."""
+    monkeypatch.setenv("GITLAB_PROJECTS", "group/project, 99")
+    test_app = FastAPI()
+
+    mock_client = AsyncMock()
+    mock_client.resolve_project = AsyncMock(side_effect=[RESOLVED_PROJECT_ID, 99])
+    with patch("gitlab_copilot_agent.main.GitLabClient", return_value=mock_client):
+        async with lifespan(test_app):
+            assert test_app.state.allowed_project_ids == {RESOLVED_PROJECT_ID, 99}
+
+
+@pytest.mark.asyncio
+async def test_lifespan_allowlist_none_when_unset(env_vars: None) -> None:
+    """When GITLAB_PROJECTS is not set, allowed_project_ids is None."""
+    test_app = FastAPI()
+    async with lifespan(test_app):
+        assert test_app.state.allowed_project_ids is None

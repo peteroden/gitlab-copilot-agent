@@ -139,6 +139,7 @@ async def client(env_vars: None) -> AsyncIterator[AsyncClient]:
     app.state.repo_locks = RepoLockManager()
     app.state.dedup_store = MemoryDedup()
     app.state.review_tracker = ReviewedMRTracker()
+    app.state.allowed_project_ids = None
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

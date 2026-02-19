@@ -61,6 +61,14 @@ async def webhook(
     _validate_webhook_token(x_gitlab_token, settings.gitlab_webhook_secret)
 
     body = await request.json()
+
+    # Project allowlist check
+    allowed = request.app.state.allowed_project_ids
+    if allowed is not None:
+        project_id = body.get("project", {}).get("id")
+        if project_id not in allowed:
+            return {"status": "ignored", "reason": "project not in allowlist"}
+
     object_kind = body.get("object_kind")
     webhook_received_total.add(1, {"object_kind": object_kind or "unknown"})
 
