@@ -222,3 +222,89 @@ async def test_lifespan_allowlist_none_when_unset(env_vars: None) -> None:
     test_app = FastAPI()
     async with lifespan(test_app):
         assert test_app.state.allowed_project_ids is None
+
+
+# -- GitLab poller wiring tests --
+
+POLLER_PROJECT_ID = 42
+
+
+@pytest.mark.asyncio
+async def test_lifespan_starts_gitlab_poller(
+    env_vars: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When GITLAB_POLL=true and GITLAB_PROJECTS set, poller starts."""
+    monkeypatch.setenv("GITLAB_POLL", "true")
+    monkeypatch.setenv("GITLAB_PROJECTS", "group/project")
+    test_app = FastAPI()
+
+    mock_gl = AsyncMock()
+    mock_gl.resolve_project = AsyncMock(return_value=POLLER_PROJECT_ID)
+
+    mock_poller = AsyncMock()
+    mock_poller.start = AsyncMock()
+    mock_poller.stop = AsyncMock()
+    mock_poller._interval = 30
+
+    with (
+        patch("gitlab_copilot_agent.main.GitLabClient", return_value=mock_gl),
+        patch("gitlab_copilot_agent.main.GitLabPoller", return_value=mock_poller),
+    ):
+        async with lifespan(test_app):
+            mock_poller.start.assert_called_once()
+            assert test_app.state.gl_poller is mock_poller
+        mock_poller.stop.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_no_poller_when_poll_disabled(env_vars: None) -> None:
+    """When GITLAB_POLL is not set, no poller is created."""
+    test_app = FastAPI()
+    async with lifespan(test_app):
+        assert not hasattr(test_app.state, "gl_poller")
+
+
+def test_config_poll_requires_projects(
+    env_vars: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GITLAB_POLL=true without GITLAB_PROJECTS raises."""
+    monkeypatch.setenv("GITLAB_POLL", "true")
+    with pytest.raises(ValueError, match="GITLAB_PROJECTS is required"):
+        make_settings(gitlab_poll=True)
+
+
+@pytest.mark.usefixtures("env_vars")
+async def test_health_includes_poller_status(client: AsyncClient) -> None:
+    """Health endpoint includes gitlab_poller when active."""
+    resp = await client.get("/health")
+    assert resp.status_code == 200
+    # Without poller, no gitlab_poller key
+    assert "gitlab_poller" not in resp.json()
+
+
+@pytest.mark.usefixtures("env_vars")
+async def test_health_with_poller(client: AsyncClient) -> None:
+    """Health endpoint includes poller status when poller is running."""
+    from unittest.mock import MagicMock
+
+    from gitlab_copilot_agent.main import app
+
+    mock_task = MagicMock()
+    mock_task.done.return_value = False
+
+    mock_poller = MagicMock()
+    mock_poller._task = mock_task
+    mock_poller._failures = 0
+    mock_poller._watermark = "2026-01-01T00:00:00Z"
+    app.state.gl_poller = mock_poller
+
+    resp = await client.get("/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["gitlab_poller"]["running"] is True
+    assert data["gitlab_poller"]["failures"] == 0
+    assert data["gitlab_poller"]["watermark"] == "2026-01-01T00:00:00Z"
+
+    del app.state.gl_poller
