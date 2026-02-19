@@ -56,7 +56,7 @@ helm/gitlab-copilot-agent/
     ├── configmap.yaml      # Non-secret config
     ├── secret.yaml         # Secrets (tokens, keys)
     ├── deployment.yaml     # Main application deployment
-    ├── service.yaml        # LoadBalancer service
+    ├── service.yaml        # Service (default: ClusterIP; LoadBalancer for k3d)
     ├── serviceaccount.yaml # K8s ServiceAccount
     ├── rbac.yaml           # Role + RoleBinding (Job management)
     ├── redis.yaml          # Redis StatefulSet + Service
@@ -235,8 +235,8 @@ make k3d-redeploy  # = k3d-build + k3d-deploy
 
 **3. Test webhook**:
 ```bash
-# Forward port (if not using LoadBalancer)
-kubectl port-forward svc/gitlab-copilot-agent 8080:8000
+# Service is exposed via k3d loadbalancer — no port-forward needed
+curl -s http://localhost:8080/health
 
 # Send test webhook
 curl -X POST http://localhost:8080/webhook \
