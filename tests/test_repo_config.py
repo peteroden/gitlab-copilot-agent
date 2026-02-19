@@ -276,6 +276,17 @@ def test_copilot_instructions_not_loaded_from_claude(tmp_path: Path) -> None:
     assert config.instructions is None
 
 
+def test_agent_invalid_metadata_skipped(tmp_path: Path) -> None:
+    """Agent with invalid metadata (e.g. tools as string) is skipped, not crash."""
+    agents_dir = tmp_path / ".github" / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "bad.agent.md").write_text(
+        "---\nname: bad\ntools: read\n---\n\nPrompt.\n"
+    )
+    config = discover_repo_config(str(tmp_path))
+    assert len(config.custom_agents) == 0
+
+
 def test_agents_md_not_loaded_from_config_roots(tmp_path: Path) -> None:
     (tmp_path / ".github").mkdir()
     (tmp_path / ".github" / "AGENTS.md").write_text("Wrong location.")

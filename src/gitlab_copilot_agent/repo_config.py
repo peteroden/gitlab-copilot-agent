@@ -81,7 +81,11 @@ def _parse_agent_file(path: Path) -> AgentConfig | None:
     for key in _CUSTOM_AGENT_FIELDS - {"name"}:
         if key in meta:
             fields[key] = meta[key]
-    return AgentConfig(**fields)
+    try:
+        return AgentConfig(**fields)
+    except Exception:
+        log.warning("agent_parse_skipped", path=str(path), reason="invalid metadata")
+        return None
 
 
 def _resolve_real_path(path: Path, repo_root: Path) -> Path | None:
