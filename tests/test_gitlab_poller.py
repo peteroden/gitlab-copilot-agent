@@ -220,3 +220,27 @@ async def test_note_payload_has_correct_project_info(
     assert payload.project.path_with_namespace == PATH_WITH_NS
     assert payload.project.git_http_url == f"{GITLAB_URL}/{PATH_WITH_NS}.git"
     assert payload.user.username == NOTE_AUTHOR.username
+
+
+@pytest.mark.asyncio
+@patch(_HANDLE_COMMENT, new_callable=AsyncMock)
+@patch(_HANDLE_REVIEW, new_callable=AsyncMock)
+async def test_note_skips_self_authored_comments(mock_hr: AsyncMock, mock_hc: AsyncMock) -> None:
+    """Agent's own /copilot notes are ignored (consistent with webhook)."""
+    poller, cl, _ = _poller()
+    poller._settings = make_settings(agent_gitlab_username=NOTE_AUTHOR.username)
+    cl.list_project_mrs.return_value = [_mr_item()]
+    cl.list_mr_notes.return_value = [_note_item()]
+    await poller._poll_once()
+    mock_hc.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_start_initializes_watermark() -> None:
+    """Watermark set to 'now' on start to avoid replaying history."""
+    poller, cl, _ = _poller()
+    cl.list_project_mrs.return_value = []
+    assert poller._watermark is None
+    await poller.start()
+    assert poller._watermark is not None
+    await poller.stop()

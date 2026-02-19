@@ -58,6 +58,9 @@ class GitLabPoller:
         self._failures: int = 0
 
     async def start(self) -> None:
+        # Initialize watermark to "now" to avoid replaying historical notes
+        if self._watermark is None:
+            self._watermark = datetime.now(UTC).isoformat()
         self._task = asyncio.create_task(self._poll_loop())
 
     async def stop(self) -> None:
@@ -126,6 +129,10 @@ class GitLabPoller:
                 if note.system:
                     continue
                 if not parse_copilot_command(note.body):
+                    continue
+                # Skip self-authored notes (consistent with webhook)
+                agent_user = self._settings.agent_gitlab_username
+                if agent_user and note.author.username == agent_user:
                     continue
                 note_key = f"note:{project_id}:{mr.iid}:{note.id}"
                 if await self._dedup.is_seen(note_key):
