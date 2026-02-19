@@ -280,9 +280,7 @@ def test_agent_invalid_metadata_skipped(tmp_path: Path) -> None:
     """Agent with invalid metadata (e.g. tools as string) is skipped, not crash."""
     agents_dir = tmp_path / ".github" / "agents"
     agents_dir.mkdir(parents=True)
-    (agents_dir / "bad.agent.md").write_text(
-        "---\nname: bad\ntools: read\n---\n\nPrompt.\n"
-    )
+    (agents_dir / "bad.agent.md").write_text("---\nname: bad\ntools: read\n---\n\nPrompt.\n")
     config = discover_repo_config(str(tmp_path))
     assert len(config.custom_agents) == 0
 
