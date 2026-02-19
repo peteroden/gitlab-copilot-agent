@@ -20,6 +20,16 @@ redis:
     limits: { cpu: 250m, memory: 256Mi }
     requests: { cpu: 50m, memory: 64Mi }
   storage: 1Gi
+telemetry:
+  # Set to enable OpenTelemetry export (e.g. "http://otel-collector:4317")
+  otlpEndpoint: ""
+  # Optional deployment environment label (e.g. "production", "staging")
+  environment: ""
+  collector:
+    image: { repository: otel/opentelemetry-collector-contrib, tag: "0.115.0" }
+    resources:
+      limits: { cpu: 200m, memory: 256Mi }
+      requests: { cpu: 50m, memory: 128Mi }
 jobRunner: { image: "", cpuLimit: "1", memoryLimit: 1Gi, timeout: 600 }
 serviceAccount: { create: true, name: "" }
 gitlab: { url: "", token: "", webhookSecret: "" }
