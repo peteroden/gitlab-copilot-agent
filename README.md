@@ -6,45 +6,126 @@ Automated code review for GitLab Merge Requests, powered by the GitHub Copilot S
 
 ## What It Does
 
-Receives GitLab webhooks when MRs are opened/updated → clones the repo → runs a Copilot agent review → posts inline comments with **apply-able code suggestions** back to the MR.
-
-Also supports **GitLab MR polling** (no webhook needed) and **Jira integration** for automated branch/MR creation.
+- **Webhook-driven reviews**: GitLab MR webhooks trigger Copilot-powered code review with inline suggestions
+- **GitLab polling** (`GITLAB_POLL=true`): Polls GitLab API for open MRs and `/copilot <instruction>` comments — no webhook required
+- **Jira integration**: Polls Jira for issues in a trigger status, creates branches + MRs in GitLab, triggers agent review
+- **`/copilot` commands**: MR comments starting with `/copilot ` trigger the agent with custom instructions (e.g., `/copilot add unit tests`)
+- **Repo-level configuration**: Loads project-specific skills, agents, and instructions from `.github/`, `.claude/`, `AGENTS.md`
+- **Task execution**: Local subprocess or Kubernetes Job isolation per review
+- **K8s executor**: Can run review jobs as Kubernetes Jobs instead of local processes
+- **OTEL observability**: Full OpenTelemetry traces, metrics, and logs when endpoint is configured
 
 > 📖 **[Developer Wiki](docs/wiki/index.md)** — comprehensive architecture docs, module reference, security model, deployment guides, and more.
 
 ## Quick Start
 
+### Docker (simplest)
+
 ```bash
-# 1. Clone and start devcontainer
+docker build -t gitlab-copilot-agent .
+docker run -p 8000:8000 \
+  -e GITLAB_URL=https://gitlab.com \
+  -e GITLAB_TOKEN=glpat-... \
+  -e GITLAB_WEBHOOK_SECRET=secret \
+  -e GITHUB_TOKEN=gho_... \
+  gitlab-copilot-agent
+```
+
+### k3d (full stack with Helm)
+
+```bash
+# 1. Start devcontainer
 devcontainer up --workspace-folder .
 
-# 2. Set environment variables
-export GITLAB_URL=https://gitlab.com
-export GITLAB_TOKEN=glpat-...
-export GITLAB_WEBHOOK_SECRET=your-secret
-export GITHUB_TOKEN=$(gh auth token)
+# 2. Configure environment
+cp .env.k3d.example .env.k3d   # fill in real values
 
-# 3. Run
-devcontainer exec --workspace-folder . uv run uvicorn gitlab_copilot_agent.main:app --port 8000
+# 3. Deploy to k3d
+make k3d-up                     # create k3d cluster
+make k3d-build                  # build & import image
+make k3d-deploy                 # deploy via Helm
 ```
 
 ## Environment Variables
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `GITLAB_URL` | ✅ | — | GitLab instance URL |
-| `GITLAB_TOKEN` | ✅ | — | GitLab API token (needs `api` scope) |
-| `GITLAB_WEBHOOK_SECRET` | ✅ | — | Secret for validating webhook payloads |
-| `GITHUB_TOKEN` | ✅* | — | GitHub token for Copilot auth |
-| `COPILOT_MODEL` | — | `gpt-4.1` | Model for reviews |
-| `COPILOT_PROVIDER_TYPE` | — | `None` | BYOK provider: `azure`, `openai`, or omit for Copilot |
-| `COPILOT_PROVIDER_BASE_URL` | — | `None` | BYOK provider endpoint |
-| `COPILOT_PROVIDER_API_KEY` | — | `None` | BYOK provider API key |
-| `HOST` | — | `0.0.0.0` | Server bind host |
-| `PORT` | — | `8000` | Server bind port |
-| `LOG_LEVEL` | — | `info` | Log level |
+### GitLab (required)
 
-*`GITHUB_TOKEN` is required when using GitHub Copilot auth. Not needed for BYOK providers.
+| Variable | Default | Description |
+|---|---|---|
+| `GITLAB_URL` | — | GitLab instance URL |
+| `GITLAB_TOKEN` | — | GitLab API private token (needs `api` scope) |
+| `GITLAB_WEBHOOK_SECRET` | — | Secret for validating webhook payloads |
+
+### Auth (one required)
+
+| Variable | Default | Description |
+|---|---|---|
+| `GITHUB_TOKEN` | — | GitHub token for Copilot auth |
+| `COPILOT_PROVIDER_TYPE` | `None` | BYOK provider: `azure`, `openai`, or omit for Copilot |
+| `COPILOT_PROVIDER_BASE_URL` | `None` | BYOK provider endpoint |
+| `COPILOT_PROVIDER_API_KEY` | `None` | BYOK provider API key |
+
+### Model
+
+| Variable | Default | Description |
+|---|---|---|
+| `COPILOT_MODEL` | `gpt-4` | Model for reviews |
+
+### Server
+
+| Variable | Default | Description |
+|---|---|---|
+| `HOST` | `0.0.0.0` | Server bind host |
+| `PORT` | `8000` | Server bind port |
+| `LOG_LEVEL` | `info` | Log level |
+| `AGENT_GITLAB_USERNAME` | `None` | Agent's GitLab username for loop prevention |
+| `CLONE_DIR` | system temp | Base directory for repo clones |
+
+### GitLab Polling
+
+| Variable | Default | Description |
+|---|---|---|
+| `GITLAB_POLL` | `false` | Enable GitLab API polling for MR/note discovery |
+| `GITLAB_POLL_INTERVAL` | `30` | Polling interval in seconds |
+| `GITLAB_PROJECTS` | `None` | Comma-separated project paths/IDs (required when polling) |
+
+### Task Execution
+
+| Variable | Default | Description |
+|---|---|---|
+| `TASK_EXECUTOR` | `local` | `local` or `kubernetes` |
+| `K8S_NAMESPACE` | `default` | Kubernetes namespace for Jobs |
+| `K8S_JOB_IMAGE` | — | Docker image for Job pods |
+| `K8S_JOB_CPU_LIMIT` | `1` | CPU limit |
+| `K8S_JOB_MEMORY_LIMIT` | `1Gi` | Memory limit |
+| `K8S_JOB_TIMEOUT` | `600` | Job timeout in seconds |
+
+### State Backend
+
+| Variable | Default | Description |
+|---|---|---|
+| `STATE_BACKEND` | `memory` | `memory` or `redis` |
+| `REDIS_URL` | `None` | Redis URL (required when STATE_BACKEND=redis) |
+
+### Jira (all optional)
+
+| Variable | Default | Description |
+|---|---|---|
+| `JIRA_URL` | `None` | Jira instance URL |
+| `JIRA_EMAIL` | `None` | Jira user email |
+| `JIRA_API_TOKEN` | `None` | Jira API token / PAT |
+| `JIRA_TRIGGER_STATUS` | `AI Ready` | Status that triggers agent |
+| `JIRA_IN_PROGRESS_STATUS` | `In Progress` | Status after pickup |
+| `JIRA_POLL_INTERVAL` | `30` | Poll interval seconds |
+| `JIRA_PROJECT_MAP` | `None` | JSON mapping Jira project keys to GitLab projects |
+
+### Observability
+
+| Variable | Default | Description |
+|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `None` | OTLP gRPC endpoint — enables traces, metrics, logs |
+| `DEPLOYMENT_ENV` | — | Deployment environment label (e.g., production, staging) |
+| `SERVICE_VERSION` | `0.1.0` | Service version in OTEL resource attributes |
 
 ## GitLab Webhook Setup
 
@@ -58,33 +139,25 @@ The service needs a publicly reachable URL. For local dev, use [ngrok](https://n
 
 ## Jira Integration
 
-The service can **optionally** poll Jira for issues and automatically create branches + MRs for agent review. All Jira env vars are optional — the service runs in webhook-only mode if they're omitted.
-
-### Environment Variables
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `JIRA_URL` | ✅* | — | Jira instance URL (e.g., `https://yourcompany.atlassian.net`) |
-| `JIRA_EMAIL` | ✅* | — | Jira user email for basic auth |
-| `JIRA_API_TOKEN` | ✅* | — | Jira API token or personal access token |
-| `JIRA_PROJECT_MAP` | ✅* | — | JSON mapping Jira project keys to GitLab projects |
-| `JIRA_TRIGGER_STATUS` | — | `AI Ready` | Jira issue status that triggers the agent |
-| `JIRA_IN_PROGRESS_STATUS` | — | `In Progress` | Status to transition to after pickup |
-| `JIRA_POLL_INTERVAL` | — | `30` | Polling interval in seconds |
-
-*All four are required to enable Jira polling. If any are missing, the poller is disabled.
+The service can **optionally** poll Jira for issues and automatically create branches + MRs for agent review. See the **Jira** section in Environment Variables above for configuration.
 
 ### Example `JIRA_PROJECT_MAP`
 
+The JSON must use the `{"mappings": {...}}` schema with numeric `gitlab_project_id` and `clone_url`:
+
 ```json
 {
-  "PROJ": {
-    "gitlab_project": "myorg/myrepo",
-    "target_branch": "main"
-  },
-  "DEMO": {
-    "gitlab_project": "demos/example",
-    "target_branch": "develop"
+  "mappings": {
+    "PROJ": {
+      "gitlab_project_id": 42,
+      "clone_url": "https://gitlab.com/myorg/myrepo.git",
+      "target_branch": "main"
+    },
+    "DEMO": {
+      "gitlab_project_id": 87,
+      "clone_url": "https://gitlab.com/demos/example.git",
+      "target_branch": "develop"
+    }
   }
 }
 ```
@@ -115,7 +188,7 @@ The agent automatically loads project-specific config from the reviewed repo:
 | Path | Standard | Scope |
 |---|---|---|
 | `.github/copilot-instructions.md` | GitHub Copilot | Project-wide |
-| `.github/instructions/*.md` | GitHub Copilot | Per-language |
+| `.github/instructions/*.instructions.md` | GitHub Copilot | Per-language |
 | `.claude/CLAUDE.md` | Claude Code | Project-wide |
 | `AGENTS.md` | Universal (Copilot, Claude, Codex, Cursor, GitLab Duo) | Project root + subdirectories |
 | `CLAUDE.md` | Claude Code | Project root |
@@ -128,18 +201,6 @@ Each review comment includes:
 - Severity tag: `[ERROR]`, `[WARNING]`, or `[INFO]`
 - Description of the issue
 - **Inline code suggestion** (when a concrete fix exists) — click "Apply suggestion" in the GitLab UI to commit the fix
-
-## Docker
-
-```bash
-docker build -t gitlab-copilot-agent .
-docker run -p 8000:8000 \
-  -e GITLAB_URL=https://gitlab.com \
-  -e GITLAB_TOKEN=glpat-... \
-  -e GITLAB_WEBHOOK_SECRET=secret \
-  -e GITHUB_TOKEN=gho_... \
-  gitlab-copilot-agent
-```
 
 ## Operations
 
@@ -154,78 +215,16 @@ The service uses in-memory structures that are bounded to prevent growth during 
 
 Active locks are never evicted — the lock manager allows temporary over-capacity rather than dropping in-use locks. Both limits are configurable via constructor arguments but not currently exposed as environment variables.
 
-### Sandbox Configuration
+### Task Execution
 
-The service isolates the Copilot SDK subprocess to prevent it from modifying system directories or persisting state outside the cloned repo. Multiple isolation methods are supported:
+The service supports two execution backends controlled by `TASK_EXECUTOR`:
 
-#### Sandbox Methods
+| Backend | How It Works | Use Case |
+|---------|-------------|----------|
+| `local` (default) | Runs Copilot CLI as a local subprocess | Development, single-node |
+| `kubernetes` | Spawns a Kubernetes Job per review | Production, multi-tenant |
 
-| Method | Isolation | Setup Required | Use Case |
-|--------|-----------|---------------|----------|
-| `bwrap` | Process-level (namespaces, seccomp) | Linux + bubblewrap installed | Default, lightweight |
-| `docker` | Container-level (Docker-in-Docker) | `docker:dind` sidecar + shared volume | Production, multi-tenant |
-| `podman` | Container-level (Podman-in-Podman) | Podman machine or Linux host | Rootless container environments |
-| `noop` | None | Nothing | Testing, development only |
-
-#### Setup
-
-**bwrap** (default):
-- Pre-installed on most Linux distributions
-- Set `SANDBOX_METHOD=bwrap` (or omit — it's the default)
-- When running in Docker, add `--security-opt seccomp=unconfined` (you do NOT need `--cap-add=SYS_ADMIN`)
-
-**docker** (Docker-in-Docker):
-
-Both the service and DinD sidecar need `--privileged`. A shared volume ensures cloned repos are accessible to sandbox containers.
-
-```bash
-# Create shared resources
-docker volume create workspaces
-docker network create copilot-net
-
-# Start DinD sidecar
-docker run -d --name dind --privileged --network copilot-net \
-  -e DOCKER_TLS_CERTDIR="" \
-  -v workspaces:/data/workspaces \
-  docker:dind --tls=false
-
-# Start service
-docker run -d --name copilot-agent --network copilot-net \
-  -v workspaces:/data/workspaces \
-  -e DOCKER_HOST=tcp://dind:2375 \
-  -e CLONE_DIR=/data/workspaces \
-  -e SANDBOX_METHOD=docker \
-  -e SANDBOX_IMAGE=copilot-cli-sandbox:latest \
-  # ... other env vars ...
-  gitlab-copilot-agent
-```
-
-The entrypoint automatically builds the sandbox image inside the DinD daemon on first start.
-
-**podman** (Podman-in-Podman):
-
-Runs nested containers directly — no sidecar needed. Requires a host with user namespace support (Linux host or `podman machine`).
-
-> **Note:** Podman-in-Podman does NOT work when the service runs inside Docker Desktop. Docker Desktop's LinuxKit VM lacks nested user namespace support. Use Docker DinD instead, or run via `podman machine` / native Linux.
-
-```bash
-# On a Linux host or inside podman machine:
-podman run -d --name copilot-agent --privileged \
-  -e SANDBOX_METHOD=podman \
-  -e SANDBOX_IMAGE=copilot-cli-sandbox:latest \
-  # ... other env vars ...
-  gitlab-copilot-agent
-```
-
-**noop** (development only):
-- Set `SANDBOX_METHOD=noop`
-- No isolation — use only for local testing
-
-#### Container Hardening
-
-The `docker` and `podman` methods use these security flags:
-
-`--read-only`, `--tmpfs /tmp`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--cpus=1`, `--memory=2g`, `--pids-limit=256`, `--pull=never`
+When using Kubernetes execution, the pod boundary provides process isolation (see [ADR-0003](docs/adr/0003-kubernetes-migration-plan.md)). Configure with `K8S_*` environment variables above.
 
 ## Troubleshooting
 
@@ -247,12 +246,6 @@ The `docker` and `podman` methods use these security flags:
 - Check that issues are in the exact status name from `JIRA_TRIGGER_STATUS` (case-sensitive)
 - Confirm the Jira user has permission to query and transition issues
 - Check logs for JQL query errors or API authentication failures
-
-**Sandbox creation failed** (startup crash)
-- The service fails fast if the configured `SANDBOX_METHOD` is unavailable — there is no automatic fallback
-- For `bwrap`: ensure bubblewrap is installed and Linux namespaces are available
-- For `docker`/`podman`: ensure the runtime is installed, daemon is running, and sandbox image is built
-- Set `SANDBOX_METHOD=noop` to explicitly disable sandboxing (development only)
 
 **Git clone timeout** or **authentication failures**
 - Verify `GITLAB_TOKEN` has `api` scope and read access to the target project
