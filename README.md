@@ -1,10 +1,16 @@
 # GitLab Copilot Agent
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Automated code review for GitLab Merge Requests, powered by the GitHub Copilot SDK.
 
 ## What It Does
 
 Receives GitLab webhooks when MRs are opened/updated → clones the repo → runs a Copilot agent review → posts inline comments with **apply-able code suggestions** back to the MR.
+
+Also supports **GitLab MR polling** (no webhook needed) and **Jira integration** for automated branch/MR creation.
+
+> 📖 **[Developer Wiki](docs/wiki/index.md)** — comprehensive architecture docs, module reference, security model, deployment guides, and more.
 
 ## Quick Start
 
@@ -30,7 +36,7 @@ devcontainer exec --workspace-folder . uv run uvicorn gitlab_copilot_agent.main:
 | `GITLAB_TOKEN` | ✅ | — | GitLab API token (needs `api` scope) |
 | `GITLAB_WEBHOOK_SECRET` | ✅ | — | Secret for validating webhook payloads |
 | `GITHUB_TOKEN` | ✅* | — | GitHub token for Copilot auth |
-| `COPILOT_MODEL` | — | `gpt-4` | Model for reviews |
+| `COPILOT_MODEL` | — | `gpt-4.1` | Model for reviews |
 | `COPILOT_PROVIDER_TYPE` | — | `None` | BYOK provider: `azure`, `openai`, or omit for Copilot |
 | `COPILOT_PROVIDER_BASE_URL` | — | `None` | BYOK provider endpoint |
 | `COPILOT_PROVIDER_API_KEY` | — | `None` | BYOK provider API key |
@@ -289,12 +295,22 @@ devcontainer exec --workspace-folder . uv run mypy src/
 
 See [`docs/DEMO.md`](docs/DEMO.md) for automated demo environment setup. One command provisions a GitLab repo + Jira project showcasing all agent capabilities.
 
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
 ## Architecture
 
-See `docs/PLAN.md` for full implementation plan and `docs/adr/` for architecture decisions.
+See the **[Developer Wiki](docs/wiki/index.md)** for full architecture documentation, including:
+
+- [Architecture Overview](docs/wiki/architecture-overview.md) — system diagrams, trust boundaries, deployment topology
+- [Module Reference](docs/wiki/module-reference.md) — all 29 modules documented
+- [Request Flows](docs/wiki/request-flows.md) — sequence diagrams for webhook, poller, and Jira flows
+- [Security Model](docs/wiki/security-model.md) — trust boundaries, auth, sandboxing
+- [ADRs](docs/adr/) — architecture decision records
 
 ```
-GitLab Webhook → FastAPI /webhook → Clone repo → Copilot agent review → Parse output → Post inline comments + summary
+GitLab Webhook/Poller → FastAPI → Clone repo → Copilot agent review → Parse output → Post inline comments + summary
 ```
 
 ## Local Kubernetes Development
