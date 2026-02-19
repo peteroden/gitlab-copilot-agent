@@ -73,6 +73,14 @@ poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
     "Waiting for review comments" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
 
+# Verify at least one comment is an actual review (not a failure message)
+echo -n "Checking review is not a failure comment..."
+REVIEW_OK=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
+import sys,json; ds=json.load(sys.stdin)
+texts=' '.join(str(d) for d in ds)
+print('no' if 'failed' in texts.lower() or '⚠' in texts else 'yes')")
+[ "$REVIEW_OK" = "yes" ] && echo " ✅" || { echo " ❌ (got failure comment instead of review)"; kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+
 # === TEST 2: Jira polling → coding → MR creation ===
 echo ""; echo "--- Test 2: Jira Polling Flow ---"
 curl -sf -X POST "$MOCK_JIRA_URL/reset" > /dev/null

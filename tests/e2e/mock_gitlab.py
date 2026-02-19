@@ -197,20 +197,35 @@ async def startup() -> None:
 
 @app.get("/repo.git/{path:path}")
 async def serve_git(path: str, request: Request) -> Response:
-    """Serve bare git repo files. Supports smart HTTP push protocol."""
-    if path == "info/refs" and request.query_params.get("service") == "git-receive-pack":
-        body = (
-            _pkt_line("# service=git-receive-pack\n")
-            + PKT_FLUSH
-            + _pkt_line(f"{_head_sha} refs/heads/main\0 report-status\n")
-            + PKT_FLUSH
+    """Serve bare git repo files. Supports smart HTTP for clone and push."""
+    service = request.query_params.get("service", "")
+    if path == "info/refs" and service in ("git-upload-pack", "git-receive-pack"):
+        assert _bare_repo is not None
+        # Smart HTTP ref advertisement via git subprocess
+        result = subprocess.run(
+            ["git", service, "--stateless-rpc", "--advertise-refs", str(_bare_repo)],
+            capture_output=True,
         )
-        return Response(content=body, media_type="application/x-git-receive-pack-advertisement")
+        body = _pkt_line(f"# service={service}\n") + PKT_FLUSH + result.stdout
+        return Response(content=body, media_type=f"application/x-{service}-advertisement")
     assert _bare_repo is not None
     file_path = _bare_repo / path
     if not file_path.is_file():
         return Response(status_code=404)
     return FileResponse(file_path)
+
+
+@app.post("/repo.git/git-upload-pack")
+async def git_upload_pack(request: Request) -> Response:
+    """Handle git clone/fetch — pipe to git upload-pack."""
+    assert _bare_repo is not None
+    body = await request.body()
+    result = subprocess.run(
+        ["git", "upload-pack", "--stateless-rpc", str(_bare_repo)],
+        input=body,
+        capture_output=True,
+    )
+    return Response(content=result.stdout, media_type="application/x-git-upload-pack-result")
 
 
 @app.post("/repo.git/git-receive-pack")
