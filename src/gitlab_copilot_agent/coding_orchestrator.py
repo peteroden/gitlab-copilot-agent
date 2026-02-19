@@ -45,6 +45,18 @@ class CodingOrchestrator:
         self._repo_locks = repo_locks or MemoryLock()
         self._tracker = tracker or ProcessedIssueTracker()
 
+    async def _transition_to_in_review(
+        self, issue_key: str, bound_log: structlog.stdlib.BoundLogger
+    ) -> None:
+        """Transition issue to 'In Review' after MR creation. Non-blocking on failure."""
+        in_review = self._settings.jira.in_review_status if self._settings.jira else "In Review"
+        try:
+            await self._jira.transition_issue(issue_key, in_review)
+        except Exception:
+            await bound_log.awarning(
+                "in_review_transition_failed", issue_key=issue_key, target_status=in_review
+            )
+
     async def handle(self, issue: JiraIssue, project_mapping: GitLabProjectMapping) -> None:
         if self._tracker.is_processed(issue.key):
             return
@@ -121,6 +133,7 @@ class CodingOrchestrator:
                         f"/-/merge_requests/{mr_iid}"
                     )
                     await self._jira.add_comment(issue.key, f"MR created: {mr_url}")
+                    await self._transition_to_in_review(issue.key, bound_log)
                     await bound_log.ainfo("coding_task_complete", mr_iid=mr_iid)
                     self._tracker.mark(issue.key)
                     outcome = "success"

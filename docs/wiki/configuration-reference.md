@@ -238,6 +238,12 @@ All optional — service runs review-only without these.
 - **Default**: `"In Progress"`
 - **Description**: Status to transition to after agent picks up issue
 
+### `JIRA_IN_REVIEW_STATUS`
+- **Type**: `str`
+- **Required**: ❌ No
+- **Default**: `"In Review"`
+- **Description**: Status to transition to after MR creation
+
 ### `JIRA_POLL_INTERVAL`
 - **Type**: `int`
 - **Required**: ❌ No
@@ -369,6 +375,7 @@ JIRA_EMAIL=bot@example.com
 JIRA_API_TOKEN=xxxxx
 JIRA_TRIGGER_STATUS="AI Ready"
 JIRA_IN_PROGRESS_STATUS="In Progress"
+JIRA_IN_REVIEW_STATUS="In Review"
 JIRA_POLL_INTERVAL=30
 JIRA_PROJECT_MAP='{"mappings":{"PROJ":{"gitlab_project_id":42,"clone_url":"https://gitlab.example.com/group/project.git","target_branch":"main"}}}'
 
@@ -436,6 +443,7 @@ Helm `values.yaml` maps to env vars via `configmap.yaml` and `secret.yaml`:
 | `jira.projectMap` | `JIRA_PROJECT_MAP` | ❌ |
 | `jira.triggerStatus` | `JIRA_TRIGGER_STATUS` | ❌ |
 | `jira.inProgressStatus` | `JIRA_IN_PROGRESS_STATUS` | ❌ |
+| `jira.inReviewStatus` | `JIRA_IN_REVIEW_STATUS` | ❌ |
 | `jira.pollInterval` | `JIRA_POLL_INTERVAL` | ❌ |
 
 See `helm/gitlab-copilot-agent/values.yaml` for full reference.

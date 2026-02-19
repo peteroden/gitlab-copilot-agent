@@ -151,6 +151,7 @@ jira:
   projectMap: ""           # JIRA_PROJECT_MAP
   triggerStatus: "AI Ready"    # JIRA_TRIGGER_STATUS
   inProgressStatus: "In Progress"  # JIRA_IN_PROGRESS_STATUS
+  inReviewStatus: "In Review"      # JIRA_IN_REVIEW_STATUS
   pollInterval: 30         # JIRA_POLL_INTERVAL
 ```
 
