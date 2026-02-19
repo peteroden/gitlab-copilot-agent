@@ -9,8 +9,44 @@ from typing import Protocol
 
 import gitlab
 import structlog
+from pydantic import BaseModel, ConfigDict
 
 log = structlog.get_logger()
+
+
+class MRAuthor(BaseModel):
+    """MR author from GitLab API list response."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: int
+    username: str
+
+
+class MRListItem(BaseModel):
+    """Subset of fields from GitLab MR list API response."""
+
+    model_config = ConfigDict(extra="ignore")
+    iid: int
+    title: str
+    description: str | None = None
+    source_branch: str
+    target_branch: str
+    sha: str
+    web_url: str
+    state: str
+    author: MRAuthor
+    updated_at: str
+
+
+class NoteListItem(BaseModel):
+    """Subset of fields from GitLab MR notes API response."""
+
+    model_config = ConfigDict(extra="ignore")
+    id: int
+    body: str
+    author: MRAuthor
+    system: bool = False
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -46,6 +82,13 @@ class GitLabClientProtocol(Protocol):
         self, project_id: int, source_branch: str, target_branch: str, title: str, description: str
     ) -> int: ...
     async def post_mr_comment(self, project_id: int, mr_iid: int, body: str) -> None: ...
+    async def list_project_mrs(
+        self, project_id: int, state: str = "opened", updated_after: str | None = None
+    ) -> list[MRListItem]: ...
+    async def list_mr_notes(
+        self, project_id: int, mr_iid: int, created_after: str | None = None
+    ) -> list[NoteListItem]: ...
+    async def resolve_project(self, id_or_path: str | int) -> int: ...
 
 
 class GitLabClient:
@@ -133,3 +176,43 @@ class GitLabClient:
             mr.notes.create({"body": body})
 
         await asyncio.to_thread(_post)
+
+    async def list_project_mrs(
+        self, project_id: int, state: str = "opened", updated_after: str | None = None
+    ) -> list[MRListItem]:
+        """List merge requests for a project."""
+
+        def _list() -> list[MRListItem]:
+            project = self._gl.projects.get(project_id)
+            kwargs: dict[str, object] = {"state": state, "get_all": True}
+            if updated_after is not None:
+                kwargs["updated_after"] = updated_after
+            mrs = project.mergerequests.list(**kwargs)
+            return [MRListItem.model_validate(mr.attributes) for mr in mrs]
+
+        return await asyncio.to_thread(_list)
+
+    async def list_mr_notes(
+        self, project_id: int, mr_iid: int, created_after: str | None = None
+    ) -> list[NoteListItem]:
+        """List notes (comments) on a merge request."""
+
+        def _list() -> list[NoteListItem]:
+            project = self._gl.projects.get(project_id)
+            mr = project.mergerequests.get(mr_iid)
+            kwargs: dict[str, object] = {"get_all": True}
+            if created_after is not None:
+                kwargs["created_after"] = created_after
+            notes = mr.notes.list(**kwargs)
+            return [NoteListItem.model_validate(n.attributes) for n in notes]
+
+        return await asyncio.to_thread(_list)
+
+    async def resolve_project(self, id_or_path: str | int) -> int:
+        """Resolve a project ID or path to its numeric ID."""
+
+        def _resolve() -> int:
+            project = self._gl.projects.get(id_or_path)
+            return project.id  # type: ignore[no-any-return]
+
+        return await asyncio.to_thread(_resolve)
