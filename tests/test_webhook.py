@@ -6,7 +6,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import AsyncClient
 
+from gitlab_copilot_agent.main import app
 from tests.conftest import HEADERS, MR_IID, MR_PAYLOAD, PROJECT_ID, make_mr_payload
+
+NON_ALLOWED_PROJECT_ID = 999
 
 
 @pytest.mark.parametrize("token", [None, "wrong-token"])
@@ -165,3 +168,33 @@ async def test_webhook_queues_update_with_new_commits(client: AsyncClient) -> No
     payload = make_mr_payload(action="update", oldrev="previous_sha_value")
     resp = await client.post("/webhook", json=payload, headers=HEADERS)
     assert resp.json() == {"status": "queued"}
+
+
+# -- Allowlist tests --
+
+
+async def test_webhook_accepts_when_allowlist_is_none(client: AsyncClient) -> None:
+    """Backward compat: no allowlist configured means all projects pass."""
+    assert app.state.allowed_project_ids is None
+    resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+    assert resp.json()["status"] == "queued"
+
+
+async def test_webhook_accepts_when_project_in_allowlist(client: AsyncClient) -> None:
+    """Events from allowed projects are processed normally."""
+    app.state.allowed_project_ids = {PROJECT_ID}
+    try:
+        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+        assert resp.json()["status"] == "queued"
+    finally:
+        app.state.allowed_project_ids = None
+
+
+async def test_webhook_rejects_when_project_not_in_allowlist(client: AsyncClient) -> None:
+    """Events from non-allowed projects are ignored."""
+    app.state.allowed_project_ids = {NON_ALLOWED_PROJECT_ID}
+    try:
+        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+        assert resp.json() == {"status": "ignored", "reason": "project not in allowlist"}
+    finally:
+        app.state.allowed_project_ids = None

@@ -81,6 +81,12 @@ class Settings(BaseSettings):
         default=None, description="Redis URL (required when STATE_BACKEND=redis)"
     )
 
+    # Project allowlist (optional — scopes webhook and poller)
+    gitlab_projects: str | None = Field(
+        default=None,
+        description="Comma-separated GitLab project paths or IDs to scope webhook and poller",
+    )
+
     # Jira (all optional — service runs review-only without these)
     jira_url: str | None = Field(default=None, description="Jira instance URL")
     jira_email: str | None = Field(default=None, description="Jira user email")

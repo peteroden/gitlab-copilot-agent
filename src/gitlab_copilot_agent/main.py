@@ -73,6 +73,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.settings = settings
     app.state.executor = _create_executor(settings.task_executor, settings)
 
+    # Resolve project allowlist
+    allowed_project_ids: set[int] | None = None
+    if settings.gitlab_projects:
+        gl_allowlist = GitLabClient(settings.gitlab_url, settings.gitlab_token)
+        allowed_project_ids = set()
+        for entry in settings.gitlab_projects.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            try:
+                project_id = await gl_allowlist.resolve_project(entry)
+                allowed_project_ids.add(project_id)
+            except Exception as exc:
+                raise ValueError(f"Cannot resolve GitLab project: {entry!r}") from exc
+        await log.ainfo("project_allowlist_resolved", project_ids=sorted(allowed_project_ids))
+    app.state.allowed_project_ids = allowed_project_ids
+
     # Shared lock manager for both webhook and Jira flows
     repo_locks = create_lock(settings.state_backend, settings.redis_url)
     app.state.repo_locks = repo_locks
