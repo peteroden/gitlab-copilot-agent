@@ -49,6 +49,7 @@ jobs:
         run: |
           uv run python tests/e2e/mock_gitlab.py &
           uv run python tests/e2e/mock_llm.py &
+          uv run python tests/e2e/mock_jira.py &
 
       - name: Run E2E tests
         run: ./tests/e2e/run.sh http://localhost:8080 http://localhost:9999
