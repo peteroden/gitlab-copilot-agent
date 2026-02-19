@@ -45,10 +45,10 @@ def test_agent_parsing(tmp_path: Path) -> None:
     config = discover_repo_config(str(tmp_path))
     assert len(config.custom_agents) == 1
     agent = config.custom_agents[0]
-    assert agent["name"] == "reviewer"
-    assert agent["description"] == "Code reviewer"
-    assert agent["tools"] == ["read", "search"]
-    assert agent["prompt"] == "You review code for bugs."
+    assert agent.name == "reviewer"
+    assert agent.description == "Code reviewer"
+    assert agent.tools == ["read", "search"]
+    assert agent.prompt == "You review code for bugs."
 
 
 def test_agent_missing_optional_fields(tmp_path: Path) -> None:
@@ -58,10 +58,10 @@ def test_agent_missing_optional_fields(tmp_path: Path) -> None:
     config = discover_repo_config(str(tmp_path))
     assert len(config.custom_agents) == 1
     agent = config.custom_agents[0]
-    assert agent["name"] == "minimal"
-    assert "description" not in agent
-    assert "tools" not in agent
-    assert agent["prompt"] == "Just a prompt."
+    assert agent.name == "minimal"
+    assert agent.description is None
+    assert agent.tools is None
+    assert agent.prompt == "Just a prompt."
 
 
 def test_agent_malformed_frontmatter(tmp_path: Path) -> None:
@@ -235,12 +235,12 @@ def test_agent_all_custom_fields(tmp_path: Path) -> None:
     config = discover_repo_config(str(tmp_path))
     assert len(config.custom_agents) == 1
     agent = config.custom_agents[0]
-    assert agent["name"] == "full-agent"
-    assert agent["description"] == "A fully configured agent"
-    assert agent["tools"] == ["read", "search"]
-    assert agent["display_name"] == "Full Agent"
-    assert agent["infer"] is True
-    assert agent["prompt"] == "You are a full agent."
+    assert agent.name == "full-agent"
+    assert agent.description == "A fully configured agent"
+    assert agent.tools == ["read", "search"]
+    assert agent.display_name == "Full Agent"
+    assert agent.infer is True
+    assert agent.prompt == "You are a full agent."
 
 
 def test_agent_nested_yaml(tmp_path: Path) -> None:
@@ -257,7 +257,7 @@ def test_agent_nested_yaml(tmp_path: Path) -> None:
     )
     config = discover_repo_config(str(tmp_path))
     assert len(config.custom_agents) == 1
-    assert "multi-line" in config.custom_agents[0]["description"]
+    assert "multi-line" in config.custom_agents[0].description
 
 
 def test_claude_md_not_loaded_from_github(tmp_path: Path) -> None:
@@ -274,6 +274,15 @@ def test_copilot_instructions_not_loaded_from_claude(tmp_path: Path) -> None:
     (claude / "copilot-instructions.md").write_text("Should not be loaded.")
     config = discover_repo_config(str(tmp_path))
     assert config.instructions is None
+
+
+def test_agent_invalid_metadata_skipped(tmp_path: Path) -> None:
+    """Agent with invalid metadata (e.g. tools as string) is skipped, not crash."""
+    agents_dir = tmp_path / ".github" / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "bad.agent.md").write_text("---\nname: bad\ntools: read\n---\n\nPrompt.\n")
+    config = discover_repo_config(str(tmp_path))
+    assert len(config.custom_agents) == 0
 
 
 def test_agents_md_not_loaded_from_config_roots(tmp_path: Path) -> None:

@@ -2,25 +2,25 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
-if TYPE_CHECKING:
-    from gitlab_copilot_agent.config import Settings
+from pydantic import BaseModel, ConfigDict, Field
+
+from gitlab_copilot_agent.config import Settings
 
 
-@dataclass(frozen=True)
-class TaskParams:
+class TaskParams(BaseModel):
     """Parameters for a Copilot task execution."""
 
-    task_type: Literal["review", "coding"]
-    task_id: str
-    repo_url: str
-    branch: str
-    system_prompt: str
-    user_prompt: str
-    settings: Settings
-    repo_path: str | None = None
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    task_type: Literal["review", "coding"] = Field(description="Type of task to execute")
+    task_id: str = Field(description="Unique identifier for this task")
+    repo_url: str = Field(description="Git clone URL for the repository")
+    branch: str = Field(description="Branch to review or work on")
+    system_prompt: str = Field(description="System prompt for the Copilot session")
+    user_prompt: str = Field(description="User prompt for the Copilot session")
+    settings: Settings = Field(description="Application settings")
+    repo_path: str | None = Field(default=None, description="Local path to cloned repo")
 
 
 @runtime_checkable

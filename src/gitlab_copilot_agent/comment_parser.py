@@ -4,24 +4,32 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
-@dataclass(frozen=True)
-class ReviewComment:
-    file: str
-    line: int
-    severity: str
-    comment: str
-    suggestion: str | None = None
-    suggestion_start_offset: int = 0
-    suggestion_end_offset: int = 0
+class ReviewComment(BaseModel):
+    """A single review comment on a specific file and line."""
+
+    model_config = ConfigDict(frozen=True)
+    file: str = Field(description="Path to the reviewed file")
+    line: int = Field(description="Line number of the comment")
+    severity: str = Field(description="Severity level: error, warning, or info")
+    comment: str = Field(description="Review comment text")
+    suggestion: str | None = Field(default=None, description="Suggested replacement code")
+    suggestion_start_offset: int = Field(
+        default=0, description="Lines above the commented line to replace"
+    )
+    suggestion_end_offset: int = Field(
+        default=0, description="Lines below the commented line to replace"
+    )
 
 
-@dataclass
-class ParsedReview:
-    comments: list[ReviewComment]
-    summary: str
+class ParsedReview(BaseModel):
+    """Structured review output with comments and a summary."""
+
+    comments: list[ReviewComment] = Field(description="List of review comments")
+    summary: str = Field(description="Summary paragraph of the review")
 
 
 def parse_review(raw: str) -> ParsedReview:

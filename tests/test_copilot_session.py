@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from gitlab_copilot_agent.copilot_session import build_sdk_env, run_copilot_session
-from gitlab_copilot_agent.repo_config import RepoConfig
+from gitlab_copilot_agent.repo_config import AgentConfig, RepoConfig
 from tests.conftest import make_settings
 
 
@@ -108,7 +108,7 @@ async def test_passes_repo_config_to_session(
 ) -> None:
     mock_discover.return_value = RepoConfig(
         skill_directories=["/tmp/skills"],
-        custom_agents=[{"name": "coder", "prompt": "Write code."}],
+        custom_agents=[AgentConfig(name="coder", prompt="Write code.")],
         instructions="Use strict typing.",
     )
     mock_client = _setup_mock_session(

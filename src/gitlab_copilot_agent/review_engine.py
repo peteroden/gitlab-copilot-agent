@@ -1,6 +1,6 @@
 """Copilot review engine — runs an agent review session on an MR."""
 
-from dataclasses import dataclass
+from pydantic import BaseModel, ConfigDict, Field
 
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams
@@ -45,14 +45,14 @@ If the code looks good, return an empty array and say so in the summary.
 """
 
 
-@dataclass(frozen=True)
-class ReviewRequest:
+class ReviewRequest(BaseModel):
     """Minimal info the agent needs to perform a review."""
 
-    title: str
-    description: str | None
-    source_branch: str
-    target_branch: str
+    model_config = ConfigDict(frozen=True)
+    title: str = Field(description="MR title")
+    description: str | None = Field(description="MR description")
+    source_branch: str = Field(description="Source branch name")
+    target_branch: str = Field(description="Target branch name")
 
 
 def build_review_prompt(req: ReviewRequest) -> str:
