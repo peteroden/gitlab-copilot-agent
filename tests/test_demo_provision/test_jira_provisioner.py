@@ -16,6 +16,9 @@ from demo_provision.jira_provisioner import (
     build_client,
     create_issue,
     create_project,
+    create_status,
+    create_statuses,
+    find_status,
     get_current_user,
     get_project,
 )
@@ -156,3 +159,75 @@ class TestDemoIssues:
         all_descriptions = " ".join(i["description"] for i in DEMO_ISSUES)
         assert "database.py" in all_descriptions
         assert "auth.py" in all_descriptions or "logging" in all_descriptions
+
+
+JIRA_PROJECT_ID = "10068"
+AI_READY_STATUS = "AI Ready"
+IN_REVIEW_STATUS = "In Review"
+
+
+class TestFindStatus:
+    def test_returns_status_when_found(self) -> None:
+        client = MagicMock()
+        status_data = {"name": AI_READY_STATUS, "id": "10042"}
+        client.get.return_value = _mock_response(200, {"values": [status_data]})
+
+        result = find_status(client, AI_READY_STATUS)
+
+        assert result == status_data
+        client.get.assert_called_once_with(
+            "/rest/api/3/statuses/search", params={"searchString": AI_READY_STATUS}
+        )
+
+    def test_returns_none_when_not_found(self) -> None:
+        client = MagicMock()
+        client.get.return_value = _mock_response(200, {"values": []})
+
+        result = find_status(client, AI_READY_STATUS)
+
+        assert result is None
+
+
+class TestCreateStatus:
+    def test_creates_project_scoped_status_with_correct_payload(self) -> None:
+        client = MagicMock()
+        created = [{"name": AI_READY_STATUS, "id": "10042"}]
+        client.post.return_value = _mock_response(201, created)
+
+        result = create_status(client, AI_READY_STATUS, JIRA_PROJECT_ID)
+
+        assert result["name"] == AI_READY_STATUS
+        call_args = client.post.call_args
+        assert call_args[0][0] == "/rest/api/3/statuses"
+        payload = call_args[1]["json"]
+        assert payload["scope"]["type"] == "PROJECT"
+        assert payload["scope"]["project"]["id"] == JIRA_PROJECT_ID
+        status = payload["statuses"][0]
+        assert status["name"] == AI_READY_STATUS
+        assert status["statusCategory"] == "NEW"
+
+
+class TestCreateStatuses:
+    def test_creates_multiple_statuses_in_one_call(self) -> None:
+        client = MagicMock()
+        created = [
+            {"name": AI_READY_STATUS, "id": "10042"},
+            {"name": IN_REVIEW_STATUS, "id": "10043"},
+        ]
+        client.post.return_value = _mock_response(201, created)
+
+        result = create_statuses(
+            client,
+            [(AI_READY_STATUS, "NEW"), (IN_REVIEW_STATUS, "INDETERMINATE")],
+            JIRA_PROJECT_ID,
+        )
+
+        assert len(result) == 2
+        assert result[0]["name"] == AI_READY_STATUS
+        assert result[1]["name"] == IN_REVIEW_STATUS
+        payload = client.post.call_args[1]["json"]
+        assert payload["scope"]["type"] == "PROJECT"
+        assert payload["scope"]["project"]["id"] == JIRA_PROJECT_ID
+        assert len(payload["statuses"]) == 2
+        assert payload["statuses"][0]["statusCategory"] == "NEW"
+        assert payload["statuses"][1]["statusCategory"] == "INDETERMINATE"

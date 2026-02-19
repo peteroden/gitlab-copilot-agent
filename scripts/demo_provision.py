@@ -58,6 +58,9 @@ from demo_provision.jira_provisioner import (
     create_project as jira_create_project,
 )
 from demo_provision.jira_provisioner import (
+    create_statuses as jira_create_statuses,
+)
+from demo_provision.jira_provisioner import (
     get_project as jira_get_project,
 )
 
@@ -190,13 +193,26 @@ def main() -> None:
         current_user = get_current_user(jira_client)
         lead_account_id = current_user["accountId"]
 
-        jira_create_project(
+        jira_project_data = jira_create_project(
             jira_client,
             key=args.jira_project_key,
             name=f"Copilot Demo ({args.jira_project_key})",
             lead_account_id=lead_account_id,
         )
         print(f"✅ Jira project created: {args.jira_project_key}")
+
+        # Ensure workflow statuses exist on the project board
+        # Workflow: To Do → AI Ready → In Progress → In Review → Done
+        project_id = str(jira_project_data["id"])
+        jira_create_statuses(
+            jira_client,
+            [
+                (args.trigger_status, "NEW"),        # To Do category
+                ("In Review", "INDETERMINATE"),       # In Progress category
+            ],
+            project_id,
+        )
+        print(f"✅ Created '{args.trigger_status}' and 'In Review' statuses on Jira board")
 
         # Create demo issues
         issue_keys: list[str] = []
