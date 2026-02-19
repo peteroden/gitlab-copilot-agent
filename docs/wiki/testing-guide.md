@@ -227,18 +227,20 @@ async def test_git_clone(monkeypatch):
 **Architecture**:
 ```
 Host (mock services)                 k3d cluster
-mock_gitlab.py:9999  ◄── HTTP ──── agent pod (GitLab API + git clone)
+mock_gitlab.py:9999  ◄── HTTP ──── agent pod (GitLab API + git clone/push)
 mock_llm.py:9998     ◄── HTTP ──── copilot SDK (OpenAI-compatible)
+mock_jira.py:9997    ◄── HTTP ──── jira poller (search, transitions, comments)
 ```
 
 **Mock services** (`tests/e2e/`):
-- `mock_gitlab.py` — GitLab REST API + dumb git HTTP server (bare repo via `git update-server-info`)
-- `mock_llm.py` — OpenAI-compatible `/v1/chat/completions` returning a canned review
+- `mock_gitlab.py` — GitLab REST API + git HTTP server (clone + smart push) + MR creation
+- `mock_llm.py` — OpenAI-compatible `/v1/chat/completions` returning canned responses
+- `mock_jira.py` — Jira REST API: issue search, transitions, comments with test assertion endpoints
 
-**Test script** (`tests/e2e/run.sh`):
-1. Polls mock and agent health endpoints until ready
-2. Sends MR webhook → asserts `{"status": "queued"}`
-3. Polls `GET /discussions` on mock GitLab until review comments appear (120s timeout)
+**Test flows** (`tests/e2e/run.sh`):
+1. **Webhook MR Review** — sends MR webhook → polls for review comments on mock GitLab
+2. **Jira Polling** — agent polls mock Jira for "AI Ready" issues → transitions to "In Progress" → coding task → push → MR creation → "In Review" transition → Jira comment
+3. **/copilot Command** — sends note webhook with `/copilot <instruction>` → polls for agent response comment on mock GitLab
 
 **Run locally**:
 ```bash
