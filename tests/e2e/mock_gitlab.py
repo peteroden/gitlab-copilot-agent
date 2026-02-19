@@ -18,11 +18,22 @@ from fastapi.responses import FileResponse, Response
 
 app = FastAPI()
 
-# Recorded discussions (review comments posted by the agent)
+# Recorded state for test assertions
 discussions: list[dict] = []
+merge_requests: list[dict] = []
+pushes: list[dict] = []
 
 # Bare git repo created at startup
 _bare_repo: Path | None = None
+_head_sha: str = ""
+
+
+def _pkt_line(s: str) -> bytes:
+    data = s.encode()
+    return f"{len(data) + 4:04x}".encode() + data
+
+
+PKT_FLUSH = b"0000"
 
 PROJECT_ID = 999
 MR_IID = 1
@@ -94,6 +105,14 @@ async def create_note(project_id: int, mr_iid: int, request: Request) -> dict:
     return {"id": 1, "body": body.get("body", "")}
 
 
+@app.post("/api/v4/projects/{project_id}/merge_requests")
+async def create_mr(project_id: int, request: Request) -> dict:
+    body = await request.json()
+    iid = len(merge_requests) + 2
+    merge_requests.append({"project_id": project_id, "iid": iid, **body})
+    return {"id": iid, "iid": iid, "web_url": f"http://mock/mr/{iid}"}
+
+
 @app.get("/discussions")
 async def get_discussions() -> list[dict]:
     """Test assertion endpoint — returns all recorded discussions/notes."""
@@ -104,6 +123,28 @@ async def get_discussions() -> list[dict]:
 async def clear_discussions() -> dict:
     """Reset recorded discussions between test runs."""
     discussions.clear()
+    return {"cleared": True}
+
+
+@app.get("/merge_requests")
+async def get_recorded_mrs() -> list[dict]:
+    return merge_requests
+
+
+@app.delete("/merge_requests")
+async def clear_mrs() -> dict:
+    merge_requests.clear()
+    return {"cleared": True}
+
+
+@app.get("/pushes")
+async def get_pushes() -> list[dict]:
+    return pushes
+
+
+@app.delete("/pushes")
+async def clear_pushes() -> dict:
+    pushes.clear()
     return {"cleared": True}
 
 
@@ -146,18 +187,48 @@ def _create_bare_repo() -> Path:
 
 @app.on_event("startup")
 async def startup() -> None:
-    global _bare_repo  # noqa: PLW0603
+    global _bare_repo, _head_sha  # noqa: PLW0603
     _bare_repo = _create_bare_repo()
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=_bare_repo, capture_output=True, text=True, check=True
+    )
+    _head_sha = result.stdout.strip()
 
 
 @app.get("/repo.git/{path:path}")
-async def serve_git(path: str) -> Response:
-    """Serve bare git repo files (dumb HTTP protocol)."""
+async def serve_git(path: str, request: Request) -> Response:
+    """Serve bare git repo files. Supports smart HTTP push protocol."""
+    if path == "info/refs" and request.query_params.get("service") == "git-receive-pack":
+        body = (
+            _pkt_line("# service=git-receive-pack\n")
+            + PKT_FLUSH
+            + _pkt_line(f"{_head_sha} refs/heads/main\0 report-status\n")
+            + PKT_FLUSH
+        )
+        return Response(content=body, media_type="application/x-git-receive-pack-advertisement")
     assert _bare_repo is not None
     file_path = _bare_repo / path
     if not file_path.is_file():
         return Response(status_code=404)
     return FileResponse(file_path)
+
+
+@app.post("/repo.git/git-receive-pack")
+async def git_receive_pack(request: Request) -> Response:
+    """Accept git push — record the ref and return success."""
+    body = await request.body()
+    ref = "unknown"
+    try:
+        pkt_len = int(body[:4], 16)
+        first_line = body[4:pkt_len]
+        parts = first_line.split(b"\x00")[0].split()
+        if len(parts) >= 3:
+            ref = parts[2].decode()
+    except Exception:
+        pass
+    pushes.append({"ref": ref})
+    resp = _pkt_line("unpack ok\n") + _pkt_line(f"ok {ref}\n") + PKT_FLUSH
+    return Response(content=resp, media_type="application/x-git-receive-pack-result")
 
 
 if __name__ == "__main__":
