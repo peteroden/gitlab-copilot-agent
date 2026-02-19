@@ -129,6 +129,8 @@ class Settings(BaseSettings):
             raise ValueError("Either GITHUB_TOKEN or COPILOT_PROVIDER_TYPE must be set")
         if self.state_backend == "redis" and not self.redis_url:
             raise ValueError("REDIS_URL is required when STATE_BACKEND=redis")
-        if self.gitlab_poll and not self.gitlab_projects:
-            raise ValueError("GITLAB_PROJECTS is required when GITLAB_POLL=true")
+        if self.gitlab_poll:
+            entries = [e.strip() for e in (self.gitlab_projects or "").split(",") if e.strip()]
+            if not entries:
+                raise ValueError("GITLAB_PROJECTS is required when GITLAB_POLL=true")
         return self

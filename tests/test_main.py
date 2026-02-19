@@ -275,6 +275,17 @@ def test_config_poll_requires_projects(
         make_settings(gitlab_poll=True)
 
 
+def test_config_poll_rejects_empty_projects(
+    env_vars: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GITLAB_POLL=true with whitespace-only GITLAB_PROJECTS raises."""
+    monkeypatch.setenv("GITLAB_POLL", "true")
+    monkeypatch.setenv("GITLAB_PROJECTS", "  , , ")
+    with pytest.raises(ValueError, match="GITLAB_PROJECTS is required"):
+        make_settings(gitlab_poll=True, gitlab_projects="  , , ")
+
+
 @pytest.mark.usefixtures("env_vars")
 async def test_health_includes_poller_status(client: AsyncClient) -> None:
     """Health endpoint includes gitlab_poller when active."""
