@@ -90,11 +90,12 @@ async def run_copilot_session(
                     await log.ainfo("skills_loaded", directories=repo_config.skill_directories)
                 if repo_config.custom_agents:
                     session_opts["custom_agents"] = [
-                        cast(CustomAgentConfig, a) for a in repo_config.custom_agents
+                        cast(CustomAgentConfig, a.model_dump(exclude_none=True))
+                        for a in repo_config.custom_agents
                     ]
                     await log.ainfo(
                         "agents_loaded",
-                        agents=[a["name"] for a in repo_config.custom_agents],
+                        agents=[a.name for a in repo_config.custom_agents],
                     )
                 if repo_config.instructions:
                     await log.ainfo("instructions_loaded")

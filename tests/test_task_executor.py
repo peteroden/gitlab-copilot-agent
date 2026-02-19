@@ -3,6 +3,7 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from gitlab_copilot_agent.task_executor import LocalTaskExecutor, TaskExecutor, TaskParams
 from tests.conftest import make_settings
@@ -37,7 +38,7 @@ class TestTaskParams:
 
     def test_frozen(self) -> None:
         task = _make_task()
-        with pytest.raises(AttributeError):
+        with pytest.raises(ValidationError):
             task.task_id = "changed"  # type: ignore[misc]
 
     def test_repo_path_optional(self) -> None:

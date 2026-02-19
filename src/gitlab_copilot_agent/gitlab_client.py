@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 import gitlab
 import structlog
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 log = structlog.get_logger()
 
@@ -49,29 +48,35 @@ class NoteListItem(BaseModel):
     created_at: str
 
 
-@dataclass(frozen=True)
-class MRDiffRef:
-    base_sha: str
-    start_sha: str
-    head_sha: str
+class MRDiffRef(BaseModel):
+    """Git diff reference SHAs for a merge request."""
+
+    model_config = ConfigDict(frozen=True)
+    base_sha: str = Field(description="Base commit SHA")
+    start_sha: str = Field(description="Start commit SHA")
+    head_sha: str = Field(description="Head commit SHA")
 
 
-@dataclass(frozen=True)
-class MRChange:
-    old_path: str
-    new_path: str
-    diff: str
-    new_file: bool = False
-    deleted_file: bool = False
-    renamed_file: bool = False
+class MRChange(BaseModel):
+    """A single file change in a merge request."""
+
+    model_config = ConfigDict(frozen=True)
+    old_path: str = Field(description="Original file path")
+    new_path: str = Field(description="New file path")
+    diff: str = Field(description="Unified diff content")
+    new_file: bool = Field(default=False, description="Whether this is a new file")
+    deleted_file: bool = Field(default=False, description="Whether this file was deleted")
+    renamed_file: bool = Field(default=False, description="Whether this file was renamed")
 
 
-@dataclass(frozen=True)
-class MRDetails:
-    title: str
-    description: str | None
-    diff_refs: MRDiffRef
-    changes: list[MRChange] = field(default_factory=list)
+class MRDetails(BaseModel):
+    """Merge request metadata and file changes."""
+
+    model_config = ConfigDict(frozen=True)
+    title: str = Field(description="MR title")
+    description: str | None = Field(description="MR description")
+    diff_refs: MRDiffRef = Field(description="Git diff reference SHAs")
+    changes: list[MRChange] = Field(default_factory=list, description="List of file changes")
 
 
 class GitLabClientProtocol(Protocol):

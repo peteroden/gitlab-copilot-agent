@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import frontmatter  # type: ignore[import-untyped]
 import structlog
+from pydantic import BaseModel, ConfigDict, Field
 
 log = structlog.get_logger()
 
@@ -26,17 +26,40 @@ _CLAUDE_MD = "CLAUDE.md"
 _CUSTOM_AGENT_FIELDS = {"name", "description", "tools", "display_name", "mcp_servers", "infer"}
 
 
-@dataclass(frozen=True)
-class RepoConfig:
+class AgentConfig(BaseModel):
+    """Configuration for a custom Copilot agent parsed from .agent.md files."""
+
+    model_config = ConfigDict(frozen=True)
+    name: str = Field(description="Agent identifier")
+    prompt: str = Field(description="Agent system prompt from markdown body")
+    description: str | None = Field(default=None, description="Human-readable agent description")
+    tools: list[str] | None = Field(
+        default=None, description="List of tool names the agent can use"
+    )
+    display_name: str | None = Field(default=None, description="Display name for the agent")
+    mcp_servers: list[str] | None = Field(
+        default=None, description="MCP server names the agent connects to"
+    )
+    infer: bool | None = Field(default=None, description="Whether the agent supports inference")
+
+
+class RepoConfig(BaseModel):
     """Discovered repo-level Copilot configuration."""
 
-    skill_directories: list[str] = field(default_factory=list)
-    custom_agents: list[dict[str, Any]] = field(default_factory=list)
-    instructions: str | None = None
+    model_config = ConfigDict(frozen=True)
+    skill_directories: list[str] = Field(
+        default_factory=list, description="Paths to skill directories"
+    )
+    custom_agents: list[AgentConfig] = Field(
+        default_factory=list, description="Custom agent configurations"
+    )
+    instructions: str | None = Field(
+        default=None, description="Combined instruction text from all sources"
+    )
 
 
-def _parse_agent_file(path: Path) -> dict[str, Any] | None:
-    """Parse a .agent.md file into a CustomAgentConfig dict."""
+def _parse_agent_file(path: Path) -> AgentConfig | None:
+    """Parse a .agent.md file into an AgentConfig."""
     try:
         text = path.read_text()
     except OSError:
@@ -54,11 +77,11 @@ def _parse_agent_file(path: Path) -> dict[str, Any] | None:
         log.warning("agent_parse_skipped", path=str(path), reason="missing name")
         return None
 
-    config: dict[str, Any] = {"name": name, "prompt": post.content.strip()}
+    fields: dict[str, Any] = {"name": name, "prompt": post.content.strip()}
     for key in _CUSTOM_AGENT_FIELDS - {"name"}:
         if key in meta:
-            config[key] = meta[key]
-    return config
+            fields[key] = meta[key]
+    return AgentConfig(**fields)
 
 
 def _resolve_real_path(path: Path, repo_root: Path) -> Path | None:
@@ -86,7 +109,7 @@ def discover_repo_config(repo_path: str) -> RepoConfig:
     """Discover skills, agents, and instructions in a cloned repo."""
     root = Path(repo_path)
     skill_dirs: list[str] = []
-    agents: list[dict[str, Any]] = []
+    agents: list[AgentConfig] = []
     instruction_parts: list[str] = []
     seen_instruction_paths: set[Path] = set()
 
