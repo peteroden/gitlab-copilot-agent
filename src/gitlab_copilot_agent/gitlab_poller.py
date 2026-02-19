@@ -68,26 +68,29 @@ class GitLabPoller:
             await asyncio.sleep(min(self._interval * 2**self._failures, _MAX_BACKOFF))
 
     async def _poll_once(self) -> None:
+        poll_start = datetime.now(UTC).isoformat()
         for pid in self._project_ids:
             for mr in await self._client.list_project_mrs(
                 pid, state="opened", updated_after=self._watermark
             ):
                 await self._process_mr(pid, mr)
-        self._watermark = datetime.now(UTC).isoformat()
+        self._watermark = poll_start
 
     async def _process_mr(self, project_id: int, mr: dict[str, Any]) -> None:
         sha: str = mr["sha"]
         key = f"review:{project_id}:{mr['iid']}:{sha}"
         if await self._dedup.is_seen(key):
             return
-        ns = mr["references"]["full"].split("/-/")[0].lstrip("/")
+        # Extract path from web_url: https://gitlab.example.com/group/project/-/merge_requests/1
+        project_url = mr["web_url"].split("/-/")[0]
+        ns = project_url.removeprefix(self._settings.gitlab_url).strip("/")
         payload = MergeRequestWebhookPayload(
             object_kind="merge_request",
             user=WebhookUser(id=mr["author"]["id"], username=mr["author"]["username"]),
             project=WebhookProject(
                 id=project_id,
                 path_with_namespace=ns,
-                git_http_url=f"{self._settings.gitlab_url}/{ns}.git",
+                git_http_url=f"{project_url}.git",
             ),
             object_attributes=MRObjectAttributes(
                 iid=mr["iid"],
