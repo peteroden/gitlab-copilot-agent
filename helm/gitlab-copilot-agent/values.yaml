@@ -35,3 +35,11 @@ service: { type: ClusterIP }
 serviceAccount: { create: true, name: "" }
 gitlab: { url: "", token: "", webhookSecret: "" }
 github: { token: "" }
+jira:
+  url: ""
+  email: ""
+  apiToken: ""
+  projectMap: ""
+  triggerStatus: "AI Ready"
+  inProgressStatus: "In Progress"
+  pollInterval: 30

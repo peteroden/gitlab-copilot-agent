@@ -29,3 +29,20 @@ data:
   {{- with .Values.telemetry.environment }}
   DEPLOYMENT_ENV: {{ . | quote }}
   {{- end }}
+  {{- with .Values.jira.url }}
+  JIRA_URL: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.jira.projectMap }}
+  JIRA_PROJECT_MAP: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.jira.url }}
+  {{- with .Values.jira.triggerStatus }}
+  JIRA_TRIGGER_STATUS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.jira.inProgressStatus }}
+  JIRA_IN_PROGRESS_STATUS: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.jira.pollInterval }}
+  JIRA_POLL_INTERVAL: {{ .Values.jira.pollInterval | quote }}
+  {{- end }}
+  {{- end }}

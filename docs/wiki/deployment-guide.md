@@ -142,6 +142,18 @@ telemetry:
       requests: { cpu: 50m, memory: 128Mi }
 ```
 
+**Jira** (all optional — agent runs review-only without these):
+```yaml
+jira:
+  url: ""                  # JIRA_URL
+  email: ""                # JIRA_EMAIL (secret)
+  apiToken: ""             # JIRA_API_TOKEN (secret)
+  projectMap: ""           # JIRA_PROJECT_MAP
+  triggerStatus: "AI Ready"    # JIRA_TRIGGER_STATUS
+  inProgressStatus: "In Progress"  # JIRA_IN_PROGRESS_STATUS
+  pollInterval: 30         # JIRA_POLL_INTERVAL
+```
+
 ---
 
 ### Deployment
