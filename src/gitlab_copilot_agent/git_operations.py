@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -30,7 +31,10 @@ def _validate_clone_url(url: str) -> None:
     except Exception as e:
         raise ValueError(f"Invalid URL format: {e}") from e
 
-    if parsed.scheme != "https":
+    _allow_http = os.environ.get("ALLOW_HTTP_CLONE", "").lower() in ("true", "1", "yes")
+    if parsed.scheme == "http" and _allow_http:
+        pass  # E2E testing with mock git server
+    elif parsed.scheme != "https":
         raise ValueError(f"Clone URL must use HTTPS scheme, got: {parsed.scheme}")
 
     if parsed.username or parsed.password:

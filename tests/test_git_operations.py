@@ -247,6 +247,17 @@ class TestValidateCloneUrl:
         with pytest.raises(ValueError, match="must use HTTPS scheme"):
             _validate_clone_url("http://gitlab.com/project.git")
 
+    def test_allows_http_when_env_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """HTTP URLs allowed when ALLOW_HTTP_CLONE is set (E2E testing)."""
+        monkeypatch.setenv("ALLOW_HTTP_CLONE", "true")
+        _validate_clone_url("http://localhost:9999/repo.git")
+
+    def test_rejects_http_when_env_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """ALLOW_HTTP_CLONE=false must not enable HTTP cloning."""
+        monkeypatch.setenv("ALLOW_HTTP_CLONE", "false")
+        with pytest.raises(ValueError, match="must use HTTPS scheme"):
+            _validate_clone_url("http://gitlab.com/project.git")
+
     def test_rejects_ssh_scheme(self) -> None:
         """SSH URLs must be rejected."""
         with pytest.raises(ValueError, match="must use HTTPS scheme"):

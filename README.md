@@ -284,6 +284,21 @@ devcontainer exec --workspace-folder . uv run ruff check src/ tests/
 devcontainer exec --workspace-folder . uv run mypy src/
 ```
 
+### E2E Tests
+
+End-to-end tests deploy the agent to k3d and test the full webhook → review → comment flow against mock services. Prerequisites: Docker, Make, k3d, kubectl.
+
+```bash
+# Create the E2E cluster
+make e2e-up
+
+# Run the full E2E test (builds, deploys, sends webhook, verifies comments)
+make e2e-test
+
+# Tear down
+make e2e-down
+```
+
 ## Demo
 
 See [`docs/DEMO.md`](docs/DEMO.md) for automated demo environment setup. One command provisions a GitLab repo + Jira project showcasing all agent capabilities.

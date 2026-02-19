@@ -278,6 +278,21 @@ kubectl logs job/copilot-review-xxxxx
 make k3d-down
 ```
 
+### E2E Validation
+
+Run the full E2E integration test to validate the deployment pipeline works end-to-end. This deploys the agent to a separate k3d cluster with mock GitLab API, mock LLM, and a mock git server on the host.
+
+```bash
+# Create E2E cluster, build, deploy, test, all-in-one
+make e2e-up
+make e2e-test
+make e2e-down
+```
+
+The test sends a webhook, verifies the agent clones the repo, runs a review via the mock LLM, and posts comments back to the mock GitLab. Mock services run on the host and are accessed from pods via `host.k3d.internal` (injected via `hostAliases`).
+
+See `tests/e2e/` for mock service code and `README.md` for prerequisites.
+
 ---
 
 ## Health Checks

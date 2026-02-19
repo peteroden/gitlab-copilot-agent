@@ -222,11 +222,34 @@ async def test_git_clone(monkeypatch):
 
 ### E2E Tests
 
-**Purpose**: Test full flows with minimal mocking.
+**Purpose**: Test the full deployed agent in k3d against mock services on the host.
 
-**Pattern**: Use test doubles for external services, real filesystem/git operations.
+**Architecture**:
+```
+Host (mock services)                 k3d cluster
+mock_gitlab.py:9999  ◄── HTTP ──── agent pod (GitLab API + git clone)
+mock_llm.py:9998     ◄── HTTP ──── copilot SDK (OpenAI-compatible)
+```
 
-**Example**: `test_orchestrator.py` — clones real temp repo, runs mocked review, posts comments.
+**Mock services** (`tests/e2e/`):
+- `mock_gitlab.py` — GitLab REST API + dumb git HTTP server (bare repo via `git update-server-info`)
+- `mock_llm.py` — OpenAI-compatible `/v1/chat/completions` returning a canned review
+
+**Test script** (`tests/e2e/run.sh`):
+1. Polls mock and agent health endpoints until ready
+2. Sends MR webhook → asserts `{"status": "queued"}`
+3. Polls `GET /discussions` on mock GitLab until review comments appear (120s timeout)
+
+**Run locally**:
+```bash
+make e2e-up      # Create k3d cluster
+make e2e-test    # Build, deploy, start mocks, run test
+make e2e-down    # Teardown
+```
+
+**CI**: `.github/workflows/e2e.yml` — blocking on PRs. Auto-detects Docker gateway IP for `hostAliases`.
+
+**Key config**: `ALLOW_HTTP_CLONE=true` enables HTTP git clone (mock git server). `hostAliases` injects `host.k3d.internal` into pod `/etc/hosts`.
 
 **Not Implemented**: No live external service tests (GitLab/Jira/Copilot APIs).
 

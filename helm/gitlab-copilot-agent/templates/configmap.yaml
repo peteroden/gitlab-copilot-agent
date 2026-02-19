@@ -49,3 +49,8 @@ data:
   JIRA_POLL_INTERVAL: {{ .Values.jira.pollInterval | quote }}
   {{- end }}
   {{- end }}
+  {{- range $key, $value := .Values.extraEnv }}
+  {{- if $value }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- end }}
