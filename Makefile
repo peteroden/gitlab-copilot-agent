@@ -37,15 +37,7 @@ k3d-build:
 
 k3d-deploy:
 	@test -f $(K3D_ENV_FILE) || { echo "Create $(K3D_ENV_FILE) from .env.k3d.example first"; exit 1; }
-	@. ./$(K3D_ENV_FILE) && printf '\
-	image: {repository: gitlab-copilot-agent, tag: local}\n\
-	gitlab: {url: "%s", token: "%s", webhookSecret: "%s"}\n\
-	github: {token: "%s"}\n\
-	controller: {copilotProviderType: "%s", copilotProviderBaseUrl: "%s", copilotProviderApiKey: "%s"}\n' \
-		"$$GITLAB_URL" "$$GITLAB_TOKEN" "$$GITLAB_WEBHOOK_SECRET" \
-		"$$GITHUB_TOKEN" \
-		"$$COPILOT_PROVIDER_TYPE" "$$COPILOT_PROVIDER_BASE_URL" "$$COPILOT_PROVIDER_API_KEY" \
-		> /tmp/k3d-values.yaml
+	@./scripts/gen-k3d-values.sh $(K3D_ENV_FILE) > /tmp/k3d-values.yaml
 	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
 		-f $(HELM_CHART)/values-local.yaml \
 		-f /tmp/k3d-values.yaml \

@@ -1,5 +1,7 @@
 image:
   pullPolicy: Never
+service:
+  type: LoadBalancer
 controller:
   resources:
     limits: { cpu: 250m, memory: 256Mi }

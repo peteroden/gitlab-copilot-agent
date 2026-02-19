@@ -370,8 +370,10 @@ make k3d-deploy                 # deploy via Helm
 
 ### Webhook Testing
 
-The controller is exposed on `localhost:8080` via the k3d loadbalancer (override with `K3D_HOST_PORT=9000 make k3d-up`).
-For direct port-forward:
+The controller is exposed on `localhost:8080` via k3d port mapping + ServiceLB (override with `K3D_HOST_PORT=9000 make k3d-up`).
+`curl http://localhost:8080/health` works immediately after deploy — no `kubectl port-forward` needed.
+
+For manual port-forward (if not using ServiceLB):
 
 ```bash
 kubectl port-forward svc/copilot-agent 8000:8000
