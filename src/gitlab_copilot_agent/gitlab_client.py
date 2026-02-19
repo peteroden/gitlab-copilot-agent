@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import gitlab
 import structlog
@@ -46,6 +46,13 @@ class GitLabClientProtocol(Protocol):
         self, project_id: int, source_branch: str, target_branch: str, title: str, description: str
     ) -> int: ...
     async def post_mr_comment(self, project_id: int, mr_iid: int, body: str) -> None: ...
+    async def list_project_mrs(
+        self, project_id: int, state: str = "opened", updated_after: str | None = None
+    ) -> list[dict[str, Any]]: ...
+    async def list_mr_notes(
+        self, project_id: int, mr_iid: int, created_after: str | None = None
+    ) -> list[dict[str, Any]]: ...
+    async def resolve_project(self, id_or_path: str | int) -> int: ...
 
 
 class GitLabClient:
@@ -133,3 +140,41 @@ class GitLabClient:
             mr.notes.create({"body": body})
 
         await asyncio.to_thread(_post)
+
+    async def list_project_mrs(
+        self, project_id: int, state: str = "opened", updated_after: str | None = None
+    ) -> list[dict[str, Any]]:
+        """List merge requests for a project."""
+
+        def _list() -> list[dict[str, Any]]:
+            project = self._gl.projects.get(project_id)
+            kwargs: dict[str, Any] = {"state": state, "get_all": True}
+            if updated_after is not None:
+                kwargs["updated_after"] = updated_after
+            return [mr.attributes for mr in project.mergerequests.list(**kwargs)]
+
+        return await asyncio.to_thread(_list)
+
+    async def list_mr_notes(
+        self, project_id: int, mr_iid: int, created_after: str | None = None
+    ) -> list[dict[str, Any]]:
+        """List notes (comments) on a merge request."""
+
+        def _list() -> list[dict[str, Any]]:
+            project = self._gl.projects.get(project_id)
+            mr = project.mergerequests.get(mr_iid)
+            kwargs: dict[str, Any] = {"get_all": True}
+            if created_after is not None:
+                kwargs["created_after"] = created_after
+            return [note.attributes for note in mr.notes.list(**kwargs)]
+
+        return await asyncio.to_thread(_list)
+
+    async def resolve_project(self, id_or_path: str | int) -> int:
+        """Resolve a project ID or path to its numeric ID."""
+
+        def _resolve() -> int:
+            project = self._gl.projects.get(id_or_path)
+            return project.id  # type: ignore[no-any-return]
+
+        return await asyncio.to_thread(_resolve)
