@@ -59,6 +59,55 @@ def create_project(
     return data
 
 
+def find_status(client: httpx.Client, name: str) -> dict | None:
+    """Search for an existing Jira status by name."""
+    resp = client.get("/rest/api/3/statuses/search", params={"searchString": name})
+    resp.raise_for_status()
+    for status in resp.json().get("values", []):
+        if status["name"] == name:
+            return status
+    return None
+
+
+def create_status(
+    client: httpx.Client,
+    name: str,
+    project_id: str,
+    *,
+    status_category: str = "NEW",
+) -> dict:
+    """Create a project-scoped Jira status. Returns the created status."""
+    result = create_statuses(
+        client, [(name, status_category)], project_id
+    )
+    return result[0]
+
+
+def create_statuses(
+    client: httpx.Client,
+    statuses: list[tuple[str, str]],
+    project_id: str,
+) -> list[dict]:
+    """Create multiple project-scoped Jira statuses in one call.
+
+    Args:
+        statuses: List of (name, statusCategory) tuples.
+    """
+    payload = {
+        "scope": {"type": "PROJECT", "project": {"id": project_id}},
+        "statuses": [
+            {"name": name, "statusCategory": category}
+            for name, category in statuses
+        ],
+    }
+    resp = client.post("/rest/api/3/statuses", json=payload)
+    resp.raise_for_status()
+    result = resp.json()
+    for name, _ in statuses:
+        log.info("jira_status_created", name=name, project_id=project_id)
+    return result if isinstance(result, list) else [result]
+
+
 def get_current_user(client: httpx.Client) -> dict:
     """Get the current authenticated user's info."""
     resp = client.get("/rest/api/3/myself")

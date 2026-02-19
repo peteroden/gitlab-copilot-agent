@@ -230,6 +230,7 @@ All optional — service runs review-only without these.
 - **Required**: ❌ No
 - **Default**: `"AI Ready"`
 - **Description**: Jira status that triggers the agent
+- **Note**: The demo provisioner (`scripts/demo_provision.py`) auto-creates this status on the Jira board
 
 ### `JIRA_IN_PROGRESS_STATUS`
 - **Type**: `str`

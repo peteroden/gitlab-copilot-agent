@@ -31,6 +31,7 @@ uv run scripts/demo_provision.py \
 The script will:
 - Create a private GitLab project with a demo blog API (intentional issues included)
 - Create a Jira project with 3 demo stories
+- Create the **"AI Ready"** and **"In Review"** workflow statuses on the Jira board (workflow: To Do → AI Ready → In Progress → In Review → Done)
 - Auto-detect ngrok and configure the GitLab webhook (if running)
 - Output the `JIRA_PROJECT_MAP` configuration and next steps
 
