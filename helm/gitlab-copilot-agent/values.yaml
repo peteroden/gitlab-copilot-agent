@@ -42,4 +42,5 @@ jira:
   projectMap: ""
   triggerStatus: "AI Ready"
   inProgressStatus: "In Progress"
+  inReviewStatus: "In Review"
   pollInterval: 30

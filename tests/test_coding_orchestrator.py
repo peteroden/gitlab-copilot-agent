@@ -64,8 +64,66 @@ async def test_handle_full_pipeline(
     mock_commit.assert_awaited_once()
     mock_push.assert_awaited_once()
     mock_gitlab.create_merge_request.assert_awaited_once()
-    mock_jira.transition_issue.assert_awaited_once()
+    assert mock_jira.transition_issue.await_count == 2
+    mock_jira.transition_issue.assert_any_await("PROJ-42", "In Progress")
+    mock_jira.transition_issue.assert_any_await("PROJ-42", "In Review")
     mock_jira.add_comment.assert_awaited_once()
+
+
+@patch("gitlab_copilot_agent.coding_orchestrator.run_coding_task")
+@patch("gitlab_copilot_agent.coding_orchestrator.git_push")
+@patch("gitlab_copilot_agent.coding_orchestrator.git_commit")
+@patch("gitlab_copilot_agent.coding_orchestrator.git_create_branch")
+@patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
+async def test_in_review_transition_failure_is_non_blocking(
+    mock_clone: AsyncMock,
+    mock_branch: AsyncMock,
+    mock_commit: AsyncMock,
+    mock_push: AsyncMock,
+    mock_coding: AsyncMock,
+    tmp_path: Path,
+) -> None:
+    """If 'In Review' transition fails, the task still completes successfully."""
+    mock_clone.return_value = tmp_path
+    mock_coding.return_value = "Changes made"
+    mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
+    mock_gitlab.create_merge_request.return_value = 1
+
+    # First call (In Progress) succeeds, second call (In Review) fails
+    mock_jira.transition_issue.side_effect = [None, ValueError("No transition")]
+
+    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+    await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
+
+    assert mock_jira.transition_issue.await_count == 2
+    mock_gitlab.create_merge_request.assert_awaited_once()
+    mock_jira.add_comment.assert_awaited_once()
+
+
+@patch("gitlab_copilot_agent.coding_orchestrator.run_coding_task")
+@patch("gitlab_copilot_agent.coding_orchestrator.git_push")
+@patch("gitlab_copilot_agent.coding_orchestrator.git_commit")
+@patch("gitlab_copilot_agent.coding_orchestrator.git_create_branch")
+@patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
+async def test_custom_in_review_status_used(
+    mock_clone: AsyncMock,
+    mock_branch: AsyncMock,
+    mock_commit: AsyncMock,
+    mock_push: AsyncMock,
+    mock_coding: AsyncMock,
+    tmp_path: Path,
+) -> None:
+    """Custom JIRA_IN_REVIEW_STATUS is used for the transition."""
+    mock_clone.return_value = tmp_path
+    mock_coding.return_value = "Changes made"
+    mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
+    mock_gitlab.create_merge_request.return_value = 1
+
+    settings = make_settings(**_JIRA_SETTINGS, jira_in_review_status="QA Review")
+    orch = CodingOrchestrator(settings, mock_gitlab, mock_jira, AsyncMock())
+    await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
+
+    mock_jira.transition_issue.assert_any_await("PROJ-42", "QA Review")
 
 
 @patch("gitlab_copilot_agent.coding_orchestrator.git_clone")

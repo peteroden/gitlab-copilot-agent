@@ -17,5 +17,6 @@ jira:
   projectMap: '${JIRA_PROJECT_MAP:-}'
   triggerStatus: "${JIRA_TRIGGER_STATUS:-AI Ready}"
   inProgressStatus: "${JIRA_IN_PROGRESS_STATUS:-In Progress}"
+  inReviewStatus: "${JIRA_IN_REVIEW_STATUS:-In Review}"
   pollInterval: ${JIRA_POLL_INTERVAL:-30}
 EOF

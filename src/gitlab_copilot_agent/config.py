@@ -20,6 +20,9 @@ class JiraSettings(BaseModel):
     in_progress_status: str = Field(
         default="In Progress", description="Status to transition to after pickup"
     )
+    in_review_status: str = Field(
+        default="In Review", description="Status to transition to after MR creation"
+    )
     poll_interval: int = Field(default=30, description="Polling interval in seconds")
     project_map_json: str = Field(
         description="JSON string mapping Jira project keys to GitLab projects"
@@ -103,6 +106,7 @@ class Settings(BaseSettings):
     jira_api_token: str | None = Field(default=None, description="Jira API token")
     jira_trigger_status: str = Field(default="AI Ready", description="Status that triggers agent")
     jira_in_progress_status: str = Field(default="In Progress", description="Status after pickup")
+    jira_in_review_status: str = Field(default="In Review", description="Status after MR creation")
     jira_poll_interval: int = Field(default=30, description="Poll interval seconds")
     jira_project_map: str | None = Field(
         default=None, description="JSON: Jira project key → GitLab project config"
@@ -118,6 +122,7 @@ class Settings(BaseSettings):
                 api_token=self.jira_api_token,
                 trigger_status=self.jira_trigger_status,
                 in_progress_status=self.jira_in_progress_status,
+                in_review_status=self.jira_in_review_status,
                 poll_interval=self.jira_poll_interval,
                 project_map_json=self.jira_project_map,
             )

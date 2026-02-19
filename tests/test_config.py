@@ -82,10 +82,12 @@ def test_jira_property_uses_custom_values() -> None:
         jira_project_map=JIRA_PROJECT_MAP_JSON,
         jira_trigger_status="Ready for AI",
         jira_in_progress_status="AI Working",
+        jira_in_review_status="QA Review",
         jira_poll_interval=60,
     )
 
     assert settings.jira is not None
     assert settings.jira.trigger_status == "Ready for AI"
     assert settings.jira.in_progress_status == "AI Working"
+    assert settings.jira.in_review_status == "QA Review"
     assert settings.jira.poll_interval == 60
