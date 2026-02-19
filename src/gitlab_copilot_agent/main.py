@@ -18,6 +18,7 @@ from gitlab_copilot_agent.concurrency import (
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.git_operations import CLONE_DIR_PREFIX
 from gitlab_copilot_agent.gitlab_client import GitLabClient
+from gitlab_copilot_agent.gitlab_poller import GitLabPoller
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_poller import JiraPoller
 from gitlab_copilot_agent.project_mapping import ProjectMap
@@ -98,6 +99,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.review_tracker = ReviewedMRTracker()
 
     poller: JiraPoller | None = None
+    gl_poller: GitLabPoller | None = None
     jira_client: JiraClient | None = None
     if settings.jira:
         jira_client = JiraClient(settings.jira.url, settings.jira.email, settings.jira.api_token)
@@ -111,11 +113,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await poller.start()
         await log.ainfo("jira_poller_started", interval=settings.jira.poll_interval)
 
+    if settings.gitlab_poll and allowed_project_ids:
+        gl_client_poll = GitLabClient(settings.gitlab_url, settings.gitlab_token)
+        gl_poller = GitLabPoller(
+            gl_client=gl_client_poll,
+            settings=settings,
+            project_ids=allowed_project_ids,
+            dedup=dedup_store,
+            executor=app.state.executor,
+            repo_locks=repo_locks,
+        )
+        gl_poller._interval = settings.gitlab_poll_interval
+        await gl_poller.start()
+        app.state.gl_poller = gl_poller
+        await log.ainfo(
+            "gitlab_poller_started",
+            interval=settings.gitlab_poll_interval,
+            projects=sorted(allowed_project_ids),
+        )
+
     await log.ainfo("service started", gitlab_url=settings.gitlab_url)
     yield
 
     if poller:
         await poller.stop()
+    if gl_poller:
+        await gl_poller.stop()
     if jira_client:
         await jira_client.close()
     try:
@@ -133,5 +156,13 @@ FastAPIInstrumentor.instrument_app(app)
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, object]:
+    result: dict[str, object] = {"status": "ok"}
+    gl_poller = getattr(app.state, "gl_poller", None)
+    if gl_poller is not None:
+        result["gitlab_poller"] = {
+            "running": gl_poller._task is not None and not gl_poller._task.done(),
+            "failures": gl_poller._failures,
+            "watermark": gl_poller._watermark,
+        }
+    return result

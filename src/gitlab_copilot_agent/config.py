@@ -87,6 +87,16 @@ class Settings(BaseSettings):
         description="Comma-separated GitLab project paths or IDs to scope webhook and poller",
     )
 
+    # GitLab poller
+    gitlab_poll: bool = Field(
+        default=False,
+        description="Enable GitLab API polling for MR and note discovery",
+    )
+    gitlab_poll_interval: int = Field(
+        default=30,
+        description="Polling interval in seconds",
+    )
+
     # Jira (all optional — service runs review-only without these)
     jira_url: str | None = Field(default=None, description="Jira instance URL")
     jira_email: str | None = Field(default=None, description="Jira user email")
@@ -119,4 +129,8 @@ class Settings(BaseSettings):
             raise ValueError("Either GITHUB_TOKEN or COPILOT_PROVIDER_TYPE must be set")
         if self.state_backend == "redis" and not self.redis_url:
             raise ValueError("REDIS_URL is required when STATE_BACKEND=redis")
+        if self.gitlab_poll:
+            entries = [e.strip() for e in (self.gitlab_projects or "").split(",") if e.strip()]
+            if not entries:
+                raise ValueError("GITLAB_PROJECTS is required when GITLAB_POLL=true")
         return self
