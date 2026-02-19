@@ -5,13 +5,12 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 from datetime import UTC, datetime
-from typing import Any
 
 import structlog
 
 from gitlab_copilot_agent.concurrency import DeduplicationStore
 from gitlab_copilot_agent.config import Settings
-from gitlab_copilot_agent.gitlab_client import GitLabClientProtocol
+from gitlab_copilot_agent.gitlab_client import GitLabClientProtocol, MRListItem
 from gitlab_copilot_agent.models import (
     MergeRequestWebhookPayload,
     MRLastCommit,
@@ -76,31 +75,30 @@ class GitLabPoller:
                 await self._process_mr(pid, mr)
         self._watermark = poll_start
 
-    async def _process_mr(self, project_id: int, mr: dict[str, Any]) -> None:
-        sha: str = mr["sha"]
-        key = f"review:{project_id}:{mr['iid']}:{sha}"
+    async def _process_mr(self, project_id: int, mr: MRListItem) -> None:
+        key = f"review:{project_id}:{mr.iid}:{mr.sha}"
         if await self._dedup.is_seen(key):
             return
         # Extract path from web_url: https://gitlab.example.com/group/project/-/merge_requests/1
-        project_url = mr["web_url"].split("/-/")[0]
+        project_url = mr.web_url.split("/-/")[0]
         ns = project_url.removeprefix(self._settings.gitlab_url).strip("/")
         payload = MergeRequestWebhookPayload(
             object_kind="merge_request",
-            user=WebhookUser(id=mr["author"]["id"], username=mr["author"]["username"]),
+            user=WebhookUser(id=mr.author.id, username=mr.author.username),
             project=WebhookProject(
                 id=project_id,
                 path_with_namespace=ns,
                 git_http_url=f"{project_url}.git",
             ),
             object_attributes=MRObjectAttributes(
-                iid=mr["iid"],
-                title=mr["title"],
-                description=mr.get("description", ""),
+                iid=mr.iid,
+                title=mr.title,
+                description=mr.description or "",
                 action="update",
-                source_branch=mr["source_branch"],
-                target_branch=mr["target_branch"],
-                last_commit=MRLastCommit(id=sha, message=""),
-                url=mr["web_url"],
+                source_branch=mr.source_branch,
+                target_branch=mr.target_branch,
+                last_commit=MRLastCommit(id=mr.sha, message=""),
+                url=mr.web_url,
                 oldrev=None,
             ),
         )
