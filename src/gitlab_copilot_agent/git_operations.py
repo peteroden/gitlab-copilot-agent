@@ -169,15 +169,14 @@ async def git_clone(
 
         tmp_dir = Path(tempfile.mkdtemp(prefix=CLONE_DIR_PREFIX, dir=clone_dir))
         auth_url = clone_url.replace("https://", f"https://oauth2:{token}@")
+        # Dumb HTTP (E2E mocks) doesn't support shallow clone
+        _allow_http = os.environ.get("ALLOW_HTTP_CLONE", "").lower() in ("true", "1", "yes")
+        clone_args = ["git", "clone"]
+        if not _allow_http:
+            clone_args.append("--depth=1")
+        clone_args.extend(["--branch", branch, "--", auth_url, str(tmp_dir)])
         proc = await asyncio.create_subprocess_exec(
-            "git",
-            "clone",
-            "--depth=1",
-            "--branch",
-            branch,
-            "--",
-            auth_url,
-            str(tmp_dir),
+            *clone_args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

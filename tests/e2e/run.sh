@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # E2E test: deploy agent to k3d, run all test flows against mock services.
-# Test 1: Webhook MR review, Test 2: Jira polling, Test 3: /copilot command.
+# Tests: 1. Webhook MR review, 2. Jira polling, 3. /copilot command, 4. GitLab polling.
 # Usage: ./tests/e2e/run.sh [agent-url] [mock-gitlab-url] [mock-jira-url]
 set -euo pipefail
 
 AGENT_URL="${1:-http://localhost:8080}"
 MOCK_GITLAB_URL="${2:-http://localhost:9999}"
 MOCK_JIRA_URL="${3:-http://localhost:9997}"
+# Internal URL the agent uses inside k3d — must match GITLAB_URL in .env.e2e
+INTERNAL_GITLAB_URL="http://host.k3d.internal:9999"
 WEBHOOK_SECRET="e2e-test-secret"
 TIMEOUT=120
 POLL_INTERVAL=3
@@ -56,6 +58,7 @@ wait_for_health "$AGENT_URL/health" "agent" 40 || exit 1
 
 # === TEST 1: Webhook MR review ===
 echo ""; echo "--- Test 1: Webhook MR Review ---"
+# Clear recorded state so assertions only see data from this test
 curl -sf -X DELETE "$MOCK_GITLAB_URL/discussions" > /dev/null
 
 echo -n "Sending webhook..."
@@ -83,9 +86,12 @@ print('no' if 'failed' in texts.lower() or '⚠' in texts else 'yes')")
 
 # === TEST 2: Jira polling → coding → MR creation ===
 echo ""; echo "--- Test 2: Jira Polling Flow ---"
+# Clear recorded state so assertions only see data from this test
 curl -sf -X POST "$MOCK_JIRA_URL/reset" > /dev/null
 curl -sf -X DELETE "$MOCK_GITLAB_URL/merge_requests" > /dev/null
 curl -sf -X DELETE "$MOCK_GITLAB_URL/pushes" > /dev/null
+# Reset bare repo to clear branches from previous pushes
+curl -sf -X POST "$MOCK_GITLAB_URL/mock/reset-repo" > /dev/null
 
 poll_until "$MOCK_JIRA_URL/transitions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
@@ -126,6 +132,7 @@ fi
 
 # === TEST 3: /copilot command ===
 echo ""; echo "--- Test 3: /copilot Command ---"
+# Clear recorded state so assertions only see data from this test
 curl -sf -X DELETE "$MOCK_GITLAB_URL/discussions" > /dev/null
 
 echo -n "Sending /copilot note webhook..."
@@ -143,6 +150,40 @@ send_webhook '{
 poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
     "Waiting for agent response" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+
+# === TEST 4: GitLab Polling — MR Discovery ===
+echo ""; echo "--- Test 4: GitLab Polling — MR Discovery ---"
+# Clear recorded state so assertions only see data from this test
+curl -sf -X DELETE "$MOCK_GITLAB_URL/discussions" > /dev/null
+curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/open-mrs" > /dev/null
+curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/notes" > /dev/null
+
+# Inject an open MR for the GitLab poller to discover
+NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+echo -n "Injecting MR for poller..."
+curl -sf -X POST "$MOCK_GITLAB_URL/mock/open-mrs" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "iid": 2, "title": "Poller-discovered MR", "description": "Found by GitLab poller",
+        "source_branch": "feature-poll", "target_branch": "main",
+        "sha": "ddd0000000000000000000000000000000000000",
+        "web_url": "'"$INTERNAL_GITLAB_URL"'/repo/-/merge_requests/2",
+        "state": "opened",
+        "author": {"id": 42, "username": "polluser"},
+        "updated_at": "'"$NOW"'"
+    }' > /dev/null && echo " ✅" || { echo " ❌"; exit 1; }
+
+poll_until "$MOCK_GITLAB_URL/discussions" \
+    "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
+    "Waiting for poller review" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+
+BODY=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(d[-1].get('body', '') if d else '')
+" 2>/dev/null || echo "")
+echo -n "Checking poller review is not a failure..."
+echo "$BODY" | grep -qv "failed" && echo " ✅" || { echo " ❌ (got failure comment)"; exit 1; }
 
 echo ""; echo "=== ALL E2E TESTS PASSED ==="
 exit 0

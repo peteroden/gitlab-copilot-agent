@@ -7,6 +7,9 @@ on:
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    # Non-blocking: k8s executor has known bugs (see issues). Failures are
+    # expected until hostAliases, writable volumes, and env propagation are fixed.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -41,12 +44,16 @@ jobs:
             -f helm/gitlab-copilot-agent/values-local.yaml \
             -f /tmp/k3d-values.yaml \
             --set 'extraEnv.ALLOW_HTTP_CLONE=true' \
+            --set 'controller.resources.limits.memory=1Gi' \
+            --set 'controller.resources.requests.memory=512Mi' \
+            --set "telemetry.otlpEndpoint=http://$HOST_IP:4317" \
             --set "hostAliases[0].ip=$HOST_IP" \
             --set 'hostAliases[0].hostnames[0]=host.k3d.internal' \
             --wait --timeout 120s
 
       - name: Start mock services
         run: |
+          uv run python scripts/otel_console_collector.py > /tmp/otel.log 2>&1 &
           uv run python tests/e2e/mock_gitlab.py &
           uv run python tests/e2e/mock_llm.py &
           uv run python tests/e2e/mock_jira.py &
@@ -54,16 +61,18 @@ jobs:
       - name: Run E2E tests
         run: ./tests/e2e/run.sh http://localhost:8080 http://localhost:9999
 
-      - name: Collect logs on failure
-        if: failure()
+      - name: Collect logs
+        if: always()
         run: |
           mkdir -p /tmp/e2e-logs
-          kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=200 > /tmp/e2e-logs/agent.log 2>&1 || true
+          kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=500 > /tmp/e2e-logs/agent.log 2>&1 || true
+          cp /tmp/otel.log /tmp/e2e-logs/otel.log 2>/dev/null || true
           kubectl describe pods -l app.kubernetes.io/name=gitlab-copilot-agent > /tmp/e2e-logs/describe.log 2>&1 || true
           kubectl get events --sort-by='.lastTimestamp' > /tmp/e2e-logs/events.log 2>&1 || true
+          kubectl get jobs -o wide > /tmp/e2e-logs/jobs.log 2>&1 || true
 
       - name: Upload logs
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-pod-logs

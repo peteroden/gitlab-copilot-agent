@@ -11,7 +11,9 @@ from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
-_issue_returned = False
+# Start with no issue available — test script calls POST /reset to release it.
+# This prevents the Jira poller from consuming the issue before the test is ready.
+_issue_returned = True
 transitions: list[dict] = []
 comments: list[dict] = []
 
