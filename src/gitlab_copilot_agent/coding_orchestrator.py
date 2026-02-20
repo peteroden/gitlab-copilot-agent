@@ -100,7 +100,7 @@ class CodingOrchestrator:
                         issue.fields.summary,
                         description,
                     )
-                    await bound_log.ainfo("coding_complete", summary=result[:200])
+                    await bound_log.ainfo("coding_complete", summary=result.summary[:200])
                     has_changes = await git_commit(
                         repo_path,
                         f"feat({issue.key.lower()}): {issue.fields.summary}",
@@ -119,7 +119,7 @@ class CodingOrchestrator:
                         self._settings.gitlab_token,
                     )
                     mr_title = f"feat({issue.key.lower()}): {issue.fields.summary}"
-                    mr_desc = f"Automated implementation for {issue.key}.\n\n{result}"
+                    mr_desc = f"Automated implementation for {issue.key}.\n\n{result.summary}"
                     mr_iid = await self._gitlab.create_merge_request(
                         project_mapping.gitlab_project_id,
                         f"agent/{issue.key.lower()}",

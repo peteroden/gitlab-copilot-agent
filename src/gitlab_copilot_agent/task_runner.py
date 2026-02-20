@@ -21,22 +21,21 @@ ENV_TASK_TYPE, ENV_TASK_ID, ENV_REPO_URL = "TASK_TYPE", "TASK_ID", "REPO_URL"
 ENV_BRANCH, ENV_TASK_PAYLOAD = "BRANCH", "TASK_PAYLOAD"
 ENV_REDIS_URL = "REDIS_URL"
 VALID_TASK_TYPES: frozenset[str] = frozenset({"review", "coding", "echo"})
-_RESULT_KEY_PREFIX = "result:"
 _RESULT_TTL = 3600  # 1 hour
 
 
 async def _store_result(task_id: str, result: str) -> None:
-    """Persist result to Redis if REDIS_URL is set."""
+    """Persist result to Redis-backed ResultStore if REDIS_URL is set."""
     redis_url = os.environ.get(ENV_REDIS_URL, "").strip()
     if not redis_url:
         return
-    import redis.asyncio as aioredis
+    from gitlab_copilot_agent.redis_state import create_result_store
 
-    client = aioredis.from_url(redis_url)
+    store = create_result_store("redis", redis_url)
     try:
-        await client.set(f"{_RESULT_KEY_PREFIX}{task_id}", result, ex=_RESULT_TTL)
+        await store.set(task_id, result, ttl=_RESULT_TTL)
     finally:
-        await client.aclose()
+        await store.aclose()
 
 
 def _get_required_env(name: str) -> str:

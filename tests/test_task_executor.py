@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pydantic import ValidationError
 
-from gitlab_copilot_agent.task_executor import LocalTaskExecutor, TaskExecutor, TaskParams
+from gitlab_copilot_agent.task_executor import (
+    LocalTaskExecutor,
+    ReviewResult,
+    TaskExecutor,
+    TaskParams,
+)
 from tests.conftest import make_settings
 
 REPO_PATH = "/tmp/test-repo"
@@ -56,7 +61,7 @@ class TestLocalTaskExecutor:
         executor = LocalTaskExecutor()
         task = _make_task()
         result = await executor.execute(task)
-        assert result == "review result"
+        assert result == ReviewResult(summary="review result")
         mock_session.assert_awaited_once_with(
             settings=task.settings,
             repo_path=REPO_PATH,

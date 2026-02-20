@@ -35,6 +35,32 @@ class DeduplicationStore(Protocol):
     async def aclose(self) -> None: ...
 
 
+@runtime_checkable
+class ResultStore(Protocol):
+    """Protocol for task result storage backends."""
+
+    async def get(self, key: str) -> str | None: ...
+    async def set(self, key: str, value: str, ttl: int = 3600) -> None: ...
+
+    async def aclose(self) -> None: ...
+
+
+class MemoryResultStore:
+    """In-memory result store for local executor and testing."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, str] = {}
+
+    async def get(self, key: str) -> str | None:
+        return self._data.get(key)
+
+    async def set(self, key: str, value: str, ttl: int = 3600) -> None:
+        self._data[key] = value
+
+    async def aclose(self) -> None:
+        self._data.clear()
+
+
 class MemoryLock:
     """Async lock per key — serializes operations on the same key.
 

@@ -11,6 +11,7 @@ from gitlab_copilot_agent.models import (
     WebhookUser,
 )
 from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
+from gitlab_copilot_agent.task_executor import CodingResult
 from tests.conftest import MR_IID, PROJECT_ID, make_settings
 
 
@@ -57,7 +58,7 @@ async def test_handle_full_pipeline(
 ) -> None:
     mock_clone.return_value = tmp_path
     mock_executor = AsyncMock()
-    mock_executor.execute.return_value = "Fixed the bug"
+    mock_executor.execute.return_value = CodingResult(summary="Fixed the bug")
     mock_commit.return_value = True
     mock_gl = AsyncMock()
     mock_gl_class.return_value = mock_gl

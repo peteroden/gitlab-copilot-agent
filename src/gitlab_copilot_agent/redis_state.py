@@ -15,6 +15,8 @@ from gitlab_copilot_agent.concurrency import (
     DistributedLock,
     MemoryDedup,
     MemoryLock,
+    MemoryResultStore,
+    ResultStore,
 )
 
 if TYPE_CHECKING:
@@ -103,6 +105,28 @@ class RedisDedup:
         await self._client.aclose()
 
 
+_RESULT_PREFIX = "result:"
+
+
+class RedisResultStore:
+    """Redis-backed task result store."""
+
+    def __init__(self, client: Redis) -> None:
+        self._client: Redis = client
+
+    async def get(self, key: str) -> str | None:
+        val = await self._client.get(f"{_RESULT_PREFIX}{key}")
+        if val is None:
+            return None
+        return val.decode() if isinstance(val, bytes) else str(val)
+
+    async def set(self, key: str, value: str, ttl: int = 3600) -> None:
+        await self._client.set(f"{_RESULT_PREFIX}{key}", value, ex=ttl)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
 def create_lock(backend: str, redis_url: str | None = None) -> DistributedLock:
     """Factory: create a Lock for the given backend."""
     if backend == "redis":
@@ -125,3 +149,15 @@ def create_dedup(backend: str, redis_url: str | None = None) -> DeduplicationSto
             raise ValueError(msg)
         return RedisDedup(aioredis.from_url(redis_url))
     return MemoryDedup()
+
+
+def create_result_store(backend: str, redis_url: str | None = None) -> ResultStore:
+    """Factory: create a ResultStore for the given backend."""
+    if backend == "redis":
+        import redis.asyncio as aioredis
+
+        if not redis_url:
+            msg = "redis_url is required when backend='redis'"
+            raise ValueError(msg)
+        return RedisResultStore(aioredis.from_url(redis_url))
+    return MemoryResultStore()

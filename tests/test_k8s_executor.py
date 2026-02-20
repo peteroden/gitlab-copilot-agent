@@ -8,7 +8,6 @@ import types
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import fakeredis.aioredis
 import pytest
 
 from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams
@@ -29,7 +28,6 @@ K8S_JOB_CPU = "500m"
 K8S_JOB_MEM = "512Mi"
 K8S_JOB_TIMEOUT = 5  # short for tests
 EXPECTED_JOB_NAME = "copilot-review-72a7b9961a8635bf"
-RESULT_KEY = f"result:{TASK_ID}"
 CACHED_RESULT = "cached review output"
 ANNOTATION_RESULT = "annotation fallback result"
 POD_LOGS = "ERROR: something went wrong"
@@ -158,17 +156,23 @@ def core_v1(_k8s_stubs: tuple[MagicMock, MagicMock, MagicMock]) -> MagicMock:
 
 
 @pytest.fixture
-def fake_redis() -> fakeredis.aioredis.FakeRedis:
-    return fakeredis.aioredis.FakeRedis()
+def fake_result_store() -> Any:
+    from gitlab_copilot_agent.concurrency import MemoryResultStore
+
+    return MemoryResultStore()
 
 
 def _make_executor(
     settings: Any | None = None,
-    redis_url: str = REDIS_URL,
+    result_store: Any | None = None,
 ) -> Any:
     from gitlab_copilot_agent.k8s_executor import KubernetesTaskExecutor
 
-    return KubernetesTaskExecutor(settings=settings or _make_settings(), redis_url=redis_url)
+    if result_store is None:
+        from gitlab_copilot_agent.concurrency import MemoryResultStore
+
+        result_store = MemoryResultStore()
+    return KubernetesTaskExecutor(settings=settings or _make_settings(), result_store=result_store)
 
 
 # -- Tests ----------------------------------------------------------------
@@ -181,21 +185,19 @@ class TestProtocolCompliance:
 
 
 class TestIdempotency:
-    async def test_returns_cached_result(self, fake_redis: fakeredis.aioredis.FakeRedis) -> None:
-        await fake_redis.set(RESULT_KEY, CACHED_RESULT)
-        executor = _make_executor()
+    async def test_returns_cached_result(self, fake_result_store: Any) -> None:
+        await fake_result_store.set(TASK_ID, CACHED_RESULT)
+        executor = _make_executor(result_store=fake_result_store)
 
-        with patch("redis.asyncio.from_url", return_value=fake_redis):
-            result = await executor.execute(_make_task())
+        result = await executor.execute(_make_task())
 
-        assert result == CACHED_RESULT
+        assert result.summary == CACHED_RESULT
 
 
 class TestJobCreation:
     async def test_creates_job_with_correct_spec(
         self,
         batch_v1: MagicMock,
-        fake_redis: fakeredis.aioredis.FakeRedis,
     ) -> None:
         # Make job succeed immediately
         status_mock = MagicMock()
@@ -208,8 +210,7 @@ class TestJobCreation:
         batch_v1.read_namespaced_job.return_value = job_mock
 
         executor = _make_executor()
-        with patch("redis.asyncio.from_url", return_value=fake_redis):
-            await executor.execute(_make_task())
+        await executor.execute(_make_task())
 
         # Verify Job was created
         batch_v1.create_namespaced_job.assert_called_once()
@@ -239,7 +240,6 @@ class TestJobCreation:
     async def test_env_vars_include_task_and_auth(
         self,
         batch_v1: MagicMock,
-        fake_redis: fakeredis.aioredis.FakeRedis,
     ) -> None:
         status_mock = MagicMock()
         status_mock.succeeded = 1
@@ -251,8 +251,7 @@ class TestJobCreation:
         batch_v1.read_namespaced_job.return_value = job_mock
 
         executor = _make_executor()
-        with patch("redis.asyncio.from_url", return_value=fake_redis):
-            await executor.execute(_make_task())
+        await executor.execute(_make_task())
 
         job_body = batch_v1.create_namespaced_job.call_args
         container = job_body.kwargs["body"].spec.template.spec.containers[0]
@@ -279,7 +278,6 @@ class TestJobCreation:
     async def test_byok_env_vars_propagated(
         self,
         batch_v1: MagicMock,
-        fake_redis: fakeredis.aioredis.FakeRedis,
     ) -> None:
         """#143: BYOK provider env vars forwarded to Job pods."""
         status_mock = MagicMock()
@@ -299,8 +297,7 @@ class TestJobCreation:
             github_token=None,
         )
         executor = _make_executor(settings=settings)
-        with patch("redis.asyncio.from_url", return_value=fake_redis):
-            await executor.execute(_make_task(settings=settings))
+        await executor.execute(_make_task(settings=settings))
 
         job_body = batch_v1.create_namespaced_job.call_args.kwargs["body"]
         container = job_body.spec.template.spec.containers[0]
@@ -315,7 +312,7 @@ class TestCompletion:
     async def test_returns_result_from_redis(
         self,
         batch_v1: MagicMock,
-        fake_redis: fakeredis.aioredis.FakeRedis,
+        fake_result_store: Any,
     ) -> None:
         call_count = 0
 
@@ -334,22 +331,20 @@ class TestCompletion:
 
         batch_v1.read_namespaced_job.side_effect = _status_side_effect
 
-        # Simulate result appearing in Redis after first poll
+        # Simulate result appearing in store after first poll
         async def _set_result_later() -> None:
             await asyncio.sleep(0.05)
-            await fake_redis.set(RESULT_KEY, CACHED_RESULT)
+            await fake_result_store.set(TASK_ID, CACHED_RESULT)
 
-        executor = _make_executor()
-        with patch("redis.asyncio.from_url", return_value=fake_redis):
-            asyncio.create_task(_set_result_later())
-            result = await executor.execute(_make_task())
+        executor = _make_executor(result_store=fake_result_store)
+        asyncio.create_task(_set_result_later())
+        result = await executor.execute(_make_task())
 
-        assert result == CACHED_RESULT
+        assert result.summary == CACHED_RESULT
 
     async def test_falls_back_to_annotation(
         self,
         batch_v1: MagicMock,
-        fake_redis: fakeredis.aioredis.FakeRedis,
     ) -> None:
         job_mock = MagicMock()
         job_mock.status.succeeded = 1
@@ -358,10 +353,9 @@ class TestCompletion:
         batch_v1.read_namespaced_job.return_value = job_mock
 
         executor = _make_executor()
-        with patch("redis.asyncio.from_url", return_value=fake_redis):
-            result = await executor.execute(_make_task())
+        result = await executor.execute(_make_task())
 
-        assert result == ANNOTATION_RESULT
+        assert result.summary == ANNOTATION_RESULT
 
 
 class TestFailureHandling:
@@ -369,7 +363,6 @@ class TestFailureHandling:
         self,
         batch_v1: MagicMock,
         core_v1: MagicMock,
-        fake_redis: fakeredis.aioredis.FakeRedis,
     ) -> None:
         job_mock = MagicMock()
         job_mock.status.succeeded = None
@@ -382,17 +375,13 @@ class TestFailureHandling:
         core_v1.read_namespaced_pod_log.return_value = POD_LOGS
 
         executor = _make_executor()
-        with (
-            patch("redis.asyncio.from_url", return_value=fake_redis),
-            pytest.raises(RuntimeError, match="failed"),
-        ):
+        with pytest.raises(RuntimeError, match="failed"):
             await executor.execute(_make_task())
 
     async def test_failure_includes_pod_logs(
         self,
         batch_v1: MagicMock,
         core_v1: MagicMock,
-        fake_redis: fakeredis.aioredis.FakeRedis,
     ) -> None:
         job_mock = MagicMock()
         job_mock.status.succeeded = None
@@ -405,10 +394,7 @@ class TestFailureHandling:
         core_v1.read_namespaced_pod_log.return_value = POD_LOGS
 
         executor = _make_executor()
-        with (
-            patch("redis.asyncio.from_url", return_value=fake_redis),
-            pytest.raises(RuntimeError, match=POD_LOGS),
-        ):
+        with pytest.raises(RuntimeError, match=POD_LOGS):
             await executor.execute(_make_task())
 
 
@@ -416,7 +402,6 @@ class TestTimeout:
     async def test_deletes_job_on_timeout(
         self,
         batch_v1: MagicMock,
-        fake_redis: fakeredis.aioredis.FakeRedis,
     ) -> None:
         # Job stays running forever
         job_mock = MagicMock()
@@ -428,7 +413,6 @@ class TestTimeout:
         executor = _make_executor(settings=settings)
 
         with (
-            patch("redis.asyncio.from_url", return_value=fake_redis),
             patch("gitlab_copilot_agent.k8s_executor._JOB_POLL_INTERVAL", 0.1),
             pytest.raises(TimeoutError, match="timed out"),
         ):
@@ -441,7 +425,6 @@ class TestAlreadyExists:
     async def test_409_falls_through_to_poll(
         self,
         batch_v1: MagicMock,
-        fake_redis: fakeredis.aioredis.FakeRedis,
     ) -> None:
         """409 on create falls through to poll loop and returns result."""
         batch_v1.create_namespaced_job.side_effect = sys.modules["kubernetes.client"].ApiException(
@@ -455,10 +438,9 @@ class TestAlreadyExists:
         batch_v1.read_namespaced_job.return_value = job_mock
 
         executor = _make_executor()
-        with patch("redis.asyncio.from_url", return_value=fake_redis):
-            result = await executor.execute(_make_task())
+        result = await executor.execute(_make_task())
 
-        assert result == ANNOTATION_RESULT
+        assert result.summary == ANNOTATION_RESULT
 
 
 class TestFailedJobCleanup:
@@ -466,7 +448,6 @@ class TestFailedJobCleanup:
         self,
         batch_v1: MagicMock,
         core_v1: MagicMock,
-        fake_redis: fakeredis.aioredis.FakeRedis,
     ) -> None:
         """Failed Job is explicitly deleted after reading pod logs."""
         job_mock = MagicMock()
@@ -480,10 +461,7 @@ class TestFailedJobCleanup:
         core_v1.read_namespaced_pod_log.return_value = POD_LOGS
 
         executor = _make_executor()
-        with (
-            patch("redis.asyncio.from_url", return_value=fake_redis),
-            pytest.raises(RuntimeError, match="failed"),
-        ):
+        with pytest.raises(RuntimeError, match="failed"):
             await executor.execute(_make_task())
 
         batch_v1.delete_namespaced_job.assert_called_once()
@@ -492,7 +470,6 @@ class TestFailedJobCleanup:
         self,
         batch_v1: MagicMock,
         core_v1: MagicMock,
-        fake_redis: fakeredis.aioredis.FakeRedis,
     ) -> None:
         """404 from read_job_status (Job deleted) is treated as failure."""
         api_exc_cls = sys.modules["kubernetes.client"].ApiException
@@ -504,10 +481,7 @@ class TestFailedJobCleanup:
         core_v1.read_namespaced_pod_log.return_value = POD_LOGS
 
         executor = _make_executor()
-        with (
-            patch("redis.asyncio.from_url", return_value=fake_redis),
-            pytest.raises(RuntimeError, match="failed"),
-        ):
+        with pytest.raises(RuntimeError, match="failed"):
             await executor.execute(_make_task())
 
 
