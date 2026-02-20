@@ -23,6 +23,10 @@ discussions: list[dict] = []
 merge_requests: list[dict] = []
 pushes: list[dict] = []
 
+# GitLab poller state — controlled by test script via /mock endpoints
+_open_mrs: list[dict] = []
+_mr_notes: dict[int, list[dict]] = {}  # mr_iid → notes list
+
 # Bare git repo created at startup
 _bare_repo: Path | None = None
 _head_sha: str = ""
@@ -148,6 +152,75 @@ async def clear_pushes() -> dict:
     return {"cleared": True}
 
 
+# --- GitLab Poller endpoints (python-gitlab list APIs) ---
+
+
+@app.get("/api/v4/projects/{project_id}/merge_requests")
+async def list_mrs(project_id: int) -> Response:
+    """Return open MRs for the poller. Controlled via POST /mock/open-mrs."""
+    from fastapi.responses import JSONResponse
+
+    headers = {"x-total": str(len(_open_mrs)), "x-total-pages": "1", "x-page": "1"}
+    return JSONResponse(content=_open_mrs, headers=headers)
+
+
+@app.get("/api/v4/projects/{project_id}/merge_requests/{mr_iid}/notes")
+async def list_notes(project_id: int, mr_iid: int) -> Response:
+    """Return notes for a MR. Controlled via POST /mock/notes/{mr_iid}."""
+    from fastapi.responses import JSONResponse
+
+    notes = _mr_notes.get(mr_iid, [])
+    headers = {"x-total": str(len(notes)), "x-total-pages": "1", "x-page": "1"}
+    return JSONResponse(content=notes, headers=headers)
+
+
+# --- Mock control endpoints (test script injects state) ---
+
+
+@app.post("/mock/open-mrs")
+async def add_open_mr(request: Request) -> dict:
+    """Add an MR for the GitLab poller to discover."""
+    body = await request.json()
+    _open_mrs.append(body)
+    return {"added": True}
+
+
+@app.post("/mock/notes/{mr_iid}")
+async def add_note(mr_iid: int, request: Request) -> dict:
+    """Add a note for the GitLab poller to discover on a specific MR."""
+    body = await request.json()
+    _mr_notes.setdefault(mr_iid, []).append(body)
+    return {"added": True}
+
+
+@app.delete("/mock/open-mrs")
+async def clear_open_mrs() -> dict:
+    _open_mrs.clear()
+    return {"cleared": True}
+
+
+@app.delete("/mock/notes")
+async def clear_notes() -> dict:
+    _mr_notes.clear()
+    return {"cleared": True}
+
+
+@app.post("/mock/reset-repo")
+async def reset_repo() -> dict:
+    """Recreate the bare git repo — clears all pushed branches."""
+    global _bare_repo, _head_sha  # noqa: PLW0603
+    import shutil
+
+    if _bare_repo and _bare_repo.exists():
+        shutil.rmtree(_bare_repo.parent, ignore_errors=True)
+    _bare_repo = _create_bare_repo()
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=_bare_repo, capture_output=True, text=True, check=True
+    )
+    _head_sha = result.stdout.strip()
+    return {"reset": True}
+
+
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
@@ -197,14 +270,14 @@ async def startup() -> None:
 
 @app.get("/repo.git/{path:path}")
 async def serve_git(path: str, request: Request) -> Response:
-    """Serve bare git repo files. Supports smart HTTP push protocol."""
+    """Serve bare git repo files. Smart HTTP for push, dumb HTTP for clone."""
     if path == "info/refs" and request.query_params.get("service") == "git-receive-pack":
-        body = (
-            _pkt_line("# service=git-receive-pack\n")
-            + PKT_FLUSH
-            + _pkt_line(f"{_head_sha} refs/heads/main\0 report-status\n")
-            + PKT_FLUSH
+        assert _bare_repo is not None
+        result = subprocess.run(
+            ["git", "receive-pack", "--stateless-rpc", "--advertise-refs", str(_bare_repo)],
+            capture_output=True,
         )
+        body = _pkt_line("# service=git-receive-pack\n") + PKT_FLUSH + result.stdout
         return Response(content=body, media_type="application/x-git-receive-pack-advertisement")
     assert _bare_repo is not None
     file_path = _bare_repo / path
@@ -215,8 +288,10 @@ async def serve_git(path: str, request: Request) -> Response:
 
 @app.post("/repo.git/git-receive-pack")
 async def git_receive_pack(request: Request) -> Response:
-    """Accept git push — record the ref and return success."""
+    """Accept git push via smart HTTP — delegate to real git for protocol correctness."""
     body = await request.body()
+    assert _bare_repo is not None
+    # Record the pushed ref for test assertions
     ref = "unknown"
     try:
         pkt_len = int(body[:4], 16)
@@ -227,8 +302,14 @@ async def git_receive_pack(request: Request) -> Response:
     except Exception:
         pass
     pushes.append({"ref": ref})
-    resp = _pkt_line("unpack ok\n") + _pkt_line(f"ok {ref}\n") + PKT_FLUSH
-    return Response(content=resp, media_type="application/x-git-receive-pack-result")
+    # Let git handle pack processing and side-band response encoding
+    result = subprocess.run(
+        ["git", "receive-pack", "--stateless-rpc", str(_bare_repo)],
+        input=body,
+        capture_output=True,
+    )
+    subprocess.run(["git", "update-server-info"], cwd=_bare_repo, capture_output=True)
+    return Response(content=result.stdout, media_type="application/x-git-receive-pack-result")
 
 
 if __name__ == "__main__":

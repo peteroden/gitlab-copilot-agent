@@ -286,7 +286,11 @@ devcontainer exec --workspace-folder . uv run mypy src/
 
 ### E2E Tests
 
-End-to-end tests deploy the agent to k3d and test the full webhook → review → comment flow against mock services. Prerequisites: Docker, Make, k3d, kubectl.
+End-to-end tests deploy the agent to k3d and test three flows against host-side mock services. Prerequisites: Docker, Make, k3d, kubectl.
+
+1. **Webhook MR review** — sends MR webhook → verifies review comments posted
+2. **Jira polling** — agent polls mock Jira for "AI Ready" issues → verifies transitions, MR creation, comments
+3. **/copilot command** — sends note webhook with `/copilot <instruction>` → verifies agent response comment
 
 ```bash
 # Create the E2E cluster
