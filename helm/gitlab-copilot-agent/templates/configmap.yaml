@@ -17,6 +17,9 @@ data:
   K8S_JOB_CPU_LIMIT: {{ .Values.jobRunner.cpuLimit | quote }}
   K8S_JOB_MEMORY_LIMIT: {{ .Values.jobRunner.memoryLimit | quote }}
   K8S_JOB_TIMEOUT: {{ .Values.jobRunner.timeout | quote }}
+  {{- with .Values.hostAliases }}
+  K8S_JOB_HOST_ALIASES: {{ . | toJson | quote }}
+  {{- end }}
   {{- with .Values.controller.copilotProviderType }}
   COPILOT_PROVIDER_TYPE: {{ . | quote }}
   {{- end }}

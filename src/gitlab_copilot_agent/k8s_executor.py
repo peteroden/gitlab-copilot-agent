@@ -32,6 +32,16 @@ def _sanitize_job_name(task_type: str, task_id: str) -> str:
     return f"copilot-{task_type}-{id_hash}"[:63]
 
 
+def _parse_host_aliases(raw: str) -> list[object] | None:
+    """Parse JSON hostAliases string into k8s V1HostAlias objects."""
+    if not raw.strip():
+        return None
+    from kubernetes import client as k8s  # type: ignore[import-not-found,import-untyped,unused-ignore]  # noqa: I001
+
+    entries = json.loads(raw)
+    return [k8s.V1HostAlias(ip=e["ip"], hostnames=e["hostnames"]) for e in entries]
+
+
 def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
     """Return env var dicts for the Job container."""
     env = [
@@ -48,6 +58,7 @@ def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
         # Writable cache dirs for read-only root filesystem
         {"name": "UV_CACHE_DIR", "value": "/tmp/.uv-cache"},
         {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
+        {"name": "HOME", "value": "/tmp"},
         # src/ layout needs explicit PYTHONPATH when not using uv run
         {"name": "PYTHONPATH", "value": "/home/app/app/src"},
     ]
@@ -151,6 +162,7 @@ class KubernetesTaskExecutor:
                         containers=[container],
                         volumes=[tmp_volume],
                         restart_policy="Never",
+                        host_aliases=_parse_host_aliases(self._settings.k8s_job_host_aliases),
                     ),
                 ),
                 backoff_limit=1,

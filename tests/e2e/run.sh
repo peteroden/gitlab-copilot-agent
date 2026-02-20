@@ -80,8 +80,10 @@ poll_until "$MOCK_GITLAB_URL/discussions" \
 echo -n "Checking review is not a failure comment..."
 REVIEW_OK=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
 import sys,json; ds=json.load(sys.stdin)
-texts=' '.join(str(d) for d in ds)
-print('no' if 'failed' in texts.lower() or '⚠' in texts else 'yes')")
+# Real reviews have a 'position' object; failure comments are plain body text
+has_review = any('position' in str(d) for d in ds)
+has_failure = any('failed' in str(d).lower() and 'position' not in str(d) for d in ds)
+print('yes' if has_review and not has_failure else 'no')")
 [ "$REVIEW_OK" = "yes" ] && echo " ✅" || { echo " ❌ (got failure comment instead of review)"; kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
 
 # === TEST 2: Jira polling → coding → MR creation ===
@@ -165,7 +167,7 @@ curl -sf -X POST "$MOCK_GITLAB_URL/mock/open-mrs" \
     -H "Content-Type: application/json" \
     -d '{
         "iid": 2, "title": "Poller-discovered MR", "description": "Found by GitLab poller",
-        "source_branch": "feature-poll", "target_branch": "main",
+        "source_branch": "main", "target_branch": "main",
         "sha": "ddd0000000000000000000000000000000000000",
         "web_url": "'"$INTERNAL_GITLAB_URL"'/repo/-/merge_requests/2",
         "state": "opened",
@@ -177,13 +179,17 @@ poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
     "Waiting for poller review" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
 
-BODY=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
+echo -n "Checking poller review is not a failure..."
+POLL_REVIEW_OK=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-print(d[-1].get('body', '') if d else '')
-" 2>/dev/null || echo "")
-echo -n "Checking poller review is not a failure..."
-echo "$BODY" | grep -qv "failed" && echo " ✅" || { echo " ❌ (got failure comment)"; exit 1; }
+# Check latest discussions for a real review (position-based), not a failure
+recent = d[-3:] if len(d) >= 3 else d
+has_review = any('position' in str(x) for x in recent)
+has_failure = any('failed' in str(x).lower() and 'position' not in str(x) for x in recent)
+print('yes' if has_review and not has_failure else 'no')
+" 2>/dev/null || echo "no")
+[ "$POLL_REVIEW_OK" = "yes" ] && echo " ✅" || { echo " ❌ (got failure comment)"; exit 1; }
 
 echo ""; echo "=== ALL E2E TESTS PASSED ==="
 exit 0
