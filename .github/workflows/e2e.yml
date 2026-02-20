@@ -44,9 +44,9 @@ jobs:
             -f helm/gitlab-copilot-agent/values-local.yaml \
             -f /tmp/k3d-values.yaml \
             --set 'extraEnv.ALLOW_HTTP_CLONE=true' \
+            --set "extraEnv.OTEL_EXPORTER_OTLP_ENDPOINT=http://$HOST_IP:4317" \
             --set 'controller.resources.limits.memory=1Gi' \
             --set 'controller.resources.requests.memory=512Mi' \
-            --set "telemetry.otlpEndpoint=http://$HOST_IP:4317" \
             --set "hostAliases[0].ip=$HOST_IP" \
             --set 'hostAliases[0].hostnames[0]=host.k3d.internal' \
             --wait --timeout 120s
@@ -65,8 +65,9 @@ jobs:
         if: always()
         run: |
           mkdir -p /tmp/e2e-logs
-          kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=500 > /tmp/e2e-logs/agent.log 2>&1 || true
+          # App logs, traces, and metrics are exported via OTEL to otel_console_collector.py
           cp /tmp/otel.log /tmp/e2e-logs/otel.log 2>/dev/null || true
+          # k8s metadata for diagnosing scheduling/resource issues
           kubectl describe pods -l app.kubernetes.io/name=gitlab-copilot-agent > /tmp/e2e-logs/describe.log 2>&1 || true
           kubectl get events --sort-by='.lastTimestamp' > /tmp/e2e-logs/events.log 2>&1 || true
           kubectl get jobs -o wide > /tmp/e2e-logs/jobs.log 2>&1 || true
