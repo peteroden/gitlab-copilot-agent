@@ -429,7 +429,7 @@ graph TB
 8. **Rotate Secrets**: Quarterly rotation of all tokens/keys
 9. **Egress NetworkPolicy**: Block job pod egress to internal services (allow GitLab, Copilot API, Redis only)
 10. **Resource Quotas**: Limit job pod resource consumption
-11. **Pin Docker Base Images**: Use digest-based pins to prevent supply chain attacks
+11. **Pin Docker Base Images**: Use digest-based pins to prevent supply chain attacks ✅ (implemented — `Dockerfile` uses `@sha256:` pins, CI validates, Dependabot updates)
 12. **Review Gate for /copilot**: Require human approval before auto-push on coding commands (prevents prompt injection → auto-merge)
 
 ---

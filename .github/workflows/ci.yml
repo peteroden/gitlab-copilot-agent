@@ -49,6 +49,19 @@ jobs:
       - name: Helm lint
         run: helm lint helm/gitlab-copilot-agent/ --set gitlab.url=https://ci.test --set gitlab.token=ci --set gitlab.webhookSecret=ci
 
+  docker-digest-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify FROM lines are digest-pinned
+        run: |
+          bad_lines=$(grep -E '^FROM ' Dockerfile | grep -v '@sha256:' || true)
+          if [ -n "$bad_lines" ]; then
+            echo "ERROR: All FROM lines must use digest-pinned images (@sha256:...)"
+            echo "$bad_lines"
+            exit 1
+          fi
+
   build:
     runs-on: ubuntu-latest
     steps:
