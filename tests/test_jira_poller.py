@@ -192,3 +192,39 @@ async def test_poll_once_with_no_projects_in_map(
 
     # Should not call search when there are no projects
     mock_jira_client.search_issues.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed_project_ids", "expect_handled"),
+    [
+        pytest.param({PROJECT_ID}, True, id="project-in-allowlist"),
+        pytest.param({99999}, False, id="project-not-in-allowlist"),
+        pytest.param(None, True, id="no-allowlist"),
+    ],
+)
+async def test_poll_once_allowlist_enforcement(
+    mock_jira_client: AsyncMock,
+    project_map: ProjectMap,
+    mock_handler: AsyncMock,
+    allowed_project_ids: set[int] | None,
+    expect_handled: bool,
+) -> None:
+    issue = make_jira_issue("PROJ-123")
+    mock_jira_client.search_issues.return_value = [issue]
+
+    settings = make_jira_settings()
+    poller = JiraPoller(
+        mock_jira_client,
+        settings,
+        project_map,
+        mock_handler,
+        allowed_project_ids=allowed_project_ids,
+    )
+
+    await poller._poll_once()
+
+    if expect_handled:
+        mock_handler.handle.assert_called_once()
+    else:
+        mock_handler.handle.assert_not_called()
