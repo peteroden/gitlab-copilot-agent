@@ -46,6 +46,8 @@ def _make_settings(**overrides: Any) -> Any:
         "k8s_job_cpu_limit": K8S_JOB_CPU,
         "k8s_job_memory_limit": K8S_JOB_MEM,
         "k8s_job_timeout": K8S_JOB_TIMEOUT,
+        "k8s_configmap_name": "test-cm",
+        "k8s_secret_name": "test-sec",
     }
     return make_settings(**(defaults | overrides))
 
@@ -96,6 +98,9 @@ def _install_k8s_stub() -> tuple[MagicMock, MagicMock, MagicMock]:
         "V1VolumeMount",
         "V1EmptyDirVolumeSource",
         "V1HostAlias",
+        "V1EnvFromSource",
+        "V1ConfigMapEnvSource",
+        "V1SecretEnvSource",
     ):
         setattr(client_mod, cls_name, _passthrough_cls(cls_name))
 
@@ -292,15 +297,31 @@ class TestJobCreation:
             "SYSTEM_PROMPT",
             "USER_PROMPT",
             "TASK_PAYLOAD",
-            "GITLAB_URL",
-            "GITLAB_TOKEN",
-            "GITHUB_TOKEN",
-            "REDIS_URL",
-            "COPILOT_MODEL",
+            "UV_CACHE_DIR",
+            "XDG_CACHE_HOME",
+            "HOME",
+            "PYTHONPATH",
         )
         for expected in expected_vars:
             assert expected in env_names, f"Missing env var: {expected}"
-        assert "COPILOT_LLM_URL" not in env_names, "Stale COPILOT_LLM_URL should be removed"
+
+        # Sensitive vars must NOT be in env
+        sensitive_vars = ("GITLAB_TOKEN", "GITHUB_TOKEN", "COPILOT_PROVIDER_API_KEY", "REDIS_URL", "COPILOT_MODEL")
+        for sensitive in sensitive_vars:
+            assert sensitive not in env_names, f"Sensitive var {sensitive} should NOT be in env"
+
+        # env_from should be present if configured
+        env_from = container.env_from
+        assert len(env_from) == 2
+        env_from_names = []
+        for ef in env_from:
+            if hasattr(ef, "config_map_ref"):
+                env_from_names.append(ef.config_map_ref.name)
+            if hasattr(ef, "secret_ref"):
+                env_from_names.append(ef.secret_ref.name)
+        assert "test-cm" in env_from_names
+        assert "test-sec" in env_from_names
+
 
     async def test_byok_env_vars_propagated(
         self,
@@ -322,6 +343,8 @@ class TestJobCreation:
             copilot_provider_api_key="test-key",
             copilot_model="gpt-4o",
             github_token=None,
+            k8s_configmap_name="cm-name",
+            k8s_secret_name="sec-name",
         )
         executor = _make_executor(settings=settings)
         await executor.execute(_make_task(settings=settings))
@@ -329,10 +352,19 @@ class TestJobCreation:
         job_body = batch_v1.create_namespaced_job.call_args.kwargs["body"]
         container = job_body.spec.template.spec.containers[0]
         env_map = {e.name: e.value for e in container.env}
-        assert env_map["COPILOT_PROVIDER_TYPE"] == "openai"
-        assert env_map["COPILOT_PROVIDER_BASE_URL"] == "http://llm:9998/v1"
-        assert env_map["COPILOT_PROVIDER_API_KEY"] == "test-key"
-        assert env_map["COPILOT_MODEL"] == "gpt-4o"
+        assert "COPILOT_PROVIDER_TYPE" not in env_map
+        assert "COPILOT_PROVIDER_BASE_URL" not in env_map
+        assert "COPILOT_PROVIDER_API_KEY" not in env_map
+
+        # Verify env_from includes settings names
+        env_from_names = []
+        for ef in container.env_from:
+            if hasattr(ef, "config_map_ref"):
+                env_from_names.append(ef.config_map_ref.name)
+            if hasattr(ef, "secret_ref"):
+                env_from_names.append(ef.secret_ref.name)
+        assert "cm-name" in env_from_names
+        assert "sec-name" in env_from_names
 
 
 class TestCompletion:

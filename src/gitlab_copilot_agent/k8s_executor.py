@@ -44,7 +44,7 @@ def _parse_host_aliases(raw: str) -> list[object] | None:
 
 def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
     """Return env var dicts for the Job container."""
-    env = [
+    return [
         {"name": "TASK_TYPE", "value": task.task_type},
         {"name": "TASK_ID", "value": task.task_id},
         {"name": "REPO_URL", "value": task.repo_url},
@@ -52,9 +52,6 @@ def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
         {"name": "SYSTEM_PROMPT", "value": task.system_prompt},
         {"name": "USER_PROMPT", "value": task.user_prompt},
         {"name": "TASK_PAYLOAD", "value": json.dumps({"prompt": task.user_prompt})},
-        {"name": "GITLAB_URL", "value": settings.gitlab_url},
-        {"name": "GITLAB_TOKEN", "value": settings.gitlab_token},
-        {"name": "GITLAB_WEBHOOK_SECRET", "value": settings.gitlab_webhook_secret},
         # Writable cache dirs for read-only root filesystem
         {"name": "UV_CACHE_DIR", "value": "/tmp/.uv-cache"},
         {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
@@ -62,31 +59,6 @@ def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
         # src/ layout needs explicit PYTHONPATH when not using uv run
         {"name": "PYTHONPATH", "value": "/home/app/app/src"},
     ]
-    if settings.redis_url:
-        env.append({"name": "REDIS_URL", "value": settings.redis_url})
-    if settings.github_token:
-        env.append({"name": "GITHUB_TOKEN", "value": settings.github_token})
-    if settings.copilot_provider_type:
-        env.append({"name": "COPILOT_PROVIDER_TYPE", "value": settings.copilot_provider_type})
-    if settings.copilot_provider_base_url:
-        env.append(
-            {
-                "name": "COPILOT_PROVIDER_BASE_URL",
-                "value": settings.copilot_provider_base_url,
-            }
-        )
-    if settings.copilot_provider_api_key:
-        env.append(
-            {
-                "name": "COPILOT_PROVIDER_API_KEY",
-                "value": settings.copilot_provider_api_key,
-            }
-        )
-    if settings.copilot_model:
-        env.append({"name": "COPILOT_MODEL", "value": settings.copilot_model})
-    if os.environ.get("ALLOW_HTTP_CLONE"):
-        env.append({"name": "ALLOW_HTTP_CLONE", "value": os.environ["ALLOW_HTTP_CLONE"]})
-    return env
 
 
 class KubernetesTaskExecutor:
@@ -134,11 +106,18 @@ class KubernetesTaskExecutor:
         tmp_volume = k8s.V1Volume(name="tmp", empty_dir=k8s.V1EmptyDirVolumeSource())
         tmp_mount = k8s.V1VolumeMount(name="tmp", mount_path="/tmp")
 
+        env_from = []
+        if self._settings.k8s_configmap_name:
+            env_from.append(k8s.V1EnvFromSource(config_map_ref=k8s.V1ConfigMapEnvSource(name=self._settings.k8s_configmap_name)))
+        if self._settings.k8s_secret_name:
+            env_from.append(k8s.V1EnvFromSource(secret_ref=k8s.V1SecretEnvSource(name=self._settings.k8s_secret_name)))
+
         container = k8s.V1Container(
             name="task",
             image=self._settings.k8s_job_image,
             command=[".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"],
             env=env,
+            env_from=env_from,
             volume_mounts=[tmp_mount],
             resources=k8s.V1ResourceRequirements(
                 limits={

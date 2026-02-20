@@ -79,6 +79,8 @@ class Settings(BaseSettings):
     k8s_job_host_aliases: str = Field(
         default="", description="JSON-encoded hostAliases for Job pods, e.g. [{ip, hostnames}]"
     )
+    k8s_configmap_name: str = Field(default="", description="ConfigMap name to mount in Job pods")
+    k8s_secret_name: str = Field(default="", description="Secret name to mount in Job pods")
 
     # State backend
     state_backend: Literal["memory", "redis"] = Field(
