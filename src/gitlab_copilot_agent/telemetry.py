@@ -122,8 +122,36 @@ def emit_to_otel_logs(logger: Any, method: str, event_dict: dict[str, Any]) -> d
     level_name = event_dict.get("level", "info").upper()
     level = getattr(logging, level_name, logging.INFO)
     msg = event_dict.get("event", "")
-    # Filter out keys that conflict with stdlib LogRecord reserved attributes
-    _reserved = {"event", "level", "timestamp", "exc_info", "stack_info", "stackLevel"}
+    # Filter out keys that conflict with stdlib LogRecord reserved attributes.
+    # "message" is set by LogRecord.getMessage(); the rest are constructor args.
+    _reserved = {
+        "event",
+        "level",
+        "timestamp",
+        "exc_info",
+        "stack_info",
+        "stackLevel",
+        "name",
+        "msg",
+        "args",
+        "levelname",
+        "levelno",
+        "pathname",
+        "filename",
+        "module",
+        "exc_text",
+        "lineno",
+        "funcName",
+        "created",
+        "msecs",
+        "relativeCreated",
+        "thread",
+        "threadName",
+        "processName",
+        "process",
+        "taskName",
+        "message",
+    }
     extra = {k: v for k, v in event_dict.items() if k not in _reserved}
     logging.getLogger(_SERVICE_NAME).log(level, msg, extra=extra)
     return event_dict

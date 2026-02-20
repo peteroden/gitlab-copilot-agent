@@ -95,6 +95,7 @@ def _install_k8s_stub() -> tuple[MagicMock, MagicMock, MagicMock]:
         "V1Volume",
         "V1VolumeMount",
         "V1EmptyDirVolumeSource",
+        "V1HostAlias",
     ):
         setattr(client_mod, cls_name, _passthrough_cls(cls_name))
 
@@ -236,6 +237,32 @@ class TestJobCreation:
         pod_spec = job_body.spec.template.spec
         assert any(v.name == "tmp" for v in pod_spec.volumes)
         assert any(m.name == "tmp" and m.mount_path == "/tmp" for m in container.volume_mounts)
+
+        # #148: no hostAliases by default
+        assert pod_spec.host_aliases is None
+
+    async def test_host_aliases_added_to_job_pod(
+        self,
+        batch_v1: MagicMock,
+    ) -> None:
+        """#148: Job pods inherit hostAliases from controller config."""
+        status_mock = MagicMock()
+        status_mock.succeeded = 1
+        status_mock.failed = None
+        job_mock = MagicMock()
+        job_mock.status = status_mock
+        job_mock.metadata = MagicMock()
+        job_mock.metadata.annotations = {}
+        batch_v1.read_namespaced_job.return_value = job_mock
+
+        aliases_json = '[{"ip":"10.0.0.1","hostnames":["host.local"]}]'
+        executor = _make_executor(settings=_make_settings(k8s_job_host_aliases=aliases_json))
+        await executor.execute(_make_task())
+
+        pod_spec = batch_v1.create_namespaced_job.call_args.kwargs["body"].spec.template.spec
+        assert len(pod_spec.host_aliases) == 1
+        assert pod_spec.host_aliases[0].ip == "10.0.0.1"
+        assert pod_spec.host_aliases[0].hostnames == ["host.local"]
 
     async def test_env_vars_include_task_and_auth(
         self,

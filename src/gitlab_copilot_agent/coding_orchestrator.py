@@ -96,7 +96,7 @@ class CodingOrchestrator:
                         self._settings,
                         str(repo_path),
                         project_mapping.clone_url,
-                        f"agent/{issue.key.lower()}",
+                        project_mapping.target_branch,
                         issue.key,
                         issue.fields.summary,
                         description,

@@ -123,7 +123,7 @@ async def git_commit(
         "-m",
         message,
     )
-    await log.ainfo("committed", message=message, repo=str(repo_path))
+    await log.ainfo("committed", commit_message=message, repo=str(repo_path))
     return True
 
 

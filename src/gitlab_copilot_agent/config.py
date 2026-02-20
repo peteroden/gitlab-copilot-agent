@@ -1,8 +1,9 @@
 """Application configuration via environment variables."""
 
+import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -75,6 +76,9 @@ class Settings(BaseSettings):
     k8s_job_cpu_limit: str = Field(default="1", description="CPU limit for Job pods")
     k8s_job_memory_limit: str = Field(default="1Gi", description="Memory limit for Job pods")
     k8s_job_timeout: int = Field(default=600, description="Job timeout in seconds")
+    k8s_job_host_aliases: str = Field(
+        default="", description="JSON-encoded hostAliases for Job pods, e.g. [{ip, hostnames}]"
+    )
 
     # State backend
     state_backend: Literal["memory", "redis"] = Field(
@@ -127,6 +131,22 @@ class Settings(BaseSettings):
                 project_map_json=self.jira_project_map,
             )
         return None
+
+    @field_validator("k8s_job_host_aliases")
+    @classmethod
+    def _validate_host_aliases(cls, v: str) -> str:
+        if not v.strip():
+            return v
+        try:
+            entries = json.loads(v)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"K8S_JOB_HOST_ALIASES is not valid JSON: {exc}") from exc
+        if not isinstance(entries, list):
+            raise ValueError("K8S_JOB_HOST_ALIASES must be a JSON array")
+        for i, entry in enumerate(entries):
+            if not isinstance(entry, dict) or "ip" not in entry or "hostnames" not in entry:
+                raise ValueError(f"K8S_JOB_HOST_ALIASES[{i}] must have 'ip' and 'hostnames' keys")
+        return v
 
     @model_validator(mode="after")
     def _check_auth(self) -> "Settings":
