@@ -61,6 +61,20 @@ def test_settings_accepts_provider_type_without_github_token() -> None:
     assert settings.github_token is None
 
 
+def test_kubernetes_executor_requires_configmap_name() -> None:
+    with pytest.raises(ValidationError, match="K8S_CONFIGMAP_NAME required"):
+        make_settings(task_executor="kubernetes", redis_url="redis://localhost:6379/0")
+
+
+def test_kubernetes_executor_requires_secret_name() -> None:
+    with pytest.raises(ValidationError, match="K8S_SECRET_NAME required"):
+        make_settings(
+            task_executor="kubernetes",
+            redis_url="redis://localhost:6379/0",
+            k8s_configmap_name="agent-config",
+        )
+
+
 def test_jira_property_returns_none_when_not_configured() -> None:
     """When no Jira env vars are set, settings.jira should be None."""
     settings = make_settings()

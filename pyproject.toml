@@ -37,8 +37,14 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "--cov=gitlab_copilot_agent --cov-report=term-missing --cov-fail-under=90 --ignore=tests/test_k8s_integration.py -m 'not k8s'"
+filterwarnings = [
+    "ignore:Call to '__init__' function with deprecated usage of input argument/s 'retry_on_timeout'.*:DeprecationWarning",
+    "ignore:Call to '__init__' function with deprecated usage of input argument/s 'lib_name'.*:DeprecationWarning",
+    "ignore:Call to '__init__' function with deprecated usage of input argument/s 'lib_version'.*:DeprecationWarning",
+]
 markers = [
     "k8s: requires a running k8s cluster (deselect with '-m \"not k8s\"')",
 ]

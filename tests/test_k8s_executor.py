@@ -101,6 +101,8 @@ def _install_k8s_stub() -> tuple[MagicMock, MagicMock, MagicMock]:
         "V1EnvFromSource",
         "V1ConfigMapEnvSource",
         "V1SecretEnvSource",
+        "V1EnvVarSource",
+        "V1SecretKeySelector",
     ):
         setattr(client_mod, cls_name, _passthrough_cls(cls_name))
 
@@ -297,6 +299,10 @@ class TestJobCreation:
             "SYSTEM_PROMPT",
             "USER_PROMPT",
             "TASK_PAYLOAD",
+            "GITLAB_URL",
+            "GITLAB_WEBHOOK_SECRET",
+            "COPILOT_MODEL",
+            "REDIS_URL",
             "UV_CACHE_DIR",
             "XDG_CACHE_HOME",
             "HOME",
@@ -305,22 +311,23 @@ class TestJobCreation:
         for expected in expected_vars:
             assert expected in env_names, f"Missing env var: {expected}"
 
-        # Sensitive vars must NOT be in env
-        sensitive_vars = ("GITLAB_TOKEN", "GITHUB_TOKEN", "COPILOT_PROVIDER_API_KEY", "REDIS_URL", "COPILOT_MODEL")
+        # Sensitive vars must be mounted via value_from, NOT plain value
+        sensitive_vars = ("GITLAB_TOKEN", "GITHUB_TOKEN", "COPILOT_PROVIDER_API_KEY")
         for sensitive in sensitive_vars:
-            assert sensitive not in env_names, f"Sensitive var {sensitive} should NOT be in env"
+            var = next(e for e in container.env if e.name == sensitive)
+            assert hasattr(var, "value_from"), f"{sensitive} should have value_from"
+            assert var.value_from.secret_key_ref.name == "test-sec"
+            assert var.value_from.secret_key_ref.key == sensitive
 
-        # env_from should be present if configured
+        # REDIS_URL and COPILOT_MODEL are now plain values (Finding #2)
+        env_map = {e.name: getattr(e, "value", None) for e in container.env}
+        assert env_map["REDIS_URL"] == REDIS_URL
+        assert env_map["COPILOT_MODEL"] == "gpt-4"
+
+        # env_from should only contain the ConfigMap now (Finding #1)
         env_from = container.env_from
-        assert len(env_from) == 2
-        env_from_names = []
-        for ef in env_from:
-            if hasattr(ef, "config_map_ref"):
-                env_from_names.append(ef.config_map_ref.name)
-            if hasattr(ef, "secret_ref"):
-                env_from_names.append(ef.secret_ref.name)
-        assert "test-cm" in env_from_names
-        assert "test-sec" in env_from_names
+        assert len(env_from) == 1
+        assert env_from[0].config_map_ref.name == "test-cm"
 
 
     async def test_byok_env_vars_propagated(
@@ -351,20 +358,21 @@ class TestJobCreation:
 
         job_body = batch_v1.create_namespaced_job.call_args.kwargs["body"]
         container = job_body.spec.template.spec.containers[0]
-        env_map = {e.name: e.value for e in container.env}
-        assert "COPILOT_PROVIDER_TYPE" not in env_map
-        assert "COPILOT_PROVIDER_BASE_URL" not in env_map
-        assert "COPILOT_PROVIDER_API_KEY" not in env_map
+        env_map = {e.name: getattr(e, "value", None) for e in container.env}
 
-        # Verify env_from includes settings names
-        env_from_names = []
-        for ef in container.env_from:
-            if hasattr(ef, "config_map_ref"):
-                env_from_names.append(ef.config_map_ref.name)
-            if hasattr(ef, "secret_ref"):
-                env_from_names.append(ef.secret_ref.name)
-        assert "cm-name" in env_from_names
-        assert "sec-name" in env_from_names
+        # BYOK settings are now direct values (Finding #2)
+        assert env_map["COPILOT_PROVIDER_TYPE"] == "openai"
+        assert env_map["COPILOT_PROVIDER_BASE_URL"] == "http://llm:9998/v1"
+
+        # Tokens are via secretKeyRef (Finding #1)
+        for key in ("COPILOT_PROVIDER_API_KEY", "GITLAB_TOKEN"):
+            var = next(e for e in container.env if e.name == key)
+            assert var.value_from.secret_key_ref.name == "sec-name"
+            assert var.value_from.secret_key_ref.key == key
+
+        # env_from should only contain the ConfigMap (Finding #1)
+        assert len(container.env_from) == 1
+        assert container.env_from[0].config_map_ref.name == "cm-name"
 
 
 class TestCompletion:

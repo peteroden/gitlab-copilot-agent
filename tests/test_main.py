@@ -37,6 +37,8 @@ def test_create_executor_k8s_returns_executor(
         redis_url="redis://localhost:6379/0",
         state_backend="redis",
         task_executor="kubernetes",
+        k8s_configmap_name="agent-config",
+        k8s_secret_name="agent-secret",
     )
     executor = _create_executor("kubernetes", settings)
     assert isinstance(executor, TaskExecutor)

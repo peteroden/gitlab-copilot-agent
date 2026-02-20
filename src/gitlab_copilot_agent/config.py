@@ -160,4 +160,11 @@ class Settings(BaseSettings):
             entries = [e.strip() for e in (self.gitlab_projects or "").split(",") if e.strip()]
             if not entries:
                 raise ValueError("GITLAB_PROJECTS is required when GITLAB_POLL=true")
+
+        if self.task_executor == "kubernetes":
+            if not self.k8s_configmap_name:
+                raise ValueError("K8S_CONFIGMAP_NAME required when TASK_EXECUTOR=kubernetes")
+            if not self.k8s_secret_name:
+                raise ValueError("K8S_SECRET_NAME required when TASK_EXECUTOR=kubernetes")
+
         return self

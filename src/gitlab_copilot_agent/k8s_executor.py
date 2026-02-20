@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 import re
 from typing import TYPE_CHECKING
 
@@ -44,7 +43,7 @@ def _parse_host_aliases(raw: str) -> list[object] | None:
 
 def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
     """Return env var dicts for the Job container."""
-    return [
+    env = [
         {"name": "TASK_TYPE", "value": task.task_type},
         {"name": "TASK_ID", "value": task.task_id},
         {"name": "REPO_URL", "value": task.repo_url},
@@ -52,6 +51,13 @@ def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
         {"name": "SYSTEM_PROMPT", "value": task.system_prompt},
         {"name": "USER_PROMPT", "value": task.user_prompt},
         {"name": "TASK_PAYLOAD", "value": json.dumps({"prompt": task.user_prompt})},
+        # Base settings
+        {"name": "GITLAB_URL", "value": settings.gitlab_url},
+        # Task runner constructs full Settings() but does not use webhook validation.
+        # Keep this non-sensitive placeholder to satisfy startup validation.
+        {"name": "GITLAB_WEBHOOK_SECRET", "value": "unused-in-task-runner"},
+        {"name": "COPILOT_MODEL", "value": settings.copilot_model},
+        {"name": "REDIS_URL", "value": settings.redis_url or ""},
         # Writable cache dirs for read-only root filesystem
         {"name": "UV_CACHE_DIR", "value": "/tmp/.uv-cache"},
         {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
@@ -59,6 +65,21 @@ def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
         # src/ layout needs explicit PYTHONPATH when not using uv run
         {"name": "PYTHONPATH", "value": "/home/app/app/src"},
     ]
+
+    # #157: Restore E2E test support for HTTP clones
+    import os
+
+    if os.environ.get("ALLOW_HTTP_CLONE"):
+        env.append({"name": "ALLOW_HTTP_CLONE", "value": os.environ["ALLOW_HTTP_CLONE"]})
+
+    if settings.copilot_provider_type:
+        env.append({"name": "COPILOT_PROVIDER_TYPE", "value": settings.copilot_provider_type})
+    if settings.copilot_provider_base_url:
+        env.append(
+            {"name": "COPILOT_PROVIDER_BASE_URL", "value": settings.copilot_provider_base_url}
+        )
+
+    return env
 
 
 class KubernetesTaskExecutor:
@@ -103,14 +124,35 @@ class KubernetesTaskExecutor:
             for e in _build_env(task, self._settings)
         ]
 
+        # #157: Mount only the credentials Job pods actually need — NOT the entire Secret
+        # (which also contains JIRA_*, GITLAB_WEBHOOK_SECRET that pods don't use)
+        if self._settings.k8s_secret_name:
+            for key in ("GITLAB_TOKEN", "GITHUB_TOKEN", "COPILOT_PROVIDER_API_KEY"):
+                env.append(
+                    k8s.V1EnvVar(
+                        name=key,
+                        value_from=k8s.V1EnvVarSource(
+                            secret_key_ref=k8s.V1SecretKeySelector(
+                                name=self._settings.k8s_secret_name,
+                                key=key,
+                                optional=True,
+                            )
+                        ),
+                    )
+                )
+
         tmp_volume = k8s.V1Volume(name="tmp", empty_dir=k8s.V1EmptyDirVolumeSource())
         tmp_mount = k8s.V1VolumeMount(name="tmp", mount_path="/tmp")
 
         env_from = []
         if self._settings.k8s_configmap_name:
-            env_from.append(k8s.V1EnvFromSource(config_map_ref=k8s.V1ConfigMapEnvSource(name=self._settings.k8s_configmap_name)))
-        if self._settings.k8s_secret_name:
-            env_from.append(k8s.V1EnvFromSource(secret_ref=k8s.V1SecretEnvSource(name=self._settings.k8s_secret_name)))
+            env_from.append(
+                k8s.V1EnvFromSource(
+                    config_map_ref=k8s.V1ConfigMapEnvSource(
+                        name=self._settings.k8s_configmap_name
+                    )
+                )
+            )
 
         container = k8s.V1Container(
             name="task",
