@@ -110,7 +110,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         handler = CodingOrchestrator(
             settings, gl_client, jira_client, app.state.executor, repo_locks, tracker
         )
-        poller = JiraPoller(jira_client, settings.jira, project_map, handler)
+        poller = JiraPoller(jira_client, settings.jira, project_map, handler, allowed_project_ids)
         await poller.start()
         await log.ainfo("jira_poller_started", interval=settings.jira.poll_interval)
 

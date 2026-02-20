@@ -34,12 +34,14 @@ class JiraPoller:
         settings: JiraSettings,
         project_map: ProjectMap,
         handler: CodingTaskHandler,
+        allowed_project_ids: set[int] | None = None,
     ) -> None:
         self._client = jira_client
         self._trigger_status = settings.trigger_status
         self._interval = settings.poll_interval
         self._project_map = project_map
         self._handler = handler
+        self._allowed_project_ids = allowed_project_ids
         self._task: asyncio.Task[None] | None = None
         self._processed_issues: set[str] = set()
 
@@ -85,5 +87,16 @@ class JiraPoller:
 
                 mapping = self._project_map.get(issue.project_key)
                 if mapping:
+                    if (
+                        self._allowed_project_ids is not None
+                        and mapping.gitlab_project_id not in self._allowed_project_ids
+                    ):
+                        await log.awarn(
+                            "jira_task_skipped",
+                            issue=issue.key,
+                            gitlab_project_id=mapping.gitlab_project_id,
+                            reason="project_not_in_allowlist",
+                        )
+                        continue
                     await self._handler.handle(issue, mapping)
                     self._processed_issues.add(issue.key)
