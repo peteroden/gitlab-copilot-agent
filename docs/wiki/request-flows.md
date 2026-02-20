@@ -55,7 +55,7 @@ sequenceDiagram
         EXEC->>EXEC: _wait_for_result (poll Redis)
         EXEC-->>EXEC: result from Redis
     end
-    EXEC-->>ORCH: raw_review: str
+    EXEC-->>ORCH: raw_review: TaskResult
     
     ORCH->>PARSE: parse_review(raw_review)
     PARSE-->>ORCH: ParsedReview (comments, summary)
@@ -125,8 +125,11 @@ sequenceDiagram
     
     MRC->>EXEC: execute(TaskParams: coding, prompt=instruction)
     EXEC->>COP: run_copilot_session(repo_path, CODING_SYSTEM_PROMPT, instruction)
-    COP-->>EXEC: result: str
-    EXEC-->>MRC: result: str
+    COP-->>EXEC: result: TaskResult
+    EXEC-->>MRC: result: TaskResult
+    
+    MRC->>MRC: apply_coding_result(result, repo_path)
+    Note over MRC: If K8s: validate base_sha, git apply --3way<br/>If Local: no-op (files on disk)
     
     MRC->>GIT: git_commit(repo_path, message, author)
     alt has_changes
@@ -291,8 +294,11 @@ sequenceDiagram
             
             CODING->>EXEC: execute(TaskParams: coding, Jira prompt)
             EXEC->>COP: run_copilot_session(repo_path, CODING_SYSTEM_PROMPT, jira_prompt)
-            COP-->>EXEC: result: str
-            EXEC-->>CODING: result: str
+            COP-->>EXEC: result: TaskResult
+            EXEC-->>CODING: result: TaskResult
+            
+            CODING->>CODING: apply_coding_result(result, repo_path)
+            Note over CODING: If K8s: validate base_sha, git apply --3way<br/>If Local: no-op (files on disk)
             
             CODING->>GIT: git_commit(repo_path, message, author)
             alt has_changes

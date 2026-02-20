@@ -114,9 +114,9 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Functions**:
 - `parse_copilot_command(note: str) -> str | None`: Extract instruction from comment
 - `build_mr_coding_prompt(instruction: str, mr_title: str, source_branch: str, target_branch: str) -> str`: Build user prompt
-- `handle_copilot_comment(settings: Settings, payload: NoteWebhookPayload, executor: TaskExecutor, repo_locks: DistributedLock | None) -> None`: Clone → code → commit → push → comment
+- `handle_copilot_comment(settings: Settings, payload: NoteWebhookPayload, executor: TaskExecutor, repo_locks: DistributedLock | None) -> None`: Clone → code → apply result → commit → push → comment
 
-**Internal Imports**: `config`, `models`, `task_executor`, `gitlab_client`, `git_operations`, `coding_engine`, `concurrency`, `telemetry`
+**Internal Imports**: `config`, `models`, `task_executor`, `gitlab_client`, `git_operations`, `coding_engine`, `coding_workflow`, `concurrency`, `telemetry`
 
 **Depended On By**: `webhook.py`, `gitlab_poller.py`
 
@@ -135,11 +135,12 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
     - Transitions issue to "In Progress"
     - Clones repo, creates branch `agent/{issue-key}`
     - Calls `run_coding_task()` via executor
+    - Calls `apply_coding_result()` to apply diff (K8s executor only)
     - Commits, pushes, creates MR
     - Adds Jira comment with MR URL
     - Emits `coding_tasks_total` and `coding_tasks_duration` metrics
 
-**Internal Imports**: `config`, `gitlab_client`, `jira_client`, `jira_models`, `project_mapping`, `task_executor`, `git_operations`, `coding_engine`, `metrics`, `telemetry`, `concurrency`
+**Internal Imports**: `config`, `gitlab_client`, `jira_client`, `jira_models`, `project_mapping`, `task_executor`, `git_operations`, `coding_engine`, `coding_workflow`, `metrics`, `telemetry`, `concurrency`
 
 **Depended On By**: `main.py` (as Jira poller handler)
 
@@ -182,6 +183,18 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 ---
 
+### `coding_workflow.py`
+**Purpose**: Shared helper for applying coding results (diff passback from k8s pods).
+
+**Key Functions**:
+- `apply_coding_result(result: TaskResult, repo_path: Path) -> None`: Validate `base_sha`, apply patch via `git apply --3way` if `CodingResult` has a patch. No-op for local executor (empty patch).
+
+**Internal Imports**: `task_executor`, `git_operations`, `telemetry`
+
+**Depended On By**: `coding_orchestrator.py`, `mr_comment_handler.py`
+
+---
+
 ## Execution Layer
 
 ### `task_executor.py`
@@ -189,12 +202,15 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Key Models**:
 - `TaskParams`: Parameters for a Copilot task (task_type, repo_url, branch, prompts, settings, repo_path)
+- `TaskResult`: Union type `ReviewResult | CodingResult` (return type for all executors)
+- `ReviewResult`: `summary: str` (Pydantic BaseModel, frozen=True)
+- `CodingResult`: `summary: str`, `patch: str`, `base_sha: str` (Pydantic BaseModel, frozen=True)
 
 **Key Protocols**:
-- `TaskExecutor`: `execute(task: TaskParams) -> str`
+- `TaskExecutor`: `execute(task: TaskParams) -> TaskResult`
 
 **Key Classes**:
-- `LocalTaskExecutor`: Runs `copilot_session.py` in-process
+- `LocalTaskExecutor`: Runs `copilot_session.py` in-process, returns `ReviewResult` for reviews, `CodingResult` with empty patch for coding
   - Requires `task.repo_path` to be set
 
 **Internal Imports**: `config`
@@ -214,17 +230,18 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Key Classes**:
 - `KubernetesTaskExecutor`: Implements `TaskExecutor`
-  - `execute(task: TaskParams) -> str`: Create Job, poll for completion, retrieve result from Redis
-  - `_create_job(job_name: str, task: TaskParams) -> None`: Create K8s Job with task env vars
+  - `execute(task: TaskParams) -> TaskResult`: Create Job, poll for completion, retrieve result from Redis (parses JSON as `TaskResult`)
+  - `_create_job(job_name: str, task: TaskParams) -> None`: Create K8s Job with task env vars and optional hostAliases
   - `_read_job_status(job_name: str) -> str`: Return "succeeded", "failed", or "running"
   - `_read_job_annotation(job_name: str) -> str | None`: Read result annotation
   - `_read_pod_logs(job_name: str) -> str`: Read pod logs for failed Job
   - `_delete_job(job_name: str) -> None`: Delete Job after timeout/failure
-  - `_wait_for_result(redis_client: Redis, job_name: str, task: TaskParams) -> str`: Poll Redis and Job status
+  - `_wait_for_result(redis_client: Redis, job_name: str, task: TaskParams) -> TaskResult`: Poll Redis and Job status
 
 **Key Functions**:
 - `_sanitize_job_name(task_type: str, task_id: str) -> str`: Build k8s-compliant Job name
 - `_build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]`: Env vars for Job container
+- `_parse_host_aliases(raw: str) -> list[object] | None`: Parse K8S_JOB_HOST_ALIASES JSON
 
 **Internal Imports**: `config`, `task_executor`
 
@@ -270,14 +287,16 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - Validates REPO_URL matches GITLAB_URL (host + port)
   - Clones repo
   - Calls `run_copilot_session()`
-  - Stores result in Redis
+  - For coding tasks: calls `_build_coding_result()` to capture diff
+  - Stores result in Redis (JSON-encoded `TaskResult`)
   - Returns exit code 0/1
+- `_build_coding_result(summary: str, repo_path: Path) -> CodingResult`: Capture `git diff --cached --binary`, validate size ≤ `MAX_PATCH_SIZE`, validate patch (no `../`), return `CodingResult`
 - `_store_result(task_id: str, result: str) -> None`: Persist to Redis with TTL
 - `_get_required_env(name: str) -> str`: Raise if env var missing
 - `_parse_task_payload(raw: str) -> dict[str, str]`: Parse JSON payload
 - `_validate_repo_url(repo_url: str, gitlab_url: str) -> None`: Ensure repo_url authority matches gitlab_url
 
-**Internal Imports**: `config`, `copilot_session`, `git_operations`, `coding_engine`, `review_engine`
+**Internal Imports**: `config`, `copilot_session`, `git_operations`, `coding_engine`, `review_engine`, `task_executor`
 
 **Depended On By**: K8s Job container command
 
@@ -345,19 +364,24 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Constants**:
 - `CLONE_DIR_PREFIX = "mr-review-"`
 - `_GIT_TIMEOUT = 60`
+- `MAX_PATCH_SIZE = 10 * 1024 * 1024` (10 MB) — maximum allowed patch size for diff passback
 
 **Key Functions**:
 - `git_clone(clone_url: str, branch: str, token: str, clone_dir: str | None) -> Path`: Clone repo with embedded credentials, validate URL
 - `git_create_branch(repo_path: Path, branch_name: str) -> None`: Create and checkout branch
 - `git_commit(repo_path: Path, message: str, author_name: str, author_email: str) -> bool`: Stage all, commit, return False if nothing to commit
 - `git_push(repo_path: Path, remote: str, branch: str, token: str) -> None`: Push with token sanitization
+- `git_apply_patch(repo_path: Path, patch: str) -> None`: Apply unified diff with `git apply --3way --binary`
+- `git_head_sha(repo_path: Path) -> str`: Get current HEAD commit SHA
+- `git_diff_staged(repo_path: Path) -> str`: Capture staged diff (`git diff --cached --binary`)
+- `_validate_patch(patch: str) -> None`: Validate patch (no `../` path traversal, size ≤ MAX_PATCH_SIZE)
 - `_validate_clone_url(url: str) -> None`: Ensure HTTPS, no embedded credentials, valid host/path
 - `_sanitize_url_for_log(url: str) -> str`: Remove credentials from URL
 - `_run_git(repo_path: Path, *args: str, sanitize_token: str | None, timeout: int) -> str`: Run git command, sanitize errors
 
 **Internal Imports**: `telemetry`
 
-**Depended On By**: `gitlab_client.py`, `mr_comment_handler.py`, `coding_orchestrator.py`, `task_runner.py`
+**Depended On By**: `gitlab_client.py`, `mr_comment_handler.py`, `coding_orchestrator.py`, `task_runner.py`, `coding_workflow.py`
 
 ---
 

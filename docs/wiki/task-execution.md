@@ -10,7 +10,7 @@ TaskExecutor protocol, LocalTaskExecutor vs KubernetesTaskExecutor, prompt const
 ```python
 @runtime_checkable
 class TaskExecutor(Protocol):
-    async def execute(self, task: TaskParams) -> str: ...
+    async def execute(self, task: TaskParams) -> TaskResult: ...
 ```
 
 **TaskParams**:
@@ -23,7 +23,9 @@ class TaskExecutor(Protocol):
 - `settings: Settings` — Application configuration
 - `repo_path: str | None` — Local path to cloned repo (required for LocalTaskExecutor)
 
-**Return**: Raw Copilot agent response (string)
+**Return**: `TaskResult` — union type `ReviewResult | CodingResult` (Pydantic models, frozen=True)
+- `ReviewResult`: `summary: str` — plain text summary
+- `CodingResult`: `summary: str`, `patch: str` (unified diff, binary-safe), `base_sha: str` (commit SHA at time of capture)
 
 ---
 
@@ -34,20 +36,28 @@ class TaskExecutor(Protocol):
 **Implementation**:
 ```python
 class LocalTaskExecutor:
-    async def execute(self, task: TaskParams) -> str:
+    async def execute(self, task: TaskParams) -> TaskResult:
         if not task.repo_path:
             raise ValueError("LocalTaskExecutor requires task.repo_path")
         
-        return await run_copilot_session(
+        summary = await run_copilot_session(
             settings=task.settings,
             repo_path=task.repo_path,
             system_prompt=task.system_prompt,
             user_prompt=task.user_prompt,
             task_type=task.task_type,
         )
+        
+        # Return appropriate result type
+        if task.task_type == "review":
+            return ReviewResult(summary=summary)
+        else:
+            return CodingResult(summary=summary, patch="", base_sha="")
 ```
 
 **Requires**: `task.repo_path` must be set (caller clones repo before execution).
+
+**Note**: LocalTaskExecutor returns `ReviewResult` for reviews, `CodingResult` with empty patch for coding tasks (files modified on disk directly, no diff passback needed).
 
 **Isolation**: None (SDK subprocess shares UID, filesystem, network namespace).
 
@@ -68,8 +78,9 @@ class LocalTaskExecutor:
 
 **Job Spec**:
 - **Image**: `settings.k8s_job_image`
-- **Command**: `["uv", "run", "python", "-m", "gitlab_copilot_agent.task_runner"]`
-- **Env Vars**: TASK_TYPE, TASK_ID, REPO_URL, BRANCH, TASK_PAYLOAD, GITLAB_TOKEN, GITHUB_TOKEN, REDIS_URL
+- **Command**: `[".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]`
+- **Env Vars**: TASK_TYPE, TASK_ID, REPO_URL, BRANCH, TASK_PAYLOAD, GITLAB_TOKEN, GITHUB_TOKEN, REDIS_URL, HOME=/tmp (Copilot CLI requires writable HOME)
+- **hostAliases**: Optional JSON-encoded array from `K8S_JOB_HOST_ALIASES` for custom DNS (air-gapped, k3d dev)
 - **Resources**: CPU/memory limits from settings
 - **SecurityContext**: `runAsNonRoot`, `readOnlyRootFilesystem`, `capabilities.drop: ["ALL"]`
 - **TTL**: `ttl_seconds_after_finished=300` (auto-delete after 5 minutes)
@@ -107,9 +118,17 @@ class LocalTaskExecutor:
 3. Validate REPO_URL authority matches GITLAB_URL (host + port)
 4. Clone repo via `git_clone()`
 5. Call `run_copilot_session()` with appropriate system prompt
-6. Store result in Redis (`result:{task_id}`, TTL=3600s)
-7. Print JSON result to stdout (for debugging)
-8. Return exit code 0 (success) or 1 (error)
+6. **For coding tasks**: Capture diff after Copilot session:
+   - `git add -A` (stage all changes)
+   - `git rev-parse HEAD` (capture base_sha)
+   - `git diff --cached --binary` (capture unified diff)
+   - Validate patch size ≤ `MAX_PATCH_SIZE` (10 MB, from `git_operations.py`)
+   - Validate patch for path traversal (`../`)
+   - Build `CodingResult(summary, patch, base_sha)`
+7. **For review tasks**: Build `ReviewResult(summary)`
+8. Store result in Redis (`result:{task_id}`, TTL=3600s) as JSON
+9. Print JSON result to stdout (for debugging)
+10. Return exit code 0 (success) or 1 (error)
 
 **Validation**: `_validate_repo_url()` ensures REPO_URL is from trusted GitLab instance (prevents SSRF).
 
@@ -408,15 +427,48 @@ _PYTHON_GITIGNORE_PATTERNS = [
 
 ### Coding Output
 
-**Input**: Raw agent response (markdown summary)
+**K8s Executor**: `CodingResult` with `summary`, `patch` (unified diff), and `base_sha` (commit SHA)
 
-**Parsing**: None (used as-is for MR description / Jira comment)
+**Local Executor**: `CodingResult` with `summary`, empty `patch` (files modified on disk directly)
 
-**Expected Format** (by convention, not enforced):
+**Patch Format** (K8s only):
+- Unified diff from `git diff --cached --binary`
+- Binary-safe (can include binary file changes)
+- Validated for size (≤ 10 MB) and path traversal (`../`)
+
+**Summary Format** (by convention, not enforced):
 - List of modified/created files
 - Key changes made
 - Test results (if tests were run)
 - Concerns or follow-up items
+
+---
+
+## Diff Passback (K8s Executor)
+
+**Problem**: Coding tasks in K8s Jobs modify files inside ephemeral pod. When pod terminates, all changes are lost. The controller (which creates MR/commits) never sees modifications.
+
+**Solution**: Job pod captures `git diff --cached --binary` after Copilot runs, stores `CodingResult{summary, patch, base_sha}` in Redis. Controller reads result, validates `base_sha` matches local HEAD, applies patch with `git apply --3way`, then commits/pushes.
+
+**Flow**:
+1. **Job pod**: Clone repo → Copilot session → `git add -A` → capture base_sha and diff → store `CodingResult` in Redis
+2. **Controller**: Read `CodingResult` from Redis → validate `base_sha == local HEAD` → `git apply --3way <patch>` → commit → push
+
+**Validation** (in `coding_workflow.py`):
+- `base_sha` mismatch: raises error (prevents applying patch to wrong commit)
+- Patch contains `../`: raises error (path traversal attack prevention)
+- Patch exceeds `MAX_PATCH_SIZE` (10 MB): raises error (prevents Redis OOM)
+
+**Helper Function**: `apply_coding_result(result: TaskResult, repo_path: Path)` in `coding_workflow.py`
+- Called by `CodingOrchestrator` and `MRCommentHandler` after execution
+- No-op if `result.patch` is empty (LocalTaskExecutor)
+- Applies patch via `git_apply_patch()` from `git_operations.py`
+
+**New Git Operations** (in `git_operations.py`):
+- `git_apply_patch(repo_path, patch)`: Apply patch with `git apply --3way --binary`
+- `git_head_sha(repo_path)`: Get current HEAD SHA
+- `git_diff_staged(repo_path)`: Capture staged diff
+- `_validate_patch(patch)`: Reject patches with `../` (internal)
 
 ---
 
@@ -428,6 +480,8 @@ _PYTHON_GITIGNORE_PATTERNS = [
 | **Isolation** | None (same process) | Pod-level (network, filesystem, process) |
 | **Resource Limits** | None (host limits) | CPU/memory via K8s |
 | **Repo Clone** | Caller clones | Job clones (task_runner.py) |
+| **Coding Result** | Files on disk, empty patch | Diff captured in pod, patch stored in Redis |
+| **Diff Handling** | N/A (caller sees changes) | `git apply --3way` by controller after result read |
 | **Timeout** | Per-call (default 300s) | Per-Job (default 600s) |
 | **Idempotency** | None (no result caching) | Redis result cache (1 hour TTL) |
 | **Failure Recovery** | Exception propagates | Pod logs captured, Job deleted |

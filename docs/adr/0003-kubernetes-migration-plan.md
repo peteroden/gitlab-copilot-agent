@@ -368,3 +368,37 @@ GitHub Actions CI workflow:
 PR 0 (sandbox removal) lands first — it's a net deletion that unblocks clean `TaskExecutor` implementation. PRs 1 (#78) and 2 (#79) can then be developed in parallel. PR 4 (#81) can start once PR 1 lands. Helm chart (#83) may split into 2 PRs if it exceeds 200 lines.
 
 Tracked by epic: [#77](https://github.com/peteroden/gitlab-copilot-agent/issues/77)
+
+---
+
+## Addendum: Diff Passback for Coding Tasks (#144)
+
+**Date**: 2025-02
+
+**Context**: With k8s executor, coding tasks (Jira and /copilot) run Copilot in an ephemeral Job pod. The pod modifies files, but when it terminates, all changes are lost. The controller (which creates the MR) never sees the modifications.
+
+**Decision**: Option A — Diff Passback. The Job pod captures `git diff --cached --binary` after Copilot runs, stores `{summary, patch, base_sha}` in Redis as a `CodingResult`. The controller reads the result, validates `base_sha` matches local HEAD, applies the patch with `git apply --3way`, then commits and pushes as before.
+
+**Alternative Rejected**: Option B — Pod does commit/push. This would require the pod to have git push access and understand MR creation APIs, expanding the credential surface and duplicating orchestration logic.
+
+**Security Mitigations**:
+- Patch validated for path traversal (`../`) before apply
+- `base_sha` validation detects clone divergence
+- `MAX_PATCH_SIZE` (10 MB) prevents Redis OOM from large diffs
+- Only the controller has git push and API write access
+
+**Implementation**: `coding_workflow.py` provides `apply_coding_result()`, used by both `CodingOrchestrator` and `MRCommentHandler`. The `task_runner.py` `_build_coding_result()` captures the diff in the pod.
+
+---
+
+## Addendum: Job Pod hostAliases (#148)
+
+**Date**: 2025-02
+
+**Context**: K8s Job pods need to resolve custom hostnames in air-gapped environments and k3d dev clusters (e.g., `host.k3d.internal` → Docker host gateway IP for mock GitLab servers).
+
+**Decision**: Add `K8S_JOB_HOST_ALIASES` env var (JSON-encoded array) to inject `hostAliases` into Job pod specs. Format: `[{"ip": "10.0.0.1", "hostnames": ["host.local", "api.local"]}]`. Validated at startup via Pydantic field_validator. Helm chart auto-generates this from `hostAliases` value.
+
+**Alternative Rejected**: Requiring users to manually manage CoreDNS ConfigMaps or custom DNS resolvers. Pod-level hostAliases are simpler, don't require cluster admin, and are k3d-compatible.
+
+**Implementation**: `k8s_executor.py` has `_parse_host_aliases()` to deserialize JSON and inject into Job spec. `task_runner.py` also sets `HOME=/tmp` env var (Copilot CLI requires writable HOME in read-only filesystem pods).
