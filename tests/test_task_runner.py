@@ -73,6 +73,7 @@ class TestHelpers:
 class TestRunTask:
     async def test_ok(self, task_env: None) -> None:
         fp = Path("/tmp/fake")
+        expected = json.dumps({"result_type": "review", "summary": "done"})
         with (
             patch(f"{_M}.git_clone", AsyncMock(return_value=fp)),
             patch(f"{_M}.run_copilot_session", AsyncMock(return_value="done")),
@@ -81,7 +82,7 @@ class TestRunTask:
         ):
             assert await run_task() == 0
             rm.assert_called_once_with(fp, ignore_errors=True)
-            store.assert_awaited_once_with(TASK_ID, "done")
+            store.assert_awaited_once_with(TASK_ID, expected)
 
     async def test_missing_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(ENV_TASK_TYPE, raising=False)
@@ -98,9 +99,13 @@ class TestRunTask:
 
     async def test_coding(self, task_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_TASK_TYPE, "coding")
+        coding_json = json.dumps(
+            {"result_type": "coding", "summary": "x", "patch": "p", "base_sha": "abc"}
+        )
         with (
             patch(f"{_M}.git_clone", AsyncMock(return_value=Path("/tmp/r"))),
             patch(f"{_M}.run_copilot_session", AsyncMock(return_value="x")) as ms,
+            patch(f"{_M}._build_coding_result", AsyncMock(return_value=coding_json)),
             patch(f"{_M}._store_result", AsyncMock()),
             patch(f"{_M}.shutil.rmtree"),
         ):

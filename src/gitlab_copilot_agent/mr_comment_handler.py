@@ -9,6 +9,7 @@ from pathlib import Path
 import structlog
 
 from gitlab_copilot_agent.coding_engine import CODING_SYSTEM_PROMPT
+from gitlab_copilot_agent.coding_workflow import apply_coding_result
 from gitlab_copilot_agent.concurrency import DistributedLock
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.git_operations import git_clone, git_commit, git_push
@@ -93,6 +94,7 @@ async def handle_copilot_comment(
                 result = await executor.execute(task)
                 await bound_log.ainfo("copilot_coding_complete", summary=result.summary[:200])
 
+                await apply_coding_result(result, repo_path)
                 has_changes = await git_commit(
                     repo_path, f"fix: {instruction[:50]}", AGENT_AUTHOR_NAME, AGENT_AUTHOR_EMAIL
                 )

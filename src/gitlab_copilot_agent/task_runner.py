@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import sys
+from pathlib import Path
 from urllib.parse import ParseResult, urlparse
 
 import structlog
@@ -12,8 +13,13 @@ import structlog
 from gitlab_copilot_agent.coding_engine import CODING_SYSTEM_PROMPT
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.copilot_session import run_copilot_session
+from gitlab_copilot_agent.git_operations import (
+    MAX_PATCH_SIZE,
+    git_clone,
+    git_diff_staged,
+    git_head_sha,
+)
 from gitlab_copilot_agent.git_operations import _sanitize_url_for_log as _sanitize_url
-from gitlab_copilot_agent.git_operations import git_clone
 from gitlab_copilot_agent.review_engine import SYSTEM_PROMPT as REVIEW_SYSTEM_PROMPT
 
 log = structlog.get_logger()
@@ -77,6 +83,42 @@ def _validate_repo_url(repo_url: str, gitlab_url: str) -> None:
         )
 
 
+async def _build_coding_result(
+    repo_path: Path, summary: str, bound_log: structlog.stdlib.BoundLogger
+) -> str:
+    """Stage files, capture diff and base SHA, return serialized CodingResult."""
+    await _run_git_simple(repo_path, "add", "-A")
+    base_sha = await git_head_sha(repo_path)
+    patch = await git_diff_staged(repo_path)
+    if len(patch.encode()) > MAX_PATCH_SIZE:
+        raise RuntimeError(f"Patch size {len(patch.encode())} exceeds limit {MAX_PATCH_SIZE}")
+    await bound_log.ainfo("diff_captured", patch_bytes=len(patch.encode()), base_sha=base_sha[:12])
+    return json.dumps(
+        {
+            "result_type": "coding",
+            "summary": summary,
+            "patch": patch,
+            "base_sha": base_sha,
+        }
+    )
+
+
+async def _run_git_simple(repo_path: Path, *args: str) -> str:
+    """Run a simple git command in the task runner pod."""
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        "-C",
+        str(repo_path),
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+    if proc.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args[:2])} failed: {stderr.decode().strip()}")
+    return stdout.decode().strip()
+
+
 async def run_task() -> int:
     try:
         task_type = _get_required_env(ENV_TASK_TYPE)
@@ -110,9 +152,13 @@ async def run_task() -> int:
     )
     try:
         prompt = REVIEW_SYSTEM_PROMPT if task_type == "review" else CODING_SYSTEM_PROMPT
-        result = await run_copilot_session(
+        summary = await run_copilot_session(
             settings, str(repo_path), prompt, user_prompt, task_type=task_type
         )
+        if task_type == "coding":
+            result = await _build_coding_result(repo_path, summary, bound_log)
+        else:
+            result = json.dumps({"result_type": "review", "summary": summary})
         await _store_result(task_id, result)
         print(json.dumps({"task_id": task_id, "result": result}), flush=True)  # noqa: T201
         await bound_log.ainfo("task_complete")
