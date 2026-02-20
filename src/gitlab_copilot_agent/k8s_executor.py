@@ -44,6 +44,12 @@ def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
         {"name": "TASK_PAYLOAD", "value": json.dumps({"prompt": task.user_prompt})},
         {"name": "GITLAB_URL", "value": settings.gitlab_url},
         {"name": "GITLAB_TOKEN", "value": settings.gitlab_token},
+        {"name": "GITLAB_WEBHOOK_SECRET", "value": settings.gitlab_webhook_secret},
+        # Writable cache dirs for read-only root filesystem
+        {"name": "UV_CACHE_DIR", "value": "/tmp/.uv-cache"},
+        {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
+        # src/ layout needs explicit PYTHONPATH when not using uv run
+        {"name": "PYTHONPATH", "value": "/home/app/app/src"},
     ]
     if settings.redis_url:
         env.append({"name": "REDIS_URL", "value": settings.redis_url})
@@ -120,7 +126,7 @@ class KubernetesTaskExecutor:
         container = k8s.V1Container(
             name="task",
             image=self._settings.k8s_job_image,
-            command=["uv", "run", "python", "-m", "gitlab_copilot_agent.task_runner"],
+            command=[".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"],
             env=env,
             volume_mounts=[tmp_mount],
             resources=k8s.V1ResourceRequirements(
@@ -131,6 +137,7 @@ class KubernetesTaskExecutor:
             ),
             security_context=k8s.V1SecurityContext(
                 run_as_non_root=True,
+                run_as_user=1000,
                 read_only_root_filesystem=True,
                 capabilities=k8s.V1Capabilities(drop=["ALL"]),
             ),

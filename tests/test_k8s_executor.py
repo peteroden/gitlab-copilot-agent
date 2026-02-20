@@ -224,7 +224,7 @@ class TestJobCreation:
 
         container = job_body.spec.template.spec.containers[0]
         assert container.image == K8S_JOB_IMAGE
-        expected_cmd = ["uv", "run", "python", "-m", "gitlab_copilot_agent.task_runner"]
+        expected_cmd = [".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]
         assert container.command == expected_cmd
         assert container.resources.limits["cpu"] == K8S_JOB_CPU
         assert container.resources.limits["memory"] == K8S_JOB_MEM
