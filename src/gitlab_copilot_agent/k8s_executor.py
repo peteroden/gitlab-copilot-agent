@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
 from typing import TYPE_CHECKING
 
@@ -48,8 +49,26 @@ def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
         env.append({"name": "REDIS_URL", "value": settings.redis_url})
     if settings.github_token:
         env.append({"name": "GITHUB_TOKEN", "value": settings.github_token})
+    if settings.copilot_provider_type:
+        env.append({"name": "COPILOT_PROVIDER_TYPE", "value": settings.copilot_provider_type})
     if settings.copilot_provider_base_url:
-        env.append({"name": "COPILOT_LLM_URL", "value": settings.copilot_provider_base_url})
+        env.append(
+            {
+                "name": "COPILOT_PROVIDER_BASE_URL",
+                "value": settings.copilot_provider_base_url,
+            }
+        )
+    if settings.copilot_provider_api_key:
+        env.append(
+            {
+                "name": "COPILOT_PROVIDER_API_KEY",
+                "value": settings.copilot_provider_api_key,
+            }
+        )
+    if settings.copilot_model:
+        env.append({"name": "COPILOT_MODEL", "value": settings.copilot_model})
+    if os.environ.get("ALLOW_HTTP_CLONE"):
+        env.append({"name": "ALLOW_HTTP_CLONE", "value": os.environ["ALLOW_HTTP_CLONE"]})
     return env
 
 
@@ -101,11 +120,15 @@ class KubernetesTaskExecutor:
             for e in _build_env(task, self._settings)
         ]
 
+        tmp_volume = k8s.V1Volume(name="tmp", empty_dir=k8s.V1EmptyDirVolumeSource())
+        tmp_mount = k8s.V1VolumeMount(name="tmp", mount_path="/tmp")
+
         container = k8s.V1Container(
             name="task",
             image=self._settings.k8s_job_image,
             command=["uv", "run", "python", "-m", "gitlab_copilot_agent.task_runner"],
             env=env,
+            volume_mounts=[tmp_mount],
             resources=k8s.V1ResourceRequirements(
                 limits={
                     "cpu": self._settings.k8s_job_cpu_limit,
@@ -123,7 +146,11 @@ class KubernetesTaskExecutor:
             metadata=k8s.V1ObjectMeta(name=job_name, namespace=ns),
             spec=k8s.V1JobSpec(
                 template=k8s.V1PodTemplateSpec(
-                    spec=k8s.V1PodSpec(containers=[container], restart_policy="Never"),
+                    spec=k8s.V1PodSpec(
+                        containers=[container],
+                        volumes=[tmp_volume],
+                        restart_policy="Never",
+                    ),
                 ),
                 backoff_limit=1,
                 ttl_seconds_after_finished=_TTL_AFTER_FINISHED,
