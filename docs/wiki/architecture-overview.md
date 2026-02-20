@@ -59,9 +59,10 @@ graph TB
     EXEC -.->|task_executor=k8s| K8SEXEC
     K8SEXEC --> JOB1
     K8SEXEC --> JOB2
-    JOB1 -.->|Store result| REDIS
-    JOB2 -.->|Store result| REDIS
+    JOB1 -.->|Store CodingResult| REDIS
+    JOB2 -.->|Store CodingResult| REDIS
     K8SEXEC -.->|Poll result| REDIS
+    K8SEXEC -.->|Read patch, apply via git| K8SEXEC
 
     ORCH --> REPO
     CODING --> REPO
@@ -85,8 +86,9 @@ graph TB
 
 ### 2. Processing Layer
 - **`orchestrator.py`**: MR review orchestration (clone → review → parse → post)
-- **`mr_comment_handler.py`**: `/copilot` command processing (clone → code → commit → push)
-- **`coding_orchestrator.py`**: Jira issue implementation (clone → code → branch → MR)
+- **`mr_comment_handler.py`**: `/copilot` command processing (clone → code → apply result → commit → push)
+- **`coding_orchestrator.py`**: Jira issue implementation (clone → code → apply result → branch → MR)
+- **`coding_workflow.py`**: Shared helper for applying coding results (diff passback from k8s pods)
 - **`review_engine.py`**: Review prompt construction and execution
 - **`coding_engine.py`**: Coding task prompt construction and .gitignore hygiene
 
@@ -204,9 +206,9 @@ graph TB
 
 ### Semi-Trusted (Yellow Zone)
 - Redis state (distributed locks, dedup keys, Job results)
-- K8s Job pods (isolated tasks, inherit service credentials)
+- K8s Job pods (isolated tasks, inherit limited service credentials)
 
-**Risk**: Redis compromise allows lock bypass, dedup poisoning. K8s Job compromise allows credential theft (GITLAB_TOKEN, GITHUB_TOKEN passed as env vars).
+**Risk**: Redis compromise allows lock bypass, dedup poisoning, result tampering. K8s Job compromise allows credential theft (GITLAB_TOKEN for clone, GITHUB_TOKEN passed as env vars). **Mitigation**: Job pods have read-only clone access only (no git push), results validated (base_sha check, patch validation) before apply. Only controller has git push and API write access.
 
 ### Network Boundaries
 

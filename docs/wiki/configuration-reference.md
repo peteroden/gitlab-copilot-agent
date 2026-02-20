@@ -152,6 +152,15 @@ Only used when `TASK_EXECUTOR=kubernetes`.
 - **Default**: `600`
 - **Description**: Job timeout in seconds (10 minutes)
 
+### `K8S_JOB_HOST_ALIASES`
+- **Type**: `str`
+- **Required**: ❌ No
+- **Default**: `""` (empty — no host aliases)
+- **Description**: JSON-encoded array of hostAliases for Job pods. Each entry must have `ip` and `hostnames` keys. Useful for environments with custom DNS (air-gapped, k3d dev).
+- **Format**: `[{"ip": "10.0.0.1", "hostnames": ["host.local", "api.local"]}]`
+- **Validation**: JSON structure validated at startup (must be array of objects with `ip` and `hostnames`)
+- **Helm Value**: Auto-generated from `hostAliases` value (serialized to JSON)
+
 ---
 
 ## State Backend
@@ -446,7 +455,8 @@ Helm `values.yaml` maps to env vars via `configmap.yaml` and `secret.yaml`:
 | `jira.inReviewStatus` | `JIRA_IN_REVIEW_STATUS` | ❌ |
 | `jira.pollInterval` | `JIRA_POLL_INTERVAL` | ❌ |
 | `extraEnv` | (arbitrary key-value pairs) | ❌ |
-| `hostAliases` | Pod `/etc/hosts` entries | ❌ |
+| `hostAliases` | `K8S_JOB_HOST_ALIASES` (JSON for Job pods) | ❌ |
+| `hostAliases` | Pod `/etc/hosts` entries (controller pod) | ❌ |
 
 See `helm/gitlab-copilot-agent/values.yaml` for full reference.
 
