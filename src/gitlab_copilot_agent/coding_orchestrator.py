@@ -10,6 +10,7 @@ from pathlib import Path
 import structlog
 
 from gitlab_copilot_agent.coding_engine import run_coding_task
+from gitlab_copilot_agent.coding_workflow import apply_coding_result
 from gitlab_copilot_agent.concurrency import DistributedLock, MemoryLock, ProcessedIssueTracker
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.git_operations import git_clone, git_commit, git_create_branch, git_push
@@ -101,6 +102,7 @@ class CodingOrchestrator:
                         description,
                     )
                     await bound_log.ainfo("coding_complete", summary=result.summary[:200])
+                    await apply_coding_result(result, repo_path)
                     has_changes = await git_commit(
                         repo_path,
                         f"feat({issue.key.lower()}): {issue.fields.summary}",

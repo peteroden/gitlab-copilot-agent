@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -18,6 +19,7 @@ _tracer = get_tracer(__name__)
 
 _GIT_TIMEOUT = 60
 CLONE_DIR_PREFIX = "mr-review-"
+MAX_PATCH_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
 def _validate_clone_url(url: str) -> None:
@@ -142,6 +144,64 @@ async def git_push(
             sanitize_token=token,
         )
         await log.ainfo("pushed", branch=branch, remote=remote, repo=str(repo_path))
+
+
+async def git_head_sha(repo_path: Path) -> str:
+    """Return the HEAD commit SHA of a local repo."""
+    return await _run_git(repo_path, "rev-parse", "HEAD")
+
+
+async def git_diff_staged(repo_path: Path) -> str:
+    """Return staged diff including binary files. Caller must `git add` first."""
+    raw = await _run_git(repo_path, "diff", "--cached", "--binary")
+    # _run_git strips trailing whitespace; patches need a final newline
+    return f"{raw}\n" if raw else ""
+
+
+_PATH_TRAVERSAL_RE = re.compile(r"(^|/)\.\.(/|$)")
+# Match only actual file-header lines (not hunk content that happens to start with ---/+++)
+_FILE_HEADER_RE = re.compile(r"^(diff --git |--- [ab]/|\+\+\+ [ab]/)")
+
+
+def _validate_patch(patch: str) -> None:
+    """Reject patches containing path traversal sequences in file headers."""
+    for line in patch.splitlines():
+        if _FILE_HEADER_RE.match(line) and _PATH_TRAVERSAL_RE.search(line):
+            raise ValueError(f"Patch contains path traversal: {line!r}")
+
+
+async def git_apply_patch(repo_path: Path, patch: str) -> None:
+    """Apply a unified diff to *repo_path* using ``git apply --3way``.
+
+    The patch is piped via stdin — no temp files on disk.
+    Raises ValueError if the patch contains path traversal sequences.
+    Raises RuntimeError if git apply fails.
+    """
+    _validate_patch(patch)
+    with _tracer.start_as_current_span("git.apply_patch"):
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            "-C",
+            str(repo_path),
+            "apply",
+            "--3way",
+            "--whitespace=nowarn",
+            "-",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(
+                proc.communicate(input=patch.encode()), timeout=_GIT_TIMEOUT
+            )
+        except TimeoutError as e:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError("git apply timed out") from e
+        if proc.returncode != 0:
+            raise RuntimeError(f"git apply failed: {stderr.decode().strip()}")
+        await log.ainfo("patch_applied", repo=str(repo_path))
 
 
 async def git_clone(
