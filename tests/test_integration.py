@@ -14,6 +14,7 @@ from gitlab_copilot_agent.models import (
     WebhookUser,
 )
 from gitlab_copilot_agent.orchestrator import handle_review
+from gitlab_copilot_agent.task_executor import ReviewResult
 from tests.conftest import (
     DIFF_REFS,
     FAKE_REVIEW_OUTPUT,
@@ -42,7 +43,7 @@ def _setup_mocks(
             changes=[],
         )
     )
-    mock_run_review.return_value = FAKE_REVIEW_OUTPUT
+    mock_run_review.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
     return mock_gl_instance  # type: ignore[no-any-return]
 
 

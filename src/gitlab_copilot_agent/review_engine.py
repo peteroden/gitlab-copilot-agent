@@ -3,7 +3,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 from gitlab_copilot_agent.config import Settings
-from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams
+from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams, TaskResult
 
 SYSTEM_PROMPT = """\
 You are a senior code reviewer. Review the merge request diff thoroughly.
@@ -75,8 +75,8 @@ async def run_review(
     repo_path: str,
     repo_url: str,
     review_request: ReviewRequest,
-) -> str:
-    """Run a Copilot agent review and return the raw response text."""
+) -> TaskResult:
+    """Run a Copilot agent review and return the structured result."""
     task = TaskParams(
         task_type="review",
         task_id=f"review-{review_request.source_branch}",

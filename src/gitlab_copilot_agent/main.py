@@ -22,7 +22,7 @@ from gitlab_copilot_agent.gitlab_poller import GitLabPoller
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_poller import JiraPoller
 from gitlab_copilot_agent.project_mapping import ProjectMap
-from gitlab_copilot_agent.redis_state import create_dedup, create_lock
+from gitlab_copilot_agent.redis_state import create_dedup, create_lock, create_result_store
 from gitlab_copilot_agent.task_executor import LocalTaskExecutor, TaskExecutor
 from gitlab_copilot_agent.telemetry import (
     add_trace_context,
@@ -62,7 +62,8 @@ def _create_executor(backend: str, settings: Settings | None = None) -> TaskExec
             raise ValueError(msg)
         from gitlab_copilot_agent.k8s_executor import KubernetesTaskExecutor
 
-        return KubernetesTaskExecutor(settings=settings, redis_url=settings.redis_url)
+        store = create_result_store("redis", settings.redis_url)
+        return KubernetesTaskExecutor(settings=settings, result_store=store)
     return LocalTaskExecutor()
 
 

@@ -58,10 +58,10 @@ async def handle_review(
                 target_branch=mr.target_branch,
             )
 
-            raw_review = await run_review(
+            raw_result = await run_review(
                 executor, settings, str(repo_path), project.git_http_url, review_req
             )
-            parsed = parse_review(raw_review)
+            parsed = parse_review(raw_result.summary)
 
             await bound_log.ainfo(
                 "review_complete",

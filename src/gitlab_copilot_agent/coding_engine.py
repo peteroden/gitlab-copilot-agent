@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from gitlab_copilot_agent.config import Settings
-from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams
+from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams, TaskResult
 
 _PYTHON_GITIGNORE_PATTERNS = [
     "__pycache__/",
@@ -92,7 +92,7 @@ async def run_coding_task(
     issue_key: str,
     summary: str,
     description: str | None,
-) -> str:
+) -> TaskResult:
     """Run a Copilot agent session to implement changes from a Jira issue."""
     ensure_gitignore(repo_path)
     task = TaskParams(

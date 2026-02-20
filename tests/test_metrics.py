@@ -19,6 +19,7 @@ from gitlab_copilot_agent.models import (
     WebhookUser,
 )
 from gitlab_copilot_agent.orchestrator import handle_review
+from gitlab_copilot_agent.task_executor import ReviewResult
 from tests.conftest import (
     DIFF_REFS,
     EXAMPLE_CLONE_URL,
@@ -153,7 +154,7 @@ async def test_review_pipeline_records_success_metrics(
     mock_gl.get_mr_details = AsyncMock(
         return_value=MRDetails(title="t", description=None, diff_refs=DIFF_REFS, changes=[])
     )
-    mock_run_review.return_value = FAKE_REVIEW_OUTPUT
+    mock_run_review.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
 
     mock_total = MagicMock()
     mock_duration = MagicMock()

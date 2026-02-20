@@ -91,7 +91,7 @@ async def handle_copilot_comment(
                     repo_path=str(repo_path),
                 )
                 result = await executor.execute(task)
-                await bound_log.ainfo("copilot_coding_complete", summary=result[:200])
+                await bound_log.ainfo("copilot_coding_complete", summary=result.summary[:200])
 
                 has_changes = await git_commit(
                     repo_path, f"fix: {instruction[:50]}", AGENT_AUTHOR_NAME, AGENT_AUTHOR_EMAIL
@@ -99,11 +99,11 @@ async def handle_copilot_comment(
                 if has_changes:
                     await git_push(repo_path, "origin", mr.source_branch, settings.gitlab_token)
                     await gl_client.post_mr_comment(
-                        project.id, mr.iid, f"✅ Changes pushed.\n\n{result}"
+                        project.id, mr.iid, f"✅ Changes pushed.\n\n{result.summary}"
                     )
                 else:
                     await gl_client.post_mr_comment(
-                        project.id, mr.iid, f"ℹ️ No file changes needed.\n\n{result}"
+                        project.id, mr.iid, f"ℹ️ No file changes needed.\n\n{result.summary}"
                     )
 
                 await bound_log.ainfo("copilot_command_complete")

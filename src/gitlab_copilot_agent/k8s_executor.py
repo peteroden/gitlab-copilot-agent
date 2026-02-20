@@ -1,4 +1,4 @@
-"""KubernetesTaskExecutor — dispatches tasks as k8s Jobs, reads results from Redis."""
+"""KubernetesTaskExecutor — dispatches tasks as k8s Jobs, reads results via ResultStore."""
 
 from __future__ import annotations
 
@@ -11,15 +11,15 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-if TYPE_CHECKING:
-    from redis.asyncio import Redis
+from gitlab_copilot_agent.task_executor import CodingResult, ReviewResult, TaskResult
 
+if TYPE_CHECKING:
+    from gitlab_copilot_agent.concurrency import ResultStore
     from gitlab_copilot_agent.config import Settings
     from gitlab_copilot_agent.task_executor import TaskParams
 
 log = structlog.get_logger()
 
-_RESULT_KEY_PREFIX = "result:"
 _JOB_POLL_INTERVAL = 2  # seconds between status checks
 _TTL_AFTER_FINISHED = 300
 _ANNOTATION_KEY = "results.copilot-agent/summary"
@@ -44,6 +44,12 @@ def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
         {"name": "TASK_PAYLOAD", "value": json.dumps({"prompt": task.user_prompt})},
         {"name": "GITLAB_URL", "value": settings.gitlab_url},
         {"name": "GITLAB_TOKEN", "value": settings.gitlab_token},
+        {"name": "GITLAB_WEBHOOK_SECRET", "value": settings.gitlab_webhook_secret},
+        # Writable cache dirs for read-only root filesystem
+        {"name": "UV_CACHE_DIR", "value": "/tmp/.uv-cache"},
+        {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
+        # src/ layout needs explicit PYTHONPATH when not using uv run
+        {"name": "PYTHONPATH", "value": "/home/app/app/src"},
     ]
     if settings.redis_url:
         env.append({"name": "REDIS_URL", "value": settings.redis_url})
@@ -73,32 +79,26 @@ def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
 
 
 class KubernetesTaskExecutor:
-    """Dispatches tasks as Kubernetes Jobs and retrieves results from Redis."""
+    """Dispatches tasks as Kubernetes Jobs and retrieves results via ResultStore."""
 
-    def __init__(self, settings: Settings, redis_url: str) -> None:
+    def __init__(self, settings: Settings, result_store: ResultStore) -> None:
         self._settings = settings
-        self._redis_url = redis_url
+        self._store = result_store
 
-    async def execute(self, task: TaskParams) -> str:
-        import redis.asyncio as aioredis
+    async def execute(self, task: TaskParams) -> TaskResult:
+        # Idempotency: return cached result if present
+        cached = await self._store.get(task.task_id)
+        if cached is not None:
+            return _parse_result(cached, task.task_type)
 
-        client: Redis = aioredis.from_url(self._redis_url)
+        job_name = _sanitize_job_name(task.task_type, task.task_id)
         try:
-            # Idempotency: return cached result if present
-            cached = await client.get(f"{_RESULT_KEY_PREFIX}{task.task_id}")
-            if cached is not None:
-                return cached.decode() if isinstance(cached, bytes) else str(cached)
-
-            job_name = _sanitize_job_name(task.task_type, task.task_id)
-            try:
-                await asyncio.to_thread(self._create_job, job_name, task)
-            except Exception as exc:  # noqa: BLE001
-                if getattr(exc, "status", None) != 409:
-                    raise
-                log.info("job_already_exists", job_name=job_name)
-            return await self._wait_for_result(client, job_name, task)
-        finally:
-            await client.aclose()
+            await asyncio.to_thread(self._create_job, job_name, task)
+        except Exception as exc:  # noqa: BLE001
+            if getattr(exc, "status", None) != 409:
+                raise
+            log.info("job_already_exists", job_name=job_name)
+        return await self._wait_for_result(job_name, task)
 
     # -- k8s helpers (synchronous, called via to_thread) ------------------
 
@@ -126,7 +126,7 @@ class KubernetesTaskExecutor:
         container = k8s.V1Container(
             name="task",
             image=self._settings.k8s_job_image,
-            command=["uv", "run", "python", "-m", "gitlab_copilot_agent.task_runner"],
+            command=[".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"],
             env=env,
             volume_mounts=[tmp_mount],
             resources=k8s.V1ResourceRequirements(
@@ -137,6 +137,7 @@ class KubernetesTaskExecutor:
             ),
             security_context=k8s.V1SecurityContext(
                 run_as_non_root=True,
+                run_as_user=1000,
                 read_only_root_filesystem=True,
                 capabilities=k8s.V1Capabilities(drop=["ALL"]),
             ),
@@ -208,25 +209,24 @@ class KubernetesTaskExecutor:
 
     # -- async polling ----------------------------------------------------
 
-    async def _wait_for_result(self, redis_client: Redis, job_name: str, task: TaskParams) -> str:
+    async def _wait_for_result(self, job_name: str, task: TaskParams) -> TaskResult:
         deadline = asyncio.get_event_loop().time() + self._settings.k8s_job_timeout
 
         while asyncio.get_event_loop().time() < deadline:
-            # Check Redis first
-            cached = await redis_client.get(f"{_RESULT_KEY_PREFIX}{task.task_id}")
+            cached = await self._store.get(task.task_id)
             if cached is not None:
-                return cached.decode() if isinstance(cached, bytes) else str(cached)
+                return _parse_result(cached, task.task_type)
 
             status = await asyncio.to_thread(self._read_job_status, job_name)
 
             if status == "succeeded":
-                cached = await redis_client.get(f"{_RESULT_KEY_PREFIX}{task.task_id}")
+                cached = await self._store.get(task.task_id)
                 if cached is not None:
-                    return cached.decode() if isinstance(cached, bytes) else str(cached)
+                    return _parse_result(cached, task.task_type)
                 annotation = await asyncio.to_thread(self._read_job_annotation, job_name)
                 if annotation:
-                    return annotation
-                return ""
+                    return _parse_result(annotation, task.task_type)
+                return _parse_result("", task.task_type)
 
             if status == "failed":
                 logs = await asyncio.to_thread(self._read_pod_logs, job_name)
@@ -243,3 +243,22 @@ class KubernetesTaskExecutor:
         await asyncio.to_thread(self._delete_job, job_name)
         msg = f"Job {job_name} timed out after {self._settings.k8s_job_timeout}s"
         raise TimeoutError(msg)
+
+
+def _parse_result(raw: str, task_type: str) -> TaskResult:
+    """Parse a raw result string into a structured TaskResult.
+
+    If the string is valid JSON with a ``result_type`` field, parse it directly.
+    Otherwise wrap the raw string as a summary in the appropriate result type.
+    """
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and "result_type" in data:
+            if data["result_type"] == "coding":
+                return CodingResult.model_validate(data)
+            return ReviewResult.model_validate(data)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    if task_type == "coding":
+        return CodingResult(summary=raw)
+    return ReviewResult(summary=raw)

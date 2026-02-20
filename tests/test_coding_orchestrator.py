@@ -8,6 +8,7 @@ import pytest
 from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
 from gitlab_copilot_agent.jira_models import JiraIssue, JiraIssueFields, JiraStatus
 from gitlab_copilot_agent.project_mapping import GitLabProjectMapping
+from gitlab_copilot_agent.task_executor import CodingResult
 from tests.conftest import (
     EXAMPLE_CLONE_URL,
     JIRA_EMAIL,
@@ -54,7 +55,7 @@ async def test_handle_full_pipeline(
     tmp_path: Path,
 ) -> None:
     mock_clone.return_value = tmp_path
-    mock_coding.return_value = "Changes made"
+    mock_coding.return_value = CodingResult(summary="Changes made")
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
     mock_gitlab.create_merge_request.return_value = 1
     orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
@@ -85,7 +86,7 @@ async def test_in_review_transition_failure_is_non_blocking(
 ) -> None:
     """If 'In Review' transition fails, the task still completes successfully."""
     mock_clone.return_value = tmp_path
-    mock_coding.return_value = "Changes made"
+    mock_coding.return_value = CodingResult(summary="Changes made")
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
     mock_gitlab.create_merge_request.return_value = 1
 
@@ -115,7 +116,7 @@ async def test_custom_in_review_status_used(
 ) -> None:
     """Custom JIRA_IN_REVIEW_STATUS is used for the transition."""
     mock_clone.return_value = tmp_path
-    mock_coding.return_value = "Changes made"
+    mock_coding.return_value = CodingResult(summary="Changes made")
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
     mock_gitlab.create_merge_request.return_value = 1
 
