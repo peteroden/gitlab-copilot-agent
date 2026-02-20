@@ -94,6 +94,9 @@ def _install_k8s_stub() -> tuple[MagicMock, MagicMock, MagicMock]:
         "V1SecurityContext",
         "V1Capabilities",
         "V1DeleteOptions",
+        "V1Volume",
+        "V1VolumeMount",
+        "V1EmptyDirVolumeSource",
     ):
         setattr(client_mod, cls_name, _passthrough_cls(cls_name))
 
@@ -228,6 +231,11 @@ class TestJobCreation:
         assert container.security_context.read_only_root_filesystem is True
         assert container.security_context.capabilities.drop == ["ALL"]
 
+        # #141: emptyDir volume at /tmp for writable scratch space
+        pod_spec = job_body.spec.template.spec
+        assert any(v.name == "tmp" for v in pod_spec.volumes)
+        assert any(m.name == "tmp" and m.mount_path == "/tmp" for m in container.volume_mounts)
+
     async def test_env_vars_include_task_and_auth(
         self,
         batch_v1: MagicMock,
@@ -262,9 +270,45 @@ class TestJobCreation:
             "GITLAB_TOKEN",
             "GITHUB_TOKEN",
             "REDIS_URL",
+            "COPILOT_MODEL",
         )
         for expected in expected_vars:
             assert expected in env_names, f"Missing env var: {expected}"
+        assert "COPILOT_LLM_URL" not in env_names, "Stale COPILOT_LLM_URL should be removed"
+
+    async def test_byok_env_vars_propagated(
+        self,
+        batch_v1: MagicMock,
+        fake_redis: fakeredis.aioredis.FakeRedis,
+    ) -> None:
+        """#143: BYOK provider env vars forwarded to Job pods."""
+        status_mock = MagicMock()
+        status_mock.succeeded = 1
+        status_mock.failed = None
+        job_mock = MagicMock()
+        job_mock.status = status_mock
+        job_mock.metadata = MagicMock()
+        job_mock.metadata.annotations = {}
+        batch_v1.read_namespaced_job.return_value = job_mock
+
+        settings = _make_settings(
+            copilot_provider_type="openai",
+            copilot_provider_base_url="http://llm:9998/v1",
+            copilot_provider_api_key="test-key",
+            copilot_model="gpt-4o",
+            github_token=None,
+        )
+        executor = _make_executor(settings=settings)
+        with patch("redis.asyncio.from_url", return_value=fake_redis):
+            await executor.execute(_make_task(settings=settings))
+
+        job_body = batch_v1.create_namespaced_job.call_args.kwargs["body"]
+        container = job_body.spec.template.spec.containers[0]
+        env_map = {e.name: e.value for e in container.env}
+        assert env_map["COPILOT_PROVIDER_TYPE"] == "openai"
+        assert env_map["COPILOT_PROVIDER_BASE_URL"] == "http://llm:9998/v1"
+        assert env_map["COPILOT_PROVIDER_API_KEY"] == "test-key"
+        assert env_map["COPILOT_MODEL"] == "gpt-4o"
 
 
 class TestCompletion:
