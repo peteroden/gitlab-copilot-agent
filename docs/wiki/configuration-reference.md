@@ -15,7 +15,7 @@ Every environment variable in `config.py`, grouped by category.
 ### `GITLAB_TOKEN`
 - **Type**: `str`
 - **Required**: ✅ Yes
-- **Description**: GitLab API private token with `api` scope
+- **Description**: GitLab API token with `api` scope. **Recommended**: Use [project access tokens](https://docs.gitlab.com/ee/user/project/settings/project_access_tokens.html) scoped to specific projects for least-privilege access, rather than personal access tokens.
 - **Security**: Read/write access to all allowed projects, webhook processing
 - **Validation**: Non-empty string
 
@@ -36,7 +36,7 @@ At least one of these must be set:
 - **Type**: `str | None`
 - **Required**: ⚠️ If not using BYOK
 - **Default**: `None`
-- **Description**: GitHub token for Copilot auth (PAT with `copilot` scope or GitHub App token)
+- **Description**: GitHub token for Copilot auth. Accepts PATs with `copilot` scope, fine-grained PATs, or GitHub App installation tokens. **Recommended**: Use GitHub App tokens for automated rotation and audit trails.
 - **Security**: Authorizes Copilot API access
 - **Validation**: Cross-checked with `COPILOT_PROVIDER_TYPE` in `_check_auth()`
 
@@ -160,6 +160,27 @@ Only used when `TASK_EXECUTOR=kubernetes`.
 - **Format**: `[{"ip": "10.0.0.1", "hostnames": ["host.local", "api.local"]}]`
 - **Validation**: JSON structure validated at startup (must be array of objects with `ip` and `hostnames`)
 - **Helm Value**: Auto-generated from `hostAliases` value (serialized to JSON)
+
+### `K8S_SECRET_NAME`
+- **Type**: `str | None`
+- **Required**: ❌ No (but recommended for K8s deployments)
+- **Default**: `None`
+- **Description**: K8s Secret name for mounting Job pod credentials via `secretKeyRef`. When set, sensitive env vars (`GITLAB_TOKEN`, `GITHUB_TOKEN`, `COPILOT_PROVIDER_API_KEY`, `GITLAB_WEBHOOK_SECRET`) are referenced from this Secret instead of passed as plaintext. A startup warning is logged when running the K8s executor without this configured.
+- **Helm Value**: Auto-set to the chart's Secret name
+
+### `K8S_CONFIGMAP_NAME`
+- **Type**: `str | None`
+- **Required**: ❌ No
+- **Default**: `None`
+- **Description**: K8s ConfigMap name for mounting Job pod non-sensitive config via `configMapKeyRef`. When set, config values (`REDIS_URL`, `COPILOT_MODEL`, `COPILOT_PROVIDER_TYPE`, `COPILOT_PROVIDER_BASE_URL`, `STATE_BACKEND`) are referenced from this ConfigMap.
+- **Helm Value**: Auto-set to the chart's ConfigMap name
+
+### `K8S_JOB_INSTANCE_LABEL`
+- **Type**: `str`
+- **Required**: ❌ No
+- **Default**: `""` (empty)
+- **Description**: Helm release instance label added to Job pods as `app.kubernetes.io/instance`. Used by NetworkPolicies to scope access to pods within the same Helm release.
+- **Helm Value**: Auto-set to `{{ .Release.Name }}`
 
 ---
 
@@ -411,10 +432,12 @@ COPILOT_MODEL=gpt-4
 
 ### Secrets
 All tokens/keys should be:
-- Stored in Kubernetes Secrets
+- Stored in Kubernetes Secrets (or External Secrets Operator for production)
 - Mounted as environment variables (Helm chart handles this)
 - Never committed to code
-- Rotated regularly
+- Rotated regularly (quarterly recommended)
+
+**Rotation procedure**: Update the token value in your K8s Secret (or secrets manager) and restart pods. All credentials are stateless env vars — no migration needed. See the [deployment guide](deployment-guide.md#redis-password-rotation) for Redis-specific rotation steps.
 
 ### Least Privilege
 - **GITLAB_TOKEN**: Scope to specific projects if possible (use project access tokens)
@@ -422,8 +445,9 @@ All tokens/keys should be:
 - **JIRA_API_TOKEN**: Read issue, transition, add comment (no admin)
 
 ### Network Isolation
-- Redis: no auth (in-cluster only, use NetworkPolicy to restrict access)
+- Redis: password-protected when deployed via Helm; NetworkPolicies restrict access to agent pods only
 - OTEL Collector: internal endpoint only
+- Job pods: egress restricted to GitLab, Copilot API, Redis, and DNS via NetworkPolicy
 
 ---
 
@@ -445,6 +469,9 @@ Helm `values.yaml` maps to env vars via `configmap.yaml` and `secret.yaml`:
 | `controller.stateBackend` | `STATE_BACKEND` | ❌ |
 | `redis.enabled` | `REDIS_URL` (auto-generated) | ✅ (password in URL) |
 | `redis.password` | `REDIS_PASSWORD` | ✅ |
+| (auto) | `K8S_SECRET_NAME` | ❌ |
+| (auto) | `K8S_CONFIGMAP_NAME` | ❌ |
+| (auto) | `K8S_JOB_INSTANCE_LABEL` | ❌ |
 | `telemetry.otlpEndpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | ❌ |
 | `telemetry.environment` | `DEPLOYMENT_ENV` | ❌ |
 | `jira.url` | `JIRA_URL` | ❌ |
