@@ -1,0 +1,60 @@
+{{- if .Values.networkPolicies.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "app.fullname" . }}-job
+  labels: {{- include "app.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Chart.Name }}
+      app.kubernetes.io/component: job
+      app.kubernetes.io/instance: {{ include "app.fullname" . }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []  # Jobs don't receive inbound traffic
+  egress:
+    # DNS resolution (required for git clone and API calls)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchExpressions:
+              - key: k8s-app
+                operator: In
+                values: [kube-dns, coredns]
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS to external services (GitLab API, git clone, GitHub API, Copilot)
+    - ports:
+        - protocol: TCP
+          port: 443
+    # HTTP for git clone over http:// (if ALLOW_HTTP_CLONE is set)
+    - ports:
+        - protocol: TCP
+          port: 80
+    # Git protocol (git://)
+    - ports:
+        - protocol: TCP
+          port: 9418
+    # SSH for git clone over ssh:// (some repos)
+    - ports:
+        - protocol: TCP
+          port: 22
+    # Redis in same namespace (for storing task results)
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "app.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: redis
+      ports:
+        - protocol: TCP
+          port: {{ .Values.redis.port }}
+    {{- end }}
+{{- end }}

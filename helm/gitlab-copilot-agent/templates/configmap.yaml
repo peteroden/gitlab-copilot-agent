@@ -19,6 +19,7 @@ data:
   K8S_JOB_TIMEOUT: {{ .Values.jobRunner.timeout | quote }}
   K8S_SECRET_NAME: {{ include "app.fullname" . | quote }}
   K8S_CONFIGMAP_NAME: {{ include "app.fullname" . | quote }}
+  K8S_JOB_INSTANCE_LABEL: {{ include "app.fullname" . | quote }}
   {{- with .Values.hostAliases }}
   K8S_JOB_HOST_ALIASES: {{ . | toJson | quote }}
   {{- end }}
