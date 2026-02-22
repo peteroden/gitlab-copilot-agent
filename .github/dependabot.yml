@@ -4,3 +4,14 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # Node 22 is LTS (active until 2027-04). Only allow digest/patch updates.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+      # Python 3.12 is stable. Only allow digest/patch updates within 3.12.x.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
