@@ -10,7 +10,6 @@ data:
   LOG_LEVEL: {{ .Values.controller.logLevel | quote }}
   TASK_EXECUTOR: {{ .Values.controller.taskExecutor | quote }}
   STATE_BACKEND: {{ .Values.controller.stateBackend | quote }}
-  REDIS_URL: {{ include "app.redisUrl" . | quote }}
   COPILOT_MODEL: {{ .Values.controller.copilotModel | quote }}
   K8S_NAMESPACE: {{ .Release.Namespace | quote }}
   K8S_JOB_IMAGE: {{ include "app.jobImage" . | quote }}

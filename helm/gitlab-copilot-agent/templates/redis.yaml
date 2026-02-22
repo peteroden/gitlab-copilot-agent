@@ -19,7 +19,13 @@ spec:
         - name: redis
           image: "{{ .Values.redis.image.repository }}:{{ .Values.redis.image.tag }}"
           ports: [{ containerPort: {{ .Values.redis.port }} }]
-          args: ["--appendonly", "yes"]
+          args: ["--appendonly", "yes", "--requirepass", "$(REDIS_PASSWORD)"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "app.fullname" . }}
+                  key: REDIS_PASSWORD
           resources: {{- toYaml .Values.redis.resources | nindent 12 }}
           volumeMounts: [{ name: data, mountPath: /data }]
   volumeClaimTemplates:

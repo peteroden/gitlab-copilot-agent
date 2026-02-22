@@ -16,6 +16,7 @@ redis:
   enabled: true
   image: { repository: redis, tag: "7-alpine" }
   port: 6379
+  password: ""
   resources:
     limits: { cpu: 250m, memory: 256Mi }
     requests: { cpu: 50m, memory: 64Mi }

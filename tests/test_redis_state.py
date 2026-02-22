@@ -26,7 +26,7 @@ from tests.conftest import make_settings
 # -- Test constants --
 LOCK_KEY = "repo:group/project"
 DEDUP_KEY = "issue:KAN-42"
-REDIS_URL = "redis://localhost:6379/0"
+REDIS_URL = "redis://:testpass123@localhost:6379/0"
 LOCK_TTL = 10
 DEDUP_TTL = 60
 
@@ -34,7 +34,8 @@ DEDUP_TTL = 60
 @pytest.fixture()
 def fake_redis() -> fakeredis.FakeAsyncRedis:
     """Isolated fake Redis client per test."""
-    return fakeredis.FakeAsyncRedis()
+    server = fakeredis.FakeServer(config={b"requirepass": b"testpass123"})
+    return fakeredis.FakeAsyncRedis(server=server, password="testpass123")
 
 
 # -- Protocol conformance --
