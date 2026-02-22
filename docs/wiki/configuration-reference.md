@@ -15,7 +15,7 @@ Every environment variable in `config.py`, grouped by category.
 ### `GITLAB_TOKEN`
 - **Type**: `str`
 - **Required**: ✅ Yes
-- **Description**: GitLab API private token with `api` scope
+- **Description**: GitLab API token with `api` scope. **Recommended**: Use [project access tokens](https://docs.gitlab.com/ee/user/project/settings/project_access_tokens.html) scoped to specific projects for least-privilege access, rather than personal access tokens.
 - **Security**: Read/write access to all allowed projects, webhook processing
 - **Validation**: Non-empty string
 
@@ -36,7 +36,7 @@ At least one of these must be set:
 - **Type**: `str | None`
 - **Required**: ⚠️ If not using BYOK
 - **Default**: `None`
-- **Description**: GitHub token for Copilot auth (PAT with `copilot` scope or GitHub App token)
+- **Description**: GitHub token for Copilot auth. Accepts PATs with `copilot` scope, fine-grained PATs, or GitHub App installation tokens. **Recommended**: Use GitHub App tokens for automated rotation and audit trails.
 - **Security**: Authorizes Copilot API access
 - **Validation**: Cross-checked with `COPILOT_PROVIDER_TYPE` in `_check_auth()`
 
@@ -432,10 +432,12 @@ COPILOT_MODEL=gpt-4
 
 ### Secrets
 All tokens/keys should be:
-- Stored in Kubernetes Secrets
+- Stored in Kubernetes Secrets (or External Secrets Operator for production)
 - Mounted as environment variables (Helm chart handles this)
 - Never committed to code
-- Rotated regularly
+- Rotated regularly (quarterly recommended)
+
+**Rotation procedure**: Update the token value in your K8s Secret (or secrets manager) and restart pods. All credentials are stateless env vars — no migration needed. See the [deployment guide](deployment-guide.md#redis-password-rotation) for Redis-specific rotation steps.
 
 ### Least Privilege
 - **GITLAB_TOKEN**: Scope to specific projects if possible (use project access tokens)

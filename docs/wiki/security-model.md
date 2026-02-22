@@ -433,10 +433,10 @@ NetworkPolicies use `app.kubernetes.io/instance` labels to scope to the Helm rel
 2. **Redis AUTH + TLS**: Enable password authentication and encryption in transit ✅ AUTH (implemented — PR #166), TLS deferred
 3. **K8s Secrets for Job pods**: Mount credentials via Secret refs, not env vars in configmap ✅ (implemented — PR #163)
 4. **GitLab IP Allowlist**: Restrict `/webhook` endpoint
-5. **Project Access Tokens**: Use instead of personal tokens for GITLAB_TOKEN
-6. **GitHub App Tokens**: Use instead of PATs for GITHUB_TOKEN
+5. **Project Access Tokens**: Use instead of personal tokens for GITLAB_TOKEN ✅ (supported — any token with `api` scope works; project access tokens are recommended for least-privilege scoping)
+6. **GitHub App Tokens**: Use instead of PATs for GITHUB_TOKEN ✅ (supported — the Copilot SDK accepts any valid GitHub token including fine-grained PATs and GitHub App installation tokens)
 7. **Audit Logging**: Enable GitLab/Jira API audit logs
-8. **Rotate Secrets**: Quarterly rotation of all tokens/keys
+8. **Rotate Secrets**: Quarterly rotation of all tokens/keys ✅ (supported — all credentials are env vars; rotate by updating K8s Secret or External Secrets source and restarting pods. Redis password rotation documented in deployment guide)
 9. **Egress NetworkPolicy**: Block job pod egress to internal services (allow GitLab, Copilot API, Redis only) ✅ (implemented — PR #164)
 10. **Resource Quotas**: Limit job pod resource consumption
 11. **Pin Docker Base Images**: Use digest-based pins to prevent supply chain attacks ✅ (implemented — `Dockerfile` uses `@sha256:` pins, CI validates, Dependabot updates)
