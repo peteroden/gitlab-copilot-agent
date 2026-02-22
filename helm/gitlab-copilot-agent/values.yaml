@@ -46,3 +46,12 @@ jira:
   pollInterval: 30
 extraEnv: {}
 hostAliases: []
+networkPolicies:
+  # Set to true if your CNI supports NetworkPolicy (Calico, Cilium, Weave, etc.)
+  # Note: Kind and Minikube require CNI installation; GKE, AKS, EKS support varies by config.
+  enabled: false
+  controller:
+    ingress:
+      # Empty = allow all. Add namespaceSelector/podSelector to restrict ingress.
+      # Example: [{"namespaceSelector": {"matchLabels": {"name": "ingress-ns"}}}]
+      allowFrom: []

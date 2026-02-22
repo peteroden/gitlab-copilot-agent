@@ -1,0 +1,66 @@
+{{- if .Values.networkPolicies.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "app.fullname" . }}-controller
+  labels: {{- include "app.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "app.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: controller
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow HTTP traffic on port 8000 (GitLab webhook receiver)
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.controller.port }}
+      {{- if .Values.networkPolicies.controller.ingress.allowFrom }}
+      from: {{- toYaml .Values.networkPolicies.controller.ingress.allowFrom | nindent 8 }}
+      {{- end }}
+  egress:
+    # DNS resolution (required for all external API calls)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchExpressions:
+              - key: k8s-app
+                operator: In
+                values: [kube-dns, coredns]
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS to external APIs (GitLab, GitHub, Jira, Copilot)
+    - ports:
+        - protocol: TCP
+          port: 443
+    # HTTP to internal GitLab or other HTTP-only services
+    - ports:
+        - protocol: TCP
+          port: 80
+    # Redis in same namespace (if enabled)
+    {{- if .Values.redis.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "app.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: redis
+      ports:
+        - protocol: TCP
+          port: {{ .Values.redis.port }}
+    {{- end }}
+    # OpenTelemetry collector (OTLP gRPC)
+    # NOTE: If telemetry.otlpEndpoint points to an external or differently-labeled
+    # collector, add a custom egress rule or set networkPolicies.extraEgress.
+    {{- if .Values.telemetry.otlpEndpoint }}
+    - ports:
+        - protocol: TCP
+          port: 4317
+    {{- end }}
+{{- end }}

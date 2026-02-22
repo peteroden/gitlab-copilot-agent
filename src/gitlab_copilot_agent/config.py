@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     k8s_configmap_name: str | None = Field(
         default=None, description="K8s ConfigMap name for Job pod config"
     )
+    k8s_job_instance_label: str = Field(
+        default="", description="Helm release instance label for Job pod NetworkPolicy scoping"
+    )
 
     # State backend
     state_backend: Literal["memory", "redis"] = Field(

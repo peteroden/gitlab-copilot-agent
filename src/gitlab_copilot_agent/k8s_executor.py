@@ -218,6 +218,21 @@ class KubernetesTaskExecutor:
             metadata=k8s.V1ObjectMeta(name=job_name, namespace=ns),
             spec=k8s.V1JobSpec(
                 template=k8s.V1PodTemplateSpec(
+                    metadata=k8s.V1ObjectMeta(
+                        labels={
+                            "app.kubernetes.io/name": "gitlab-copilot-agent",
+                            "app.kubernetes.io/component": "job",
+                            **(
+                                {
+                                    "app.kubernetes.io/instance": (
+                                        self._settings.k8s_job_instance_label
+                                    ),
+                                }
+                                if self._settings.k8s_job_instance_label
+                                else {}
+                            ),
+                        }
+                    ),
                     spec=k8s.V1PodSpec(
                         containers=[container],
                         volumes=[tmp_volume],

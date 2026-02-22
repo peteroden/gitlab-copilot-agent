@@ -242,6 +242,12 @@ class TestJobCreation:
         assert any(v.name == "tmp" for v in pod_spec.volumes)
         assert any(m.name == "tmp" and m.mount_path == "/tmp" for m in container.volume_mounts)
 
+        # #155: Job pod labels for NetworkPolicy selectors
+        labels = job_body.spec.template.metadata.labels
+        assert labels["app.kubernetes.io/name"] == "gitlab-copilot-agent"
+        assert labels["app.kubernetes.io/component"] == "job"
+        assert "app.kubernetes.io/instance" not in labels  # no instance label by default
+
         # #148: no hostAliases by default
         assert pod_spec.host_aliases is None
 
@@ -267,6 +273,29 @@ class TestJobCreation:
         assert len(pod_spec.host_aliases) == 1
         assert pod_spec.host_aliases[0].ip == "10.0.0.1"
         assert pod_spec.host_aliases[0].hostnames == ["host.local"]
+
+    async def test_instance_label_added_when_configured(
+        self,
+        batch_v1: MagicMock,
+    ) -> None:
+        """#155: Job pods include instance label for NetworkPolicy scoping."""
+        status_mock = MagicMock()
+        status_mock.succeeded = 1
+        status_mock.failed = None
+        job_mock = MagicMock()
+        job_mock.status = status_mock
+        job_mock.metadata = MagicMock()
+        job_mock.metadata.annotations = {}
+        batch_v1.read_namespaced_job.return_value = job_mock
+
+        executor = _make_executor(
+            settings=_make_settings(k8s_job_instance_label="my-release-gitlab-copilot-agent"),
+        )
+        await executor.execute(_make_task())
+
+        job_body = batch_v1.create_namespaced_job.call_args.kwargs["body"]
+        labels = job_body.spec.template.metadata.labels
+        assert labels["app.kubernetes.io/instance"] == "my-release-gitlab-copilot-agent"
 
     async def test_env_vars_include_task_and_auth(
         self,
