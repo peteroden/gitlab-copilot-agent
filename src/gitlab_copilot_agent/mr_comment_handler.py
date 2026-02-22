@@ -161,7 +161,7 @@ async def _execute_copilot_task(
     instruction: str,
     executor: TaskExecutor,
     repo_locks: DistributedLock | None,
-    bound_log,
+    bound_log: structlog.stdlib.BoundLogger,
 ) -> None:
     """Execute the copilot task with the given instruction."""
     mr = payload.merge_request
