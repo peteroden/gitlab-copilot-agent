@@ -126,6 +126,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             dedup=dedup_store,
             executor=app.state.executor,
             repo_locks=repo_locks,
+            approval_store=approval_store,
         )
         gl_poller._interval = settings.gitlab_poll_interval
         await gl_poller.start()

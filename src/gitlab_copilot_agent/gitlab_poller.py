@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 import structlog
 
+from gitlab_copilot_agent.approval_store import ApprovalStore
 from gitlab_copilot_agent.concurrency import DeduplicationStore, DistributedLock
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.gitlab_client import (
@@ -25,7 +26,11 @@ from gitlab_copilot_agent.models import (
     WebhookProject,
     WebhookUser,
 )
-from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
+from gitlab_copilot_agent.mr_comment_handler import (
+    handle_copilot_comment,
+    is_approval_command,
+    parse_copilot_command,
+)
 from gitlab_copilot_agent.orchestrator import handle_review
 from gitlab_copilot_agent.task_executor import TaskExecutor
 
@@ -45,9 +50,11 @@ class GitLabPoller:
         dedup: DeduplicationStore,
         executor: TaskExecutor,
         repo_locks: DistributedLock | None = None,
+        approval_store: ApprovalStore | None = None,
     ) -> None:
         self._client = gl_client
         self._settings = settings
+        self._approval_store = approval_store
         self._project_ids = project_ids
         self._dedup = dedup
         self._executor = executor
@@ -128,7 +135,7 @@ class GitLabPoller:
             for note in notes:
                 if note.system:
                     continue
-                if not parse_copilot_command(note.body):
+                if not parse_copilot_command(note.body) and not is_approval_command(note.body):
                     continue
                 # Skip self-authored notes (consistent with webhook)
                 agent_user = self._settings.agent_gitlab_username
@@ -139,7 +146,11 @@ class GitLabPoller:
                     continue
                 payload = _build_note_payload(note, mr, project_id, self._settings)
                 await handle_copilot_comment(
-                    self._settings, payload, self._executor, self._repo_locks
+                    self._settings,
+                    payload,
+                    self._executor,
+                    self._repo_locks,
+                    self._approval_store,
                 )
                 await self._dedup.mark_seen(note_key, ttl_seconds=_DEDUP_TTL)
 

@@ -89,8 +89,11 @@ async def handle_copilot_comment(
 
         gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
 
-        # If approval required, store and wait
-        if settings.copilot_require_approval and approval_store:
+        # If approval required, store and wait (fail-closed: refuse if store missing)
+        if settings.copilot_require_approval:
+            if not approval_store:
+                await bound_log.awarning("copilot_approval_required_but_no_store")
+                return
             task_id = f"mr-{project.id}-{mr.iid}"
             approval = PendingApproval(
                 task_id=task_id,
