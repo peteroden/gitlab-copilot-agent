@@ -46,6 +46,8 @@ def _make_settings(**overrides: Any) -> Any:
         "k8s_job_cpu_limit": K8S_JOB_CPU,
         "k8s_job_memory_limit": K8S_JOB_MEM,
         "k8s_job_timeout": K8S_JOB_TIMEOUT,
+        "k8s_secret_name": "gitlab-copilot-agent",
+        "k8s_configmap_name": "gitlab-copilot-agent",
     }
     return make_settings(**(defaults | overrides))
 
@@ -88,6 +90,8 @@ def _install_k8s_stub() -> tuple[MagicMock, MagicMock, MagicMock]:
         "V1PodSpec",
         "V1Container",
         "V1EnvVar",
+        "V1EnvVarSource",
+        "V1SecretKeySelector",
         "V1ResourceRequirements",
         "V1SecurityContext",
         "V1Capabilities",
@@ -268,6 +272,7 @@ class TestJobCreation:
         self,
         batch_v1: MagicMock,
     ) -> None:
+        """Env vars use secretKeyRef when k8s_secret_name is set."""
         status_mock = MagicMock()
         status_mock.succeeded = 1
         status_mock.failed = None
@@ -300,7 +305,27 @@ class TestJobCreation:
         )
         for expected in expected_vars:
             assert expected in env_names, f"Missing env var: {expected}"
-        assert "COPILOT_LLM_URL" not in env_names, "Stale COPILOT_LLM_URL should be removed"
+
+        # Verify sensitive vars use secretKeyRef
+        gitlab_token_env = next(e for e in container.env if e.name == "GITLAB_TOKEN")
+        assert hasattr(gitlab_token_env, "value_from"), "GITLAB_TOKEN should use value_from"
+        assert gitlab_token_env.value_from.secret_key_ref.name == "gitlab-copilot-agent"
+        assert gitlab_token_env.value_from.secret_key_ref.key == "GITLAB_TOKEN"
+
+        github_token_env = next(e for e in container.env if e.name == "GITHUB_TOKEN")
+        assert hasattr(github_token_env, "value_from"), "GITHUB_TOKEN should use value_from"
+        assert github_token_env.value_from.secret_key_ref.name == "gitlab-copilot-agent"
+        assert github_token_env.value_from.secret_key_ref.key == "GITHUB_TOKEN"
+
+        # Verify GITLAB_WEBHOOK_SECRET IS forwarded (required by task_runner Settings)
+        assert "GITLAB_WEBHOOK_SECRET" in env_names
+        webhook_env = next(e for e in container.env if e.name == "GITLAB_WEBHOOK_SECRET")
+        assert hasattr(webhook_env, "value_from"), "GITLAB_WEBHOOK_SECRET should use value_from"
+
+        # Verify JIRA vars are NOT forwarded
+        assert "JIRA_URL" not in env_names
+        assert "JIRA_EMAIL" not in env_names
+        assert "JIRA_API_TOKEN" not in env_names
 
     async def test_byok_env_vars_propagated(
         self,
@@ -328,11 +353,75 @@ class TestJobCreation:
 
         job_body = batch_v1.create_namespaced_job.call_args.kwargs["body"]
         container = job_body.spec.template.spec.containers[0]
-        env_map = {e.name: e.value for e in container.env}
+        env_map = {e.name: getattr(e, "value", None) for e in container.env}
         assert env_map["COPILOT_PROVIDER_TYPE"] == "openai"
         assert env_map["COPILOT_PROVIDER_BASE_URL"] == "http://llm:9998/v1"
-        assert env_map["COPILOT_PROVIDER_API_KEY"] == "test-key"
         assert env_map["COPILOT_MODEL"] == "gpt-4o"
+
+        # API key should use secretKeyRef
+        api_key_env = next(e for e in container.env if e.name == "COPILOT_PROVIDER_API_KEY")
+        assert hasattr(api_key_env, "value_from")
+        assert api_key_env.value_from.secret_key_ref.name == "gitlab-copilot-agent"
+        assert api_key_env.value_from.secret_key_ref.key == "COPILOT_PROVIDER_API_KEY"
+
+    async def test_plaintext_fallback_when_no_secret_name(
+        self,
+        batch_v1: MagicMock,
+    ) -> None:
+        """When k8s_secret_name is None, env vars use plaintext values."""
+        status_mock = MagicMock()
+        status_mock.succeeded = 1
+        status_mock.failed = None
+        job_mock = MagicMock()
+        job_mock.status = status_mock
+        job_mock.metadata = MagicMock()
+        job_mock.metadata.annotations = {}
+        batch_v1.read_namespaced_job.return_value = job_mock
+
+        settings = _make_settings(
+            k8s_secret_name=None,
+            k8s_configmap_name=None,
+            task_executor="local",
+        )
+        executor = _make_executor(settings=settings)
+        await executor.execute(_make_task(settings=settings))
+
+        job_body = batch_v1.create_namespaced_job.call_args.kwargs["body"]
+        container = job_body.spec.template.spec.containers[0]
+
+        # Verify credentials are plaintext
+        gitlab_token_env = next(e for e in container.env if e.name == "GITLAB_TOKEN")
+        assert hasattr(gitlab_token_env, "value"), "GITLAB_TOKEN should use value field"
+        assert gitlab_token_env.value == settings.gitlab_token
+
+        github_token_env = next(e for e in container.env if e.name == "GITHUB_TOKEN")
+        assert hasattr(github_token_env, "value"), "GITHUB_TOKEN should use value field"
+        assert github_token_env.value == settings.github_token
+
+    async def test_allow_http_clone_forwarded(
+        self,
+        batch_v1: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """#153: ALLOW_HTTP_CLONE is forwarded from os.environ for E2E tests."""
+        monkeypatch.setenv("ALLOW_HTTP_CLONE", "1")
+
+        status_mock = MagicMock()
+        status_mock.succeeded = 1
+        status_mock.failed = None
+        job_mock = MagicMock()
+        job_mock.status = status_mock
+        job_mock.metadata = MagicMock()
+        job_mock.metadata.annotations = {}
+        batch_v1.read_namespaced_job.return_value = job_mock
+
+        executor = _make_executor()
+        await executor.execute(_make_task())
+
+        job_body = batch_v1.create_namespaced_job.call_args.kwargs["body"]
+        container = job_body.spec.template.spec.containers[0]
+        env_map = {e.name: getattr(e, "value", None) for e in container.env}
+        assert env_map["ALLOW_HTTP_CLONE"] == "1"
 
 
 class TestCompletion:

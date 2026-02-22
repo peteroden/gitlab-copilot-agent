@@ -42,50 +42,113 @@ def _parse_host_aliases(raw: str) -> list[object] | None:
     return [k8s.V1HostAlias(ip=e["ip"], hostnames=e["hostnames"]) for e in entries]
 
 
-def _build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]:
-    """Return env var dicts for the Job container."""
-    env = [
-        {"name": "TASK_TYPE", "value": task.task_type},
-        {"name": "TASK_ID", "value": task.task_id},
-        {"name": "REPO_URL", "value": task.repo_url},
-        {"name": "BRANCH", "value": task.branch},
-        {"name": "SYSTEM_PROMPT", "value": task.system_prompt},
-        {"name": "USER_PROMPT", "value": task.user_prompt},
-        {"name": "TASK_PAYLOAD", "value": json.dumps({"prompt": task.user_prompt})},
-        {"name": "GITLAB_URL", "value": settings.gitlab_url},
-        {"name": "GITLAB_TOKEN", "value": settings.gitlab_token},
-        {"name": "GITLAB_WEBHOOK_SECRET", "value": settings.gitlab_webhook_secret},
+def _build_env(task: TaskParams, settings: Settings) -> list[object]:
+    """Return env var objects for the Job container.
+
+    When settings.k8s_secret_name is set, sensitive credentials use secretKeyRef.
+    Otherwise, falls back to plaintext values.
+    """
+    from kubernetes import client as k8s  # type: ignore[import-not-found,import-untyped,unused-ignore]  # noqa: I001
+
+    env: list[object] = [
+        k8s.V1EnvVar(name="TASK_TYPE", value=task.task_type),
+        k8s.V1EnvVar(name="TASK_ID", value=task.task_id),
+        k8s.V1EnvVar(name="REPO_URL", value=task.repo_url),
+        k8s.V1EnvVar(name="BRANCH", value=task.branch),
+        k8s.V1EnvVar(name="SYSTEM_PROMPT", value=task.system_prompt),
+        k8s.V1EnvVar(name="USER_PROMPT", value=task.user_prompt),
+        k8s.V1EnvVar(name="TASK_PAYLOAD", value=json.dumps({"prompt": task.user_prompt})),
+        k8s.V1EnvVar(name="GITLAB_URL", value=settings.gitlab_url),
         # Writable cache dirs for read-only root filesystem
-        {"name": "UV_CACHE_DIR", "value": "/tmp/.uv-cache"},
-        {"name": "XDG_CACHE_HOME", "value": "/tmp/.cache"},
-        {"name": "HOME", "value": "/tmp"},
+        k8s.V1EnvVar(name="UV_CACHE_DIR", value="/tmp/.uv-cache"),
+        k8s.V1EnvVar(name="XDG_CACHE_HOME", value="/tmp/.cache"),
+        k8s.V1EnvVar(name="HOME", value="/tmp"),
         # src/ layout needs explicit PYTHONPATH when not using uv run
-        {"name": "PYTHONPATH", "value": "/home/app/app/src"},
+        k8s.V1EnvVar(name="PYTHONPATH", value="/home/app/app/src"),
     ]
-    if settings.redis_url:
-        env.append({"name": "REDIS_URL", "value": settings.redis_url})
-    if settings.github_token:
-        env.append({"name": "GITHUB_TOKEN", "value": settings.github_token})
+
+    # Non-sensitive config vars (always plaintext)
+    if settings.copilot_model:
+        env.append(k8s.V1EnvVar(name="COPILOT_MODEL", value=settings.copilot_model))
     if settings.copilot_provider_type:
-        env.append({"name": "COPILOT_PROVIDER_TYPE", "value": settings.copilot_provider_type})
+        env.append(
+            k8s.V1EnvVar(
+                name="COPILOT_PROVIDER_TYPE",
+                value=settings.copilot_provider_type,
+            )
+        )
     if settings.copilot_provider_base_url:
         env.append(
-            {
-                "name": "COPILOT_PROVIDER_BASE_URL",
-                "value": settings.copilot_provider_base_url,
-            }
+            k8s.V1EnvVar(
+                name="COPILOT_PROVIDER_BASE_URL",
+                value=settings.copilot_provider_base_url,
+            )
         )
-    if settings.copilot_provider_api_key:
-        env.append(
-            {
-                "name": "COPILOT_PROVIDER_API_KEY",
-                "value": settings.copilot_provider_api_key,
-            }
-        )
-    if settings.copilot_model:
-        env.append({"name": "COPILOT_MODEL", "value": settings.copilot_model})
+    if settings.redis_url:
+        env.append(k8s.V1EnvVar(name="REDIS_URL", value=settings.redis_url))
+
+    # E2E test dependency
     if os.environ.get("ALLOW_HTTP_CLONE"):
-        env.append({"name": "ALLOW_HTTP_CLONE", "value": os.environ["ALLOW_HTTP_CLONE"]})
+        env.append(k8s.V1EnvVar(name="ALLOW_HTTP_CLONE", value=os.environ["ALLOW_HTTP_CLONE"]))
+
+    # Sensitive credentials — use Secret when k8s_secret_name is set
+    if settings.k8s_secret_name:
+        # GITLAB_TOKEN and GITLAB_WEBHOOK_SECRET are always required by Settings()
+        for key in ("GITLAB_TOKEN", "GITLAB_WEBHOOK_SECRET"):
+            env.append(
+                k8s.V1EnvVar(
+                    name=key,
+                    value_from=k8s.V1EnvVarSource(
+                        secret_key_ref=k8s.V1SecretKeySelector(
+                            name=settings.k8s_secret_name,
+                            key=key,
+                        )
+                    ),
+                )
+            )
+        if settings.github_token:
+            env.append(
+                k8s.V1EnvVar(
+                    name="GITHUB_TOKEN",
+                    value_from=k8s.V1EnvVarSource(
+                        secret_key_ref=k8s.V1SecretKeySelector(
+                            name=settings.k8s_secret_name,
+                            key="GITHUB_TOKEN",
+                        )
+                    ),
+                )
+            )
+        if settings.copilot_provider_api_key:
+            env.append(
+                k8s.V1EnvVar(
+                    name="COPILOT_PROVIDER_API_KEY",
+                    value_from=k8s.V1EnvVarSource(
+                        secret_key_ref=k8s.V1SecretKeySelector(
+                            name=settings.k8s_secret_name,
+                            key="COPILOT_PROVIDER_API_KEY",
+                        )
+                    ),
+                )
+            )
+    else:
+        # Fallback: plaintext values (non-Helm deployments)
+        env.append(k8s.V1EnvVar(name="GITLAB_TOKEN", value=settings.gitlab_token))
+        env.append(
+            k8s.V1EnvVar(
+                name="GITLAB_WEBHOOK_SECRET",
+                value=settings.gitlab_webhook_secret,
+            )
+        )
+        if settings.github_token:
+            env.append(k8s.V1EnvVar(name="GITHUB_TOKEN", value=settings.github_token))
+        if settings.copilot_provider_api_key:
+            env.append(
+                k8s.V1EnvVar(
+                    name="COPILOT_PROVIDER_API_KEY",
+                    value=settings.copilot_provider_api_key,
+                )
+            )
+
     return env
 
 
@@ -126,10 +189,7 @@ class KubernetesTaskExecutor:
 
         self._load_config()
         ns = self._settings.k8s_namespace
-        env = [
-            k8s.V1EnvVar(name=e["name"], value=e["value"])
-            for e in _build_env(task, self._settings)
-        ]
+        env = _build_env(task, self._settings)
 
         tmp_volume = k8s.V1Volume(name="tmp", empty_dir=k8s.V1EmptyDirVolumeSource())
         tmp_mount = k8s.V1VolumeMount(name="tmp", mount_path="/tmp")
