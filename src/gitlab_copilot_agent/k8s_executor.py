@@ -67,87 +67,46 @@ def _build_env(task: TaskParams, settings: Settings) -> list[object]:
         k8s.V1EnvVar(name="PYTHONPATH", value="/home/app/app/src"),
     ]
 
-    # Non-sensitive config vars (always plaintext)
-    if settings.copilot_model:
-        env.append(k8s.V1EnvVar(name="COPILOT_MODEL", value=settings.copilot_model))
-    if settings.copilot_provider_type:
-        env.append(
-            k8s.V1EnvVar(
-                name="COPILOT_PROVIDER_TYPE",
-                value=settings.copilot_provider_type,
-            )
-        )
-    if settings.copilot_provider_base_url:
-        env.append(
-            k8s.V1EnvVar(
-                name="COPILOT_PROVIDER_BASE_URL",
-                value=settings.copilot_provider_base_url,
-            )
-        )
-    if settings.redis_url:
-        env.append(k8s.V1EnvVar(name="REDIS_URL", value=settings.redis_url))
+    # Non-sensitive optional config vars (always plaintext)
+    _optional_config: list[tuple[str, str | None]] = [
+        ("COPILOT_MODEL", settings.copilot_model),
+        ("COPILOT_PROVIDER_TYPE", settings.copilot_provider_type),
+        ("COPILOT_PROVIDER_BASE_URL", settings.copilot_provider_base_url),
+        ("REDIS_URL", settings.redis_url),
+    ]
+    for name, value in _optional_config:
+        if value:
+            env.append(k8s.V1EnvVar(name=name, value=value))
 
     # E2E test dependency
     if os.environ.get("ALLOW_HTTP_CLONE"):
         env.append(k8s.V1EnvVar(name="ALLOW_HTTP_CLONE", value=os.environ["ALLOW_HTTP_CLONE"]))
 
-    # Sensitive credentials — use Secret when k8s_secret_name is set
-    if settings.k8s_secret_name:
-        # GITLAB_TOKEN and GITLAB_WEBHOOK_SECRET are always required by Settings()
-        for key in ("GITLAB_TOKEN", "GITLAB_WEBHOOK_SECRET"):
+    # Sensitive credentials — use Secret when k8s_secret_name is set.
+    # Required keys are always mounted; optional keys only when the setting is non-empty.
+    _secret_vars: list[tuple[str, str | None]] = [
+        ("GITLAB_TOKEN", settings.gitlab_token),  # always required
+        ("GITLAB_WEBHOOK_SECRET", settings.gitlab_webhook_secret),  # always required
+        ("GITHUB_TOKEN", settings.github_token),
+        ("COPILOT_PROVIDER_API_KEY", settings.copilot_provider_api_key),
+    ]
+    for name, value in _secret_vars:
+        if not value:
+            continue
+        if settings.k8s_secret_name:
             env.append(
                 k8s.V1EnvVar(
-                    name=key,
+                    name=name,
                     value_from=k8s.V1EnvVarSource(
                         secret_key_ref=k8s.V1SecretKeySelector(
                             name=settings.k8s_secret_name,
-                            key=key,
+                            key=name,
                         )
                     ),
                 )
             )
-        if settings.github_token:
-            env.append(
-                k8s.V1EnvVar(
-                    name="GITHUB_TOKEN",
-                    value_from=k8s.V1EnvVarSource(
-                        secret_key_ref=k8s.V1SecretKeySelector(
-                            name=settings.k8s_secret_name,
-                            key="GITHUB_TOKEN",
-                        )
-                    ),
-                )
-            )
-        if settings.copilot_provider_api_key:
-            env.append(
-                k8s.V1EnvVar(
-                    name="COPILOT_PROVIDER_API_KEY",
-                    value_from=k8s.V1EnvVarSource(
-                        secret_key_ref=k8s.V1SecretKeySelector(
-                            name=settings.k8s_secret_name,
-                            key="COPILOT_PROVIDER_API_KEY",
-                        )
-                    ),
-                )
-            )
-    else:
-        # Fallback: plaintext values (non-Helm deployments)
-        env.append(k8s.V1EnvVar(name="GITLAB_TOKEN", value=settings.gitlab_token))
-        env.append(
-            k8s.V1EnvVar(
-                name="GITLAB_WEBHOOK_SECRET",
-                value=settings.gitlab_webhook_secret,
-            )
-        )
-        if settings.github_token:
-            env.append(k8s.V1EnvVar(name="GITHUB_TOKEN", value=settings.github_token))
-        if settings.copilot_provider_api_key:
-            env.append(
-                k8s.V1EnvVar(
-                    name="COPILOT_PROVIDER_API_KEY",
-                    value=settings.copilot_provider_api_key,
-                )
-            )
+        else:
+            env.append(k8s.V1EnvVar(name=name, value=value))
 
     return env
 
