@@ -1,5 +1,7 @@
 """Pydantic models for GitLab webhook payloads."""
 
+import time
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -76,3 +78,17 @@ class NoteWebhookPayload(BaseModel):
     project: WebhookProject
     object_attributes: NoteObjectAttributes
     merge_request: NoteMergeRequest
+
+
+class PendingApproval(BaseModel):
+    """Stores a pending /copilot command awaiting approval."""
+
+    model_config = ConfigDict(strict=True)
+
+    task_id: str = Field(description="Unique task identifier")
+    requester_id: int = Field(description="User ID of the requester who can approve")
+    prompt: str = Field(description="Original /copilot prompt to execute")
+    mr_iid: int = Field(description="MR number")
+    project_id: int = Field(description="Project ID")
+    created_at: float = Field(default_factory=time.time, description="Unix timestamp")
+    timeout: int = Field(default=3600, description="Timeout in seconds")

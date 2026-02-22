@@ -10,6 +10,7 @@ import structlog
 from fastapi import FastAPI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
+from gitlab_copilot_agent.approval_store import create_approval_store
 from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
 from gitlab_copilot_agent.concurrency import (
     ProcessedIssueTracker,
@@ -98,6 +99,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     dedup_store = create_dedup(settings.state_backend, settings.redis_url)
     app.state.dedup_store = dedup_store
     app.state.review_tracker = ReviewedMRTracker()
+    approval_store = create_approval_store(settings.state_backend, settings.redis_url)
+    app.state.approval_store = approval_store
 
     poller: JiraPoller | None = None
     gl_poller: GitLabPoller | None = None
@@ -147,6 +150,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         await log.aexception("dedup_store_close_failed")
     await repo_locks.aclose()
+    await approval_store.aclose()
     await log.ainfo("service stopped")
     shutdown_telemetry()
 
