@@ -79,6 +79,12 @@ class Settings(BaseSettings):
     k8s_job_host_aliases: str = Field(
         default="", description="JSON-encoded hostAliases for Job pods, e.g. [{ip, hostnames}]"
     )
+    k8s_secret_name: str | None = Field(
+        default=None, description="K8s Secret name for Job pod credentials"
+    )
+    k8s_configmap_name: str | None = Field(
+        default=None, description="K8s ConfigMap name for Job pod config"
+    )
 
     # State backend
     state_backend: Literal["memory", "redis"] = Field(
@@ -158,4 +164,15 @@ class Settings(BaseSettings):
             entries = [e.strip() for e in (self.gitlab_projects or "").split(",") if e.strip()]
             if not entries:
                 raise ValueError("GITLAB_PROJECTS is required when GITLAB_POLL=true")
+        return self
+
+    @model_validator(mode="after")
+    def _check_k8s_resources(self) -> "Settings":
+        if self.task_executor == "kubernetes" and not self.k8s_secret_name:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "K8S_SECRET_NAME not set — Job pod credentials will use plaintext env vars. "
+                "Set K8S_SECRET_NAME for secure credential injection via K8s Secrets."
+            )
         return self
