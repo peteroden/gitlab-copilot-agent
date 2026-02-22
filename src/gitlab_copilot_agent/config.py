@@ -125,6 +125,12 @@ class Settings(BaseSettings):
         default=None, description="JSON: Jira project key → GitLab project config"
     )
 
+    # Approval gate (opt-in)
+    copilot_require_approval: bool = Field(
+        default=False, description="Require approval before executing /copilot commands"
+    )
+    copilot_approval_timeout: int = Field(default=3600, description="Approval timeout in seconds")
+
     @property
     def jira(self) -> JiraSettings | None:
         """Return JiraSettings if all required Jira fields are set, else None."""

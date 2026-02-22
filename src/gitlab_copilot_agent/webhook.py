@@ -8,7 +8,11 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from gitlab_copilot_agent.concurrency import ReviewedMRTracker
 from gitlab_copilot_agent.metrics import webhook_errors_total, webhook_received_total
 from gitlab_copilot_agent.models import MergeRequestWebhookPayload, NoteWebhookPayload
-from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
+from gitlab_copilot_agent.mr_comment_handler import (
+    handle_copilot_comment,
+    is_approval_command,
+    parse_copilot_command,
+)
 from gitlab_copilot_agent.orchestrator import handle_review
 
 log = structlog.get_logger()
@@ -43,8 +47,9 @@ async def _process_copilot_comment(request: Request, payload: NoteWebhookPayload
     settings = request.app.state.settings
     executor = request.app.state.executor
     repo_locks = request.app.state.repo_locks
+    approval_store = request.app.state.approval_store
     try:
-        await handle_copilot_comment(settings, payload, executor, repo_locks)
+        await handle_copilot_comment(settings, payload, executor, repo_locks, approval_store)
     except Exception:
         webhook_errors_total.add(1, {"handler": "copilot_comment"})
         await log.aexception("background_copilot_comment_failed")
@@ -103,7 +108,8 @@ async def webhook(
         note_payload = NoteWebhookPayload.model_validate(body)
         if note_payload.object_attributes.noteable_type != "MergeRequest":
             return {"status": "ignored", "reason": "not an MR note"}
-        if not parse_copilot_command(note_payload.object_attributes.note):
+        note_text = note_payload.object_attributes.note
+        if not parse_copilot_command(note_text) and not is_approval_command(note_text):
             return {"status": "ignored", "reason": "not a /copilot command"}
         if (
             settings.agent_gitlab_username
