@@ -97,11 +97,14 @@ redis:
   enabled: true
   image: { repository: redis, tag: "7-alpine" }
   port: 6379
+  password: ""  # Leave empty to auto-generate a 32-char password
   resources:
     limits: { cpu: 250m, memory: 256Mi }
     requests: { cpu: 50m, memory: 64Mi }
   storage: 1Gi
 ```
+
+> **Redis Authentication**: When deployed via Helm, Redis AUTH is always enabled. A 32-character random password is auto-generated and stored in the K8s Secret. The password persists across upgrades (Helm `lookup` reuses the existing Secret value). To set an explicit password, provide `redis.password` in your values.
 
 **Job Runner** (K8s executor only):
 ```yaml
@@ -480,6 +483,8 @@ kubectl get hpa -n default
 - `GITHUB_TOKEN`
 - `COPILOT_PROVIDER_API_KEY` (if BYOK)
 - `JIRA_API_TOKEN` (if Jira enabled)
+- `REDIS_PASSWORD` (auto-generated if not set via `redis.password`)
+- `REDIS_URL` (auto-generated with password embedded)
 
 **Base64 Encoding**: Handled automatically by Helm.
 
@@ -586,11 +591,41 @@ curl -X POST http://<external-ip>:8000/webhook \
 3. **External Secrets**: AWS Secrets Manager, HashiCorp Vault
 4. **Ingress + TLS**: Use Ingress controller with cert-manager
 5. **Resource Quotas**: Limit Job pod resource consumption
-6. **Network Policies**: Restrict Redis access to agent pods
+6. **Network Policies**: Restrict Redis access to agent pods ✅ (enabled by default)
 7. **Pod Security Standards**: Enforce restricted PSS
 8. **Image Scanning**: Scan images for vulnerabilities (Trivy, Snyk)
 9. **Backup Redis**: Persistent volume snapshots
 10. **Monitor Metrics**: Prometheus + Grafana dashboards
+
+---
+
+## Redis Password Rotation
+
+The Helm chart auto-generates a Redis password on first install and persists it in the K8s Secret. To rotate the password:
+
+### Option 1: Let Helm regenerate
+
+```bash
+# Delete the existing Secret (Helm will generate a new password on next upgrade)
+kubectl delete secret <release-name>-gitlab-copilot-agent -n <namespace>
+
+# Re-deploy (generates new password, restarts all pods)
+helm upgrade <release> helm/gitlab-copilot-agent -f values.yaml -n <namespace>
+```
+
+### Option 2: Set an explicit password
+
+```bash
+helm upgrade <release> helm/gitlab-copilot-agent \
+  --set redis.password="$(openssl rand -base64 32)" \
+  -f values.yaml -n <namespace>
+```
+
+### Option 3: Use External Secrets Operator
+
+For production, manage `REDIS_PASSWORD` via your secrets manager (AWS Secrets Manager, HashiCorp Vault, etc.) and sync via External Secrets Operator. This supports automated rotation policies.
+
+> **Note**: After rotation, all pods (controller, Redis, and any running Jobs) must restart to pick up the new password. Helm upgrade handles controller and Redis automatically. In-flight Jobs will fail and be retried.
 
 ---
 

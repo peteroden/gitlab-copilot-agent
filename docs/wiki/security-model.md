@@ -392,9 +392,9 @@ graph TB
 | K8s Job | Redis | Redis (6379) | None | Store results |
 
 **Redis Security**: 
-- No auth (relies on network isolation)
-- Use Kubernetes NetworkPolicy to restrict to service + jobs only
-- Consider Redis password + TLS for production
+- Password authentication enabled by default via Helm (auto-generated 32-char password stored in K8s Secret)
+- Use Kubernetes NetworkPolicy to restrict to service + jobs only ✅ (implemented — PR #164)
+- Consider TLS for production if Redis traffic crosses node boundaries
 
 ---
 
@@ -407,7 +407,7 @@ graph TB
 | GITLAB_TOKEN | Compromise | Repo write access, impersonation | Project access tokens, rotation, audit logs |
 | GITHUB_TOKEN | Compromise | Copilot quota abuse | GitHub App tokens, SDK env isolation |
 | JIRA_API_TOKEN | Compromise | Issue manipulation | Scoped permissions, rotation |
-| Redis | Unauthorized access | Lock bypass, result tampering | NetworkPolicy, consider AUTH + TLS |
+| Redis | Unauthorized access | Lock bypass, result tampering | NetworkPolicy ✅, AUTH ✅, consider TLS |
 | Redis | CodingResult tampering | Inject malicious patch into commit | base_sha validation, path traversal scan, MR review gate |
 | Copilot SDK | Prompt injection | Exfiltrate env vars via output | Env allowlist, output treated as data |
 | K8s Job | Malicious repo code | Token exfiltration | ReadOnlyRootFilesystem, no push access, egress NetworkPolicy |
@@ -419,9 +419,9 @@ graph TB
 
 ## Recommended Hardening
 
-1. **NetworkPolicy**: Restrict Redis to service + job pods only
-2. **Redis AUTH + TLS**: Enable password authentication and encryption in transit
-3. **K8s Secrets for Job pods**: Mount credentials via Secret refs, not env vars in configmap
+1. **NetworkPolicy**: Restrict Redis to service + job pods only ✅ (implemented — PR #164)
+2. **Redis AUTH + TLS**: Enable password authentication and encryption in transit ✅ AUTH (implemented — PR #166), TLS deferred
+3. **K8s Secrets for Job pods**: Mount credentials via Secret refs, not env vars in configmap ✅ (implemented — PR #163)
 4. **GitLab IP Allowlist**: Restrict `/webhook` endpoint
 5. **Project Access Tokens**: Use instead of personal tokens for GITLAB_TOKEN
 6. **GitHub App Tokens**: Use instead of PATs for GITHUB_TOKEN
