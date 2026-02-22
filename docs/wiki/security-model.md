@@ -301,10 +301,14 @@ graph TB
 - TTL after finished: 300s (pod auto-deleted)
 - Optional `hostAliases` for custom DNS resolution
 
-**Credentials Passed**:
+**Credentials Passed** (via K8s Secret refs when `k8s_secret_name` configured):
 - `GITLAB_TOKEN` (clone only — pod has no push access)
-- `GITHUB_TOKEN` (or `COPILOT_PROVIDER_API_KEY`) as env vars
+- `GITHUB_TOKEN` (or `COPILOT_PROVIDER_API_KEY`) via `secretKeyRef`
 - `GITLAB_WEBHOOK_SECRET` (required by Settings validation, not used in pod)
+
+Only the 3 tokens needed by Job pods are mounted — other secrets (`JIRA_*`, etc.) are excluded to limit blast radius.
+
+When `k8s_secret_name` is not set (non-Helm deployments), credentials fall back to plaintext env vars with a startup warning.
 
 **Result Path**: Pod stores `CodingResult` (summary + patch + base_sha) or `ReviewResult` (summary only) in Redis. Controller reads result — only the controller commits, pushes, and posts API calls.
 
@@ -316,6 +320,7 @@ graph TB
 - Results validated before apply: `base_sha` match, path traversal scan, size limit
 - Agent does not execute arbitrary code (only SDK, git, standard tools)
 - No network egress policy yet (attacker can still exfiltrate via DNS/HTTP — see Recommended Hardening)
+- Egress restricted by NetworkPolicy when deployed via Helm (allows GitLab, Copilot API, Redis, DNS only)
 
 **Code**: `k8s_executor.py` → `_create_job()`
 
@@ -374,7 +379,12 @@ graph TB
 | LoadBalancer | Service `/health` | 8000 | HTTP | None | Internal only |
 | OTEL Collector | Service (metrics/traces) | N/A | gRPC | None | Internal only |
 
-**Firewall**: Kubernetes NetworkPolicy should restrict `/webhook` to GitLab IP range.
+**Firewall**: Kubernetes NetworkPolicies deployed by Helm restrict traffic:
+- **Controller pod**: Ingress on port 8000, egress to GitLab/Copilot/Jira APIs, Redis, K8s API, DNS
+- **Job pods**: No ingress, egress to GitLab, Copilot API, Redis, DNS only
+- **Redis pod**: Ingress from controller and job pods only (port 6379), no egress
+
+NetworkPolicies use `app.kubernetes.io/instance` labels to scope to the Helm release, preventing cross-release access.
 
 ---
 
@@ -427,7 +437,7 @@ graph TB
 6. **GitHub App Tokens**: Use instead of PATs for GITHUB_TOKEN
 7. **Audit Logging**: Enable GitLab/Jira API audit logs
 8. **Rotate Secrets**: Quarterly rotation of all tokens/keys
-9. **Egress NetworkPolicy**: Block job pod egress to internal services (allow GitLab, Copilot API, Redis only)
+9. **Egress NetworkPolicy**: Block job pod egress to internal services (allow GitLab, Copilot API, Redis only) ✅ (implemented — PR #164)
 10. **Resource Quotas**: Limit job pod resource consumption
 11. **Pin Docker Base Images**: Use digest-based pins to prevent supply chain attacks ✅ (implemented — `Dockerfile` uses `@sha256:` pins, CI validates, Dependabot updates)
 12. **Review Gate for /copilot**: Require human approval before auto-push on coding commands (prevents prompt injection → auto-merge)

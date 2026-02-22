@@ -161,6 +161,27 @@ Only used when `TASK_EXECUTOR=kubernetes`.
 - **Validation**: JSON structure validated at startup (must be array of objects with `ip` and `hostnames`)
 - **Helm Value**: Auto-generated from `hostAliases` value (serialized to JSON)
 
+### `K8S_SECRET_NAME`
+- **Type**: `str | None`
+- **Required**: ❌ No (but recommended for K8s deployments)
+- **Default**: `None`
+- **Description**: K8s Secret name for mounting Job pod credentials via `secretKeyRef`. When set, sensitive env vars (`GITLAB_TOKEN`, `GITHUB_TOKEN`, `COPILOT_PROVIDER_API_KEY`, `GITLAB_WEBHOOK_SECRET`) are referenced from this Secret instead of passed as plaintext. A startup warning is logged when running the K8s executor without this configured.
+- **Helm Value**: Auto-set to the chart's Secret name
+
+### `K8S_CONFIGMAP_NAME`
+- **Type**: `str | None`
+- **Required**: ❌ No
+- **Default**: `None`
+- **Description**: K8s ConfigMap name for mounting Job pod non-sensitive config via `configMapKeyRef`. When set, config values (`REDIS_URL`, `COPILOT_MODEL`, `COPILOT_PROVIDER_TYPE`, `COPILOT_PROVIDER_BASE_URL`, `STATE_BACKEND`) are referenced from this ConfigMap.
+- **Helm Value**: Auto-set to the chart's ConfigMap name
+
+### `K8S_JOB_INSTANCE_LABEL`
+- **Type**: `str`
+- **Required**: ❌ No
+- **Default**: `""` (empty)
+- **Description**: Helm release instance label added to Job pods as `app.kubernetes.io/instance`. Used by NetworkPolicies to scope access to pods within the same Helm release.
+- **Helm Value**: Auto-set to `{{ .Release.Name }}`
+
 ---
 
 ## State Backend
@@ -422,8 +443,9 @@ All tokens/keys should be:
 - **JIRA_API_TOKEN**: Read issue, transition, add comment (no admin)
 
 ### Network Isolation
-- Redis: no auth (in-cluster only, use NetworkPolicy to restrict access)
+- Redis: password-protected when deployed via Helm; NetworkPolicies restrict access to agent pods only
 - OTEL Collector: internal endpoint only
+- Job pods: egress restricted to GitLab, Copilot API, Redis, and DNS via NetworkPolicy
 
 ---
 
@@ -445,6 +467,9 @@ Helm `values.yaml` maps to env vars via `configmap.yaml` and `secret.yaml`:
 | `controller.stateBackend` | `STATE_BACKEND` | ❌ |
 | `redis.enabled` | `REDIS_URL` (auto-generated) | ✅ (password in URL) |
 | `redis.password` | `REDIS_PASSWORD` | ✅ |
+| (auto) | `K8S_SECRET_NAME` | ❌ |
+| (auto) | `K8S_CONFIGMAP_NAME` | ❌ |
+| (auto) | `K8S_JOB_INSTANCE_LABEL` | ❌ |
 | `telemetry.otlpEndpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` | ❌ |
 | `telemetry.environment` | `DEPLOYMENT_ENV` | ❌ |
 | `jira.url` | `JIRA_URL` | ❌ |

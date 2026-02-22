@@ -486,6 +486,8 @@ kubectl get hpa -n default
 - `REDIS_PASSWORD` (auto-generated if not set via `redis.password`)
 - `REDIS_URL` (auto-generated with password embedded)
 
+**Job Pod Credentials**: When the K8s executor is used, Job pods receive sensitive env vars (`GITLAB_TOKEN`, `GITHUB_TOKEN`, `COPILOT_PROVIDER_API_KEY`, `GITLAB_WEBHOOK_SECRET`) via `secretKeyRef` pointing to this Secret — not as plaintext. Only the tokens needed by Job pods are mounted; other secrets (Jira, etc.) are excluded.
+
 **Base64 Encoding**: Handled automatically by Helm.
 
 **External Secrets Operator** (recommended for production):
@@ -591,7 +593,7 @@ curl -X POST http://<external-ip>:8000/webhook \
 3. **External Secrets**: AWS Secrets Manager, HashiCorp Vault
 4. **Ingress + TLS**: Use Ingress controller with cert-manager
 5. **Resource Quotas**: Limit Job pod resource consumption
-6. **Network Policies**: Restrict Redis access to agent pods ✅ (enabled by default)
+6. **Network Policies**: Restrict Redis access to agent pods ✅ (enabled by default in Helm chart)
 7. **Pod Security Standards**: Enforce restricted PSS
 8. **Image Scanning**: Scan images for vulnerabilities (Trivy, Snyk)
 9. **Backup Redis**: Persistent volume snapshots
@@ -626,6 +628,28 @@ helm upgrade <release> helm/gitlab-copilot-agent \
 For production, manage `REDIS_PASSWORD` via your secrets manager (AWS Secrets Manager, HashiCorp Vault, etc.) and sync via External Secrets Operator. This supports automated rotation policies.
 
 > **Note**: After rotation, all pods (controller, Redis, and any running Jobs) must restart to pick up the new password. Helm upgrade handles controller and Redis automatically. In-flight Jobs will fail and be retried.
+
+---
+
+## NetworkPolicies
+
+The Helm chart deploys three NetworkPolicies by default:
+
+### Controller Pod
+- **Ingress**: Port 8000 (webhook endpoint)
+- **Egress**: GitLab API, Copilot API, Jira API, Redis (6379), K8s API, DNS, OTLP collector
+
+### Job Pods
+- **Ingress**: None (Jobs don't accept inbound connections)
+- **Egress**: GitLab API (clone), Copilot API, Redis (6379), DNS
+
+### Redis Pod
+- **Ingress**: Port 6379 from controller and job pods only
+- **Egress**: None (Redis is receive-only)
+
+All policies use `app.kubernetes.io/instance` labels to scope access within a single Helm release, preventing cross-release access in shared namespaces.
+
+> **Note**: If your GitLab or Copilot API endpoints are on non-standard ports or behind proxies, you may need to add custom egress rules via Helm values.
 
 ---
 
