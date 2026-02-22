@@ -130,14 +130,15 @@ async def _handle_approval(
     project = payload.project
     bound_log = log.bind(project_id=project.id, mr_iid=mr.iid)
 
-    # Look up pending approval
-    pending = await approval_store.get(project.id, mr.iid)
+    # Atomically pop pending approval (prevents duplicate execution)
+    pending = await approval_store.pop(project.id, mr.iid)
     if not pending:
         await bound_log.ainfo("approval_command_no_pending")
         return
 
-    # Verify requester matches
+    # Verify requester matches — re-store if wrong user
     if pending.requester_id != payload.user.id:
+        await approval_store.store(pending)
         await bound_log.ainfo(
             "approval_command_wrong_user",
             requester_id=pending.requester_id,
@@ -149,8 +150,7 @@ async def _handle_approval(
         )
         return
 
-    # Delete pending approval and execute
-    await approval_store.delete(project.id, mr.iid)
+    # Execute the approved command
     await bound_log.ainfo("copilot_command_approved", prompt=pending.prompt[:100])
     await _execute_copilot_task(settings, payload, pending.prompt, executor, repo_locks, bound_log)
 

@@ -32,54 +32,46 @@ def _make_approval(
 
 @pytest.mark.asyncio
 async def test_memory_store_basic_flow() -> None:
-    """Test storing, retrieving, and deleting an approval."""
+    """Test storing and popping an approval."""
     store = MemoryApprovalStore()
     approval = _make_approval()
 
-    # Store
     await store.store(approval)
 
-    # Get
-    retrieved = await store.get(PROJECT_ID, MR_IID)
+    # Pop retrieves and removes atomically
+    retrieved = await store.pop(PROJECT_ID, MR_IID)
     assert retrieved is not None
     assert retrieved.task_id == approval.task_id
     assert retrieved.requester_id == REQUESTER_ID
     assert retrieved.prompt == "fix the bug"
 
-    # Delete
-    await store.delete(PROJECT_ID, MR_IID)
-    assert await store.get(PROJECT_ID, MR_IID) is None
+    # Second pop returns None (already consumed)
+    assert await store.pop(PROJECT_ID, MR_IID) is None
 
 
 @pytest.mark.asyncio
-async def test_memory_store_get_nonexistent() -> None:
-    """Test getting a non-existent approval returns None."""
+async def test_memory_store_pop_nonexistent() -> None:
+    """Test popping a non-existent approval returns None."""
     store = MemoryApprovalStore()
-    assert await store.get(PROJECT_ID, MR_IID) is None
-
-
-@pytest.mark.asyncio
-async def test_memory_store_delete_nonexistent() -> None:
-    """Test deleting a non-existent approval does not error."""
-    store = MemoryApprovalStore()
-    await store.delete(PROJECT_ID, MR_IID)  # Should not raise
+    assert await store.pop(PROJECT_ID, MR_IID) is None
 
 
 @pytest.mark.asyncio
 async def test_memory_store_ttl_expiration() -> None:
-    """Test that expired approvals are cleaned up on get()."""
+    """Test that expired approvals are cleaned up on pop()."""
     store = MemoryApprovalStore()
     approval = _make_approval(timeout=1)
     await store.store(approval)
 
     # Should exist immediately
-    assert await store.get(PROJECT_ID, MR_IID) is not None
+    assert await store.pop(PROJECT_ID, MR_IID) is not None
 
-    # Wait for expiration
+    # Re-store with short TTL and wait
+    await store.store(_make_approval(timeout=1))
     time.sleep(1.1)
 
-    # Should be expired and removed
-    assert await store.get(PROJECT_ID, MR_IID) is None
+    # Should be expired
+    assert await store.pop(PROJECT_ID, MR_IID) is None
 
 
 @pytest.mark.asyncio
@@ -92,7 +84,7 @@ async def test_memory_store_overwrite() -> None:
     await store.store(approval1)
     await store.store(approval2)
 
-    retrieved = await store.get(PROJECT_ID, MR_IID)
+    retrieved = await store.pop(PROJECT_ID, MR_IID)
     assert retrieved is not None
     assert retrieved.prompt == "second"
 
@@ -107,8 +99,8 @@ async def test_memory_store_different_mrs() -> None:
     await store.store(approval1)
     await store.store(approval2)
 
-    retrieved1 = await store.get(PROJECT_ID, 1)
-    retrieved2 = await store.get(PROJECT_ID, 2)
+    retrieved1 = await store.pop(PROJECT_ID, 1)
+    retrieved2 = await store.pop(PROJECT_ID, 2)
     assert retrieved1 is not None
     assert retrieved1.prompt == "first"
     assert retrieved2 is not None
@@ -122,4 +114,4 @@ async def test_memory_store_aclose() -> None:
     approval = _make_approval()
     await store.store(approval)
     await store.aclose()
-    assert await store.get(PROJECT_ID, MR_IID) is None
+    assert await store.pop(PROJECT_ID, MR_IID) is None

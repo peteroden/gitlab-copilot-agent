@@ -19,9 +19,7 @@ class ApprovalStore(Protocol):
 
     async def store(self, approval: PendingApproval) -> None: ...
 
-    async def get(self, project_id: int, mr_iid: int) -> PendingApproval | None: ...
-
-    async def delete(self, project_id: int, mr_iid: int) -> None: ...
+    async def pop(self, project_id: int, mr_iid: int) -> PendingApproval | None: ...
 
     async def aclose(self) -> None: ...
 
@@ -40,20 +38,16 @@ class MemoryApprovalStore:
         expires_at = approval.created_at + approval.timeout
         self._data[key] = (approval, expires_at)
 
-    async def get(self, project_id: int, mr_iid: int) -> PendingApproval | None:
+    async def pop(self, project_id: int, mr_iid: int) -> PendingApproval | None:
+        """Atomically remove and return a pending approval."""
         key = self._key(project_id, mr_iid)
-        entry = self._data.get(key)
+        entry = self._data.pop(key, None)
         if entry is None:
             return None
         approval, expires_at = entry
         if time.time() > expires_at:
-            del self._data[key]
             return None
         return approval
-
-    async def delete(self, project_id: int, mr_iid: int) -> None:
-        key = self._key(project_id, mr_iid)
-        self._data.pop(key, None)
 
     async def aclose(self) -> None:
         self._data.clear()
@@ -73,17 +67,14 @@ class RedisApprovalStore:
         value = approval.model_dump_json()
         await self._client.set(key, value, ex=approval.timeout)
 
-    async def get(self, project_id: int, mr_iid: int) -> PendingApproval | None:
+    async def pop(self, project_id: int, mr_iid: int) -> PendingApproval | None:
+        """Atomically remove and return a pending approval via GETDEL."""
         key = self._key(project_id, mr_iid)
-        val = await self._client.get(key)
+        val = await self._client.getdel(key)
         if val is None:
             return None
         data = val.decode() if isinstance(val, bytes) else str(val)
         return PendingApproval.model_validate_json(data)
-
-    async def delete(self, project_id: int, mr_iid: int) -> None:
-        key = self._key(project_id, mr_iid)
-        await self._client.delete(key)
 
     async def aclose(self) -> None:
         await self._client.aclose()

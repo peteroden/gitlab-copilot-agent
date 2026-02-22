@@ -119,7 +119,7 @@ async def test_handle_approval_required(mock_gl_class: AsyncMock) -> None:
     assert "⏳ Approval required" in call_args[0][2]
 
     # Should store pending approval
-    pending = await approval_store.get(PROJECT_ID, MR_IID)
+    pending = await approval_store.pop(PROJECT_ID, MR_IID)
     assert pending is not None
     assert pending.requester_id == 123
     assert pending.prompt == "fix the bug"
@@ -171,7 +171,7 @@ async def test_handle_approval_command_success(
     mock_push.assert_awaited_once()
 
     # Should clear pending approval
-    assert await approval_store.get(PROJECT_ID, MR_IID) is None
+    assert await approval_store.pop(PROJECT_ID, MR_IID) is None
 
 
 @patch("gitlab_copilot_agent.mr_comment_handler.GitLabClient")
@@ -210,8 +210,8 @@ async def test_handle_approval_command_wrong_user(mock_gl_class: AsyncMock) -> N
     call_args = mock_gl.post_mr_comment.await_args
     assert "❌ Only the original requester can approve" in call_args[0][2]
 
-    # Pending approval should still exist
-    assert await approval_store.get(PROJECT_ID, MR_IID) is not None
+    # Pending approval should still exist (re-stored after wrong-user rejection)
+    assert await approval_store.pop(PROJECT_ID, MR_IID) is not None
 
 
 @patch("gitlab_copilot_agent.mr_comment_handler.GitLabClient")
