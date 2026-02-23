@@ -311,7 +311,10 @@ All optional — service runs review-only without these.
 - **Default**: Unset (telemetry disabled)
 - **Description**: OTLP gRPC endpoint for traces, metrics, and logs
 - **Example**: `"http://otel-collector:4317"`
-- **Behavior**: If unset, `init_telemetry()` is a no-op
+- **Behavior**:
+  - If unset, `init_telemetry()` is a no-op — zero overhead
+  - If set but collector is unreachable, the service starts normally and logs `otel_collector_unavailable`. A background task probes the endpoint every 30s and logs `otel_collector_connected` when the collector becomes available.
+  - OTEL SDK retry messages are suppressed (routed through structlog at WARNING level only for persistent failures). No unstructured retry spam in the console.
 
 ### `SERVICE_VERSION`
 - **Type**: `str` (not in Settings model)

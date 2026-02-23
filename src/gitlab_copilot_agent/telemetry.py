@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from typing import Any
+from urllib.parse import urlparse
 
+import structlog
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -17,6 +20,86 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 _SERVICE_NAME = "gitlab-copilot-agent"
 _otel_logging_configured = False
 _initialized = False
+_probe_timer: threading.Timer | None = None
+_collector_reachable = False
+
+_log = structlog.get_logger()
+
+
+def configure_stdlib_logging() -> None:
+    """Route stdlib logging through structlog so all output is consistent.
+
+    This makes OTEL SDK messages (and any other stdlib logger) flow through
+    structlog's processor chain, producing timestamped key=value output.
+    """
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processor=structlog.dev.ConsoleRenderer(),
+        foreign_pre_chain=[
+            structlog.stdlib.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+        ],
+    )
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+    # Suppress OTEL SDK exporter retry noise (transient errors at DEBUG/INFO)
+    for name in (
+        "opentelemetry.exporter.otlp.proto.grpc",
+        "opentelemetry.sdk.trace.export",
+        "opentelemetry.sdk.metrics.export",
+        "opentelemetry.sdk._logs.export",
+    ):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
+def _check_grpc_connectivity(endpoint: str, timeout: float = 3.0) -> bool:
+    """Quick gRPC connectivity check. Returns True if the endpoint is reachable."""
+    try:
+        import grpc  # type: ignore[import-untyped]  # noqa: PLC0415
+
+        parsed = urlparse(endpoint)
+        target = f"{parsed.hostname}:{parsed.port or 4317}"
+        if parsed.scheme == "https":
+            channel = grpc.secure_channel(target, grpc.ssl_channel_credentials())
+        else:
+            channel = grpc.insecure_channel(target)
+        try:
+            grpc.channel_ready_future(channel).result(timeout=timeout)
+            return True
+        except grpc.FutureTimeoutError:
+            return False
+        finally:
+            channel.close()
+    except Exception:
+        return False
+
+
+def _schedule_probe(endpoint: str, interval: float = 30.0) -> None:
+    """Schedule a background connectivity probe after *interval* seconds."""
+    global _probe_timer  # noqa: PLW0603
+    _probe_timer = threading.Timer(interval, _run_probe, args=[endpoint, interval])
+    _probe_timer.daemon = True
+    _probe_timer.start()
+
+
+def _run_probe(endpoint: str, interval: float) -> None:
+    """Execute a single probe; reschedule if still unreachable."""
+    global _collector_reachable, _probe_timer  # noqa: PLW0603
+    _probe_timer = None
+    if _check_grpc_connectivity(endpoint):
+        _collector_reachable = True
+        _log.info(
+            "otel_collector_connected",
+            endpoint=endpoint,
+            msg="Telemetry is now being exported to the collector",
+        )
+    else:
+        _schedule_probe(endpoint, interval)
 
 
 def init_telemetry() -> None:
@@ -24,7 +107,7 @@ def init_telemetry() -> None:
 
     No-op if OTEL_EXPORTER_OTLP_ENDPOINT is unset or already initialized.
     """
-    global _otel_logging_configured, _initialized  # noqa: PLW0603
+    global _otel_logging_configured, _initialized, _collector_reachable  # noqa: PLW0603
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
     if not endpoint or _initialized:
         return
@@ -70,10 +153,27 @@ def init_telemetry() -> None:
 
     _initialized = True
 
+    # Connectivity probe — informational only (SDK buffers internally)
+    if _check_grpc_connectivity(endpoint):
+        _collector_reachable = True
+        _log.info("otel_collector_connected", endpoint=endpoint)
+    else:
+        _log.warning(
+            "otel_collector_unavailable",
+            endpoint=endpoint,
+            msg="Telemetry will be exported once the collector is reachable. "
+            "Retrying in background every 30s.",
+        )
+        _schedule_probe(endpoint)
+
 
 def shutdown_telemetry() -> None:
     """Flush and shutdown providers."""
-    global _initialized, _otel_logging_configured  # noqa: PLW0603
+    global _initialized, _otel_logging_configured, _probe_timer, _collector_reachable  # noqa: PLW0603
+    if _probe_timer is not None:
+        _probe_timer.cancel()
+        _probe_timer = None
+
     provider = trace.get_tracer_provider()
     if isinstance(provider, TracerProvider):
         provider.shutdown()
@@ -92,6 +192,7 @@ def shutdown_telemetry() -> None:
 
     _initialized = False
     _otel_logging_configured = False
+    _collector_reachable = False
 
 
 def get_tracer(name: str) -> trace.Tracer:

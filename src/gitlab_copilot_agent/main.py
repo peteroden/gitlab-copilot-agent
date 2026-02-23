@@ -26,6 +26,7 @@ from gitlab_copilot_agent.redis_state import create_dedup, create_lock, create_r
 from gitlab_copilot_agent.task_executor import LocalTaskExecutor, TaskExecutor
 from gitlab_copilot_agent.telemetry import (
     add_trace_context,
+    configure_stdlib_logging,
     emit_to_otel_logs,
     init_telemetry,
     shutdown_telemetry,
@@ -43,6 +44,7 @@ structlog.configure(
         structlog.dev.ConsoleRenderer(),
     ],
 )
+configure_stdlib_logging()
 
 log = structlog.get_logger()
 
