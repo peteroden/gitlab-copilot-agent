@@ -103,7 +103,7 @@ def test_configure_stdlib_logging_routes_through_structlog() -> None:
 
 
 def test_configure_stdlib_logging_suppresses_otel_exporters() -> None:
-    """OTEL exporter loggers should be set to WARNING to suppress retry noise."""
+    """OTEL exporter loggers should be set to ERROR to suppress retry noise."""
     configure_stdlib_logging()
     for name in (
         "opentelemetry.exporter.otlp.proto.grpc",
@@ -111,7 +111,7 @@ def test_configure_stdlib_logging_suppresses_otel_exporters() -> None:
         "opentelemetry.sdk.metrics.export",
         "opentelemetry.sdk._logs.export",
     ):
-        assert logging.getLogger(name).level == logging.WARNING
+        assert logging.getLogger(name).level == logging.ERROR
 
 
 def test_init_telemetry_starts_probe_when_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
