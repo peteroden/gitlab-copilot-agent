@@ -32,6 +32,9 @@ def configure_stdlib_logging() -> None:
     This makes OTEL SDK messages (and any other stdlib logger) flow through
     structlog's processor chain, producing timestamped key=value output.
     """
+    # Suppress gRPC C-core abseil noise (init warnings before absl::InitializeLog)
+    os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+
     formatter = structlog.stdlib.ProcessorFormatter(
         processor=structlog.dev.ConsoleRenderer(),
         foreign_pre_chain=[
@@ -47,14 +50,14 @@ def configure_stdlib_logging() -> None:
     root.addHandler(handler)
     root.setLevel(logging.INFO)
 
-    # Suppress OTEL SDK exporter retry noise (transient errors at DEBUG/INFO)
+    # Suppress OTEL SDK exporter retry noise (transient gRPC errors logged at WARNING)
     for name in (
         "opentelemetry.exporter.otlp.proto.grpc",
         "opentelemetry.sdk.trace.export",
         "opentelemetry.sdk.metrics.export",
         "opentelemetry.sdk._logs.export",
     ):
-        logging.getLogger(name).setLevel(logging.WARNING)
+        logging.getLogger(name).setLevel(logging.ERROR)
 
 
 def _check_grpc_connectivity(endpoint: str, timeout: float = 3.0) -> bool:
@@ -146,6 +149,7 @@ def init_telemetry() -> None:
     otel_logger = logging.getLogger(_SERVICE_NAME)
     otel_logger.addHandler(handler)
     otel_logger.setLevel(logging.DEBUG)
+    otel_logger.propagate = False  # Don't duplicate to root/console
     _otel_logging_configured = True
 
     # Auto-instrument httpx for HTTP client metrics and traces
