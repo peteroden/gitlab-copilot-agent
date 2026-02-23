@@ -8,14 +8,18 @@ import secrets
 
 def generate_project_map(
     jira_project_key: str,
-    gitlab_project_path: str,
+    gitlab_project_id: int,
+    gitlab_clone_url: str,
     target_branch: str = "main",
 ) -> str:
-    """Generate JIRA_PROJECT_MAP JSON string."""
+    """Generate JIRA_PROJECT_MAP JSON string matching ProjectMap schema."""
     mapping = {
-        jira_project_key: {
-            "gitlab_project": gitlab_project_path,
-            "target_branch": target_branch,
+        "mappings": {
+            jira_project_key: {
+                "gitlab_project_id": gitlab_project_id,
+                "clone_url": gitlab_clone_url,
+                "target_branch": target_branch,
+            }
         }
     }
     return json.dumps(mapping)
@@ -31,15 +35,18 @@ def print_config_output(
     gitlab_url: str,
     gitlab_project_url: str,
     gitlab_project_path: str,
+    gitlab_project_id: int,
     jira_url: str,
     jira_project_key: str,
     jira_issue_keys: list[str],
     webhook_secret: str,
     webhook_url: str | None = None,
     webhook_configured: bool = False,
+    demo_mr_url: str | None = None,
 ) -> None:
     """Print configuration output and next steps."""
-    project_map = generate_project_map(jira_project_key, gitlab_project_path)
+    clone_url = f"{gitlab_url}/{gitlab_project_path}.git"
+    project_map = generate_project_map(jira_project_key, gitlab_project_id, clone_url)
 
     print("\n" + "=" * 60)
     print("  DEMO ENVIRONMENT PROVISIONED SUCCESSFULLY")
@@ -71,9 +78,25 @@ def print_config_output(
         print(f"   Go to:  {gitlab_project_url}/-/hooks")
         step += 1
 
-    print(f"{step}. Start the agent service:")
+    print(f"{step}. Start the agent service (polling mode, no webhooks needed):")
+    print("   GITLAB_POLL=true \\")
+    print(f"   GITLAB_PROJECTS={gitlab_project_path} \\")
+    print(f"   GITLAB_WEBHOOK_SECRET={webhook_secret} \\")
+    print(f"   JIRA_PROJECT_MAP='{project_map}' \\")
+    print("   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \\")
     print("   uv run uvicorn gitlab_copilot_agent.main:app --port 8000")
     step += 1
+
+    if demo_mr_url:
+        print(f"\n{step}. Record a demo video (starts OTEL collector automatically):")
+        print("   uv run python scripts/demo_record.py \\")
+        print(f"     --gitlab-mr-url {demo_mr_url} \\")
+        print(
+            f"     --jira-board-url {jira_url}/jira/software/projects"
+            f"/{jira_project_key}/boards/<BOARD_ID>"
+        )
+        print("   (Find BOARD_ID in Jira: open board → check URL)")
+        step += 1
 
     print(f"\n{step}. Demo: Jira → GitLab flow")
     print(f"   Open {jira_url}/browse/{jira_issue_keys[0]}")

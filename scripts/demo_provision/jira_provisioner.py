@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import time
 
 import httpx
 import structlog
@@ -53,9 +54,16 @@ def create_project(
             "leadAccountId": lead_account_id,
         },
     )
+    if resp.status_code >= 400:
+        log.error(
+            "jira_project_create_failed",
+            status=resp.status_code,
+            body=resp.text,
+            key=key,
+        )
     resp.raise_for_status()
     data = resp.json()
-    log.info("jira_project_created", key=key, id=data.get("id"))
+    log.info("jira_project_created", key=key, id=data.get("id"), raw_response=data)
     return data
 
 
@@ -77,9 +85,7 @@ def create_status(
     status_category: str = "NEW",
 ) -> dict:
     """Create a project-scoped Jira status. Returns the created status."""
-    result = create_statuses(
-        client, [(name, status_category)], project_id
-    )
+    result = create_statuses(client, [(name, status_category)], project_id)
     return result[0]
 
 
@@ -95,13 +101,27 @@ def create_statuses(
     """
     payload = {
         "scope": {"type": "PROJECT", "project": {"id": project_id}},
-        "statuses": [
-            {"name": name, "statusCategory": category}
-            for name, category in statuses
-        ],
+        "statuses": [{"name": name, "statusCategory": category} for name, category in statuses],
     }
-    resp = client.post("/rest/api/3/statuses", json=payload)
-    resp.raise_for_status()
+    log.debug("jira_status_create_request", project_id=project_id, payload=payload)
+    # Retry — newly created projects may not be immediately available
+    for attempt in range(3):
+        resp = client.post("/rest/api/3/statuses", json=payload)
+        if resp.status_code < 400:
+            break
+        if attempt < 2 and "couldn't find project" in resp.text:
+            log.info("jira_status_retry", attempt=attempt + 1, project_id=project_id)
+            time.sleep(3)
+            continue
+        log.warning(
+            "jira_status_create_failed",
+            status=resp.status_code,
+            body=resp.text,
+            names=[n for n, _ in statuses],
+            hint="If using a team-managed project, add statuses via Jira UI: "
+            "Board → Board settings → Columns",
+        )
+        return []
     result = resp.json()
     for name, _ in statuses:
         log.info("jira_status_created", name=name, project_id=project_id)

@@ -9,7 +9,7 @@
       "minikube": "none"
     }
   },
-  "postCreateCommand": "curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.7.5 bash && pipx install uv && uv sync --all-extras && npm install -g @github/copilot && uv --version",
+  "postCreateCommand": "curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.7.5 bash && pipx install uv && uv sync --all-extras && chmod +x .venv/lib/python3.12/site-packages/copilot/bin/copilot && npm install -g @github/copilot && uv --version",
   "runArgs": ["--security-opt", "seccomp=unconfined"],
   "customizations": {
     "vscode": {

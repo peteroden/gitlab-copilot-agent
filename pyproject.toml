@@ -33,6 +33,7 @@ dev = [
     "httpx==0.28.1",
     "mypy==1.14.1",
     "ruff==0.9.6",
+    "playwright>=1.48.0",
 ]
 
 [tool.pytest.ini_options]
