@@ -3,6 +3,7 @@
 import asyncio
 import os
 import time
+from collections.abc import Callable
 from typing import Any, cast
 
 import structlog
@@ -48,8 +49,15 @@ async def run_copilot_session(
     user_prompt: str,
     timeout: int = 300,
     task_type: str = "review",
+    validate_response: Callable[[str], str | None] | None = None,
 ) -> str:
-    """Run a Copilot agent session and return the last assistant message."""
+    """Run a Copilot agent session and return the last assistant message.
+
+    If *validate_response* is provided it is called with the assistant's first
+    reply.  When it returns a non-None string that string is sent as a follow-up
+    prompt **within the same session** (so the agent retains context) and the
+    second reply is returned instead.  At most one follow-up is attempted.
+    """
     session_start = time.monotonic()
     with _tracer.start_as_current_span(
         "copilot.session",
@@ -130,10 +138,20 @@ async def run_copilot_session(
                     session.on(on_event)
                     await session.send({"prompt": user_prompt})
                     await asyncio.wait_for(done.wait(), timeout=timeout)
+
+                    result = messages[-1] if messages else ""
+
+                    if validate_response is not None:
+                        follow_up = validate_response(result)
+                        if follow_up:
+                            await log.ainfo("copilot_session_retry", reason="validate_response")
+                            done.clear()
+                            messages.clear()
+                            await session.send({"prompt": follow_up})
+                            await asyncio.wait_for(done.wait(), timeout=timeout)
+                            result = messages[-1] if messages else result
                 finally:
                     await session.destroy()
-
-                result = messages[-1] if messages else ""
             finally:
                 await client.stop()
             return result

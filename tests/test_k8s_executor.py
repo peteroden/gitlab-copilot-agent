@@ -567,25 +567,72 @@ class TestTimeout:
 
 
 class TestAlreadyExists:
-    async def test_409_falls_through_to_poll(
+    async def test_409_stale_succeeded_job_replaced(
         self,
         batch_v1: MagicMock,
+        fake_result_store: Any,
     ) -> None:
-        """409 on create falls through to poll loop and returns result."""
+        """409 on create with a completed job deletes it and creates a fresh one."""
+        api_exc = sys.modules["kubernetes.client"].ApiException(status=409, reason="AlreadyExists")
+        call_count = 0
+
+        def create_side_effect(*_a: object, **_kw: object) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise api_exc
+            # Second call: simulate fresh job writing result to store
+            fake_result_store._data[TASK_ID] = CACHED_RESULT
+
+        batch_v1.create_namespaced_job.side_effect = create_side_effect
+
+        stale_job = MagicMock()
+        stale_job.status.succeeded = 1
+        stale_job.status.failed = None
+        batch_v1.read_namespaced_job.return_value = stale_job
+
+        executor = _make_executor(result_store=fake_result_store)
+        result = await executor.execute(_make_task())
+
+        assert result.summary == CACHED_RESULT
+        assert call_count == 2
+        batch_v1.delete_namespaced_job.assert_called_once()
+
+    async def test_409_running_job_reused(
+        self,
+        batch_v1: MagicMock,
+        fake_result_store: Any,
+    ) -> None:
+        """409 on create with a still-running job reuses it."""
         batch_v1.create_namespaced_job.side_effect = sys.modules["kubernetes.client"].ApiException(
             status=409, reason="AlreadyExists"
         )
 
-        job_mock = MagicMock()
-        job_mock.status.succeeded = 1
-        job_mock.status.failed = None
-        job_mock.metadata.annotations = {"results.copilot-agent/summary": ANNOTATION_RESULT}
-        batch_v1.read_namespaced_job.return_value = job_mock
+        call_count = 0
 
-        executor = _make_executor()
+        def read_job_side_effect(*_a: object, **_kw: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            job = MagicMock()
+            if call_count == 1:
+                # First read (in execute): still running
+                job.status.succeeded = None
+                job.status.failed = None
+            else:
+                # Second read (in _wait_for_result): succeeded
+                job.status.succeeded = 1
+                job.status.failed = None
+                # Simulate result appearing in store
+                fake_result_store._data[TASK_ID] = CACHED_RESULT
+            return job
+
+        batch_v1.read_namespaced_job.side_effect = read_job_side_effect
+
+        executor = _make_executor(result_store=fake_result_store)
         result = await executor.execute(_make_task())
 
-        assert result.summary == ANNOTATION_RESULT
+        assert result.summary == CACHED_RESULT
+        batch_v1.delete_namespaced_job.assert_not_called()
 
 
 class TestFailedJobCleanup:

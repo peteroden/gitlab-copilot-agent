@@ -1,6 +1,7 @@
 """Mock OpenAI-compatible LLM endpoint for E2E tests.
 
-Returns a canned code review response in the format the agent expects.
+Returns canned responses based on task type (review vs coding).
+The task type is inferred from the system prompt content.
 
 Usage: uv run python tests/e2e/mock_llm.py [--port 9998]
 """
@@ -26,24 +27,40 @@ CANNED_REVIEW = json.dumps(
     ]
 )
 
-CANNED_RESPONSE = f"""```json
+CANNED_REVIEW_RESPONSE = f"""```json
 {CANNED_REVIEW}
 ```
 
 ## Summary
 This is a canned E2E test review. The code looks fine overall."""
 
+# Canned coding response matching CodingAgentOutput schema
+CANNED_CODING_RESPONSE = """I've added a hello endpoint to the app.
+
+```json
+{
+  "summary": "Added hello endpoint to app.py",
+  "files_changed": ["app.py"]
+}
+```"""
+
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request) -> dict:
     """OpenAI-compatible chat completions endpoint."""
+    body = await request.json()
+    messages = body.get("messages", [])
+    system_text = " ".join(m.get("content", "") for m in messages if m.get("role") == "system")
+
+    # Pick response based on task type inferred from system prompt
+    content = CANNED_CODING_RESPONSE if "files_changed" in system_text else CANNED_REVIEW_RESPONSE
     return {
         "id": "e2e-mock",
         "object": "chat.completion",
         "choices": [
             {
                 "index": 0,
-                "message": {"role": "assistant", "content": CANNED_RESPONSE},
+                "message": {"role": "assistant", "content": content},
                 "finish_reason": "stop",
             }
         ],

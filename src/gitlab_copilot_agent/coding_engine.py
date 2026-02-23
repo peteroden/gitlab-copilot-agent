@@ -2,10 +2,41 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams, TaskResult
+
+
+class CodingAgentOutput(BaseModel):
+    """Structured output expected from the coding agent's final message."""
+
+    model_config = ConfigDict(strict=True)
+    summary: str = Field(description="Brief description of changes and test results")
+    files_changed: list[str] = Field(
+        description="Paths of files intentionally created, modified, or deleted"
+    )
+
+
+_JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
+
+
+def parse_agent_output(raw: str) -> CodingAgentOutput | None:
+    """Extract and validate the JSON block from the agent's final message.
+
+    Returns None if no valid JSON block is found.
+    """
+    match = _JSON_BLOCK_RE.search(raw)
+    if not match:
+        return None
+    try:
+        return CodingAgentOutput.model_validate_json(match.group(1).strip())
+    except Exception:  # noqa: BLE001 — best-effort parsing
+        return None
+
 
 _PYTHON_GITIGNORE_PATTERNS = [
     "__pycache__/",
@@ -28,7 +59,7 @@ Your workflow:
 5. Ensure .gitignore exists with standard ignores for the project language
 6. Run the project linter if available and fix any issues
 7. Run tests if available to verify your changes
-8. Output a summary of changes made
+8. Output your results in the EXACT format described below
 
 Guidelines:
 - Make the smallest change that solves the problem
@@ -40,11 +71,21 @@ Guidelines:
 - Never commit generated or cached files (__pycache__, .pyc, node_modules, etc.)
 
 Output format:
-Provide a summary of:
-- Files modified or created
-- Key changes made
-- Test results (if tests were run)
-- Any concerns or follow-up items
+Your final message MUST end with a JSON block listing the files you changed.
+Only list source files you intentionally created, modified, or deleted — never include
+generated files like __pycache__/, *.pyc, *.egg-info, node_modules/, etc.
+Include deleted files so the deletion is captured in the patch.
+
+```json
+{
+  "summary": "Brief description of changes made and test results",
+  "files_changed": [
+    "src/app/main.py",
+    "src/app/utils.py",
+    "tests/test_main.py"
+  ]
+}
+```
 """
 
 

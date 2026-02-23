@@ -133,7 +133,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `CodingOrchestrator`: Implements `CodingTaskHandler` protocol
   - `handle(issue: JiraIssue, project_mapping: GitLabProjectMapping) -> None`: Full coding pipeline
     - Transitions issue to "In Progress"
-    - Clones repo, creates branch `agent/{issue-key}`
+    - Clones repo, creates branch `agent/{issue-key}` (with collision disambiguation via `git_unique_branch`)
     - Calls `run_coding_task()` via executor
     - Calls `apply_coding_result()` to apply diff (K8s executor only)
     - Commits, pushes, creates MR
@@ -176,6 +176,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `build_jira_coding_prompt(issue_key: str, summary: str, description: str | None) -> str`: Build user prompt from Jira issue
 - `ensure_gitignore(repo_root: str) -> bool`: Ensure .gitignore contains Python patterns, returns True if modified
 - `run_coding_task(...) -> str`: Ensure .gitignore, execute coding task
+- `parse_agent_output(text: str) -> CodingAgentOutput`: Extract structured JSON from agent response (Pydantic-validated `summary` + `files_changed`)
 
 **Internal Imports**: `config`, `task_executor`
 
@@ -230,7 +231,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Key Classes**:
 - `KubernetesTaskExecutor`: Implements `TaskExecutor`
-  - `execute(task: TaskParams) -> TaskResult`: Create Job, poll for completion, retrieve result from Redis (parses JSON as `TaskResult`)
+  - `execute(task: TaskParams) -> TaskResult`: Create Job, poll for completion, retrieve result from Redis. On 409 (Job exists): replaces stale completed Jobs, reuses running ones.
   - `_create_job(job_name: str, task: TaskParams) -> None`: Create K8s Job with task env vars and optional hostAliases
   - `_read_job_status(job_name: str) -> str`: Return "succeeded", "failed", or "running"
   - `_read_job_annotation(job_name: str) -> str | None`: Read result annotation
@@ -257,12 +258,13 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Key Functions**:
 - `build_sdk_env(github_token: str | None) -> dict[str, str]`: Build minimal env dict for SDK subprocess (excludes service secrets)
-- `run_copilot_session(settings: Settings, repo_path: str, system_prompt: str, user_prompt: str, timeout: int, task_type: str) -> str`: Full Copilot session lifecycle
+- `run_copilot_session(settings: Settings, repo_path: str, system_prompt: str, user_prompt: str, timeout: int, task_type: str, validate_response: Callable[[str], str | None] | None) -> str`: Full Copilot session lifecycle
   - Creates CopilotClient with minimal env
   - Discovers repo config (skills, agents, instructions)
   - Injects repo instructions into system prompt
   - Creates session with BYOK provider if configured
   - Sends user prompt, waits for session.idle
+  - If `validate_response` returns a string, sends it as a follow-up (one retry max)
   - Returns last assistant message
   - Emits `copilot_session_duration` metric
 
@@ -290,7 +292,8 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - For coding tasks: calls `_build_coding_result()` to capture diff
   - Stores result in Redis (JSON-encoded `TaskResult`)
   - Returns exit code 0/1
-- `_build_coding_result(summary: str, repo_path: Path) -> CodingResult`: Capture `git diff --cached --binary`, validate size ≤ `MAX_PATCH_SIZE`, validate patch (no `../`), return `CodingResult`
+- `_build_coding_result(response: str, repo_path: Path) -> CodingResult`: Parse `CodingAgentOutput` from response, stage listed files explicitly, capture `git diff --cached --binary`, validate size ≤ `MAX_PATCH_SIZE`, validate patch (no `../`), return `CodingResult`
+- `_coding_response_validator(response: str) -> str | None`: Validate agent response contains structured JSON; returns retry prompt if missing
 - `_store_result(task_id: str, result: str) -> None`: Persist to Redis with TTL
 - `_get_required_env(name: str) -> str`: Raise if env var missing
 - `_parse_task_payload(raw: str) -> dict[str, str]`: Parse JSON payload
@@ -369,11 +372,12 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Functions**:
 - `git_clone(clone_url: str, branch: str, token: str, clone_dir: str | None) -> Path`: Clone repo with embedded credentials, validate URL
 - `git_create_branch(repo_path: Path, branch_name: str) -> None`: Create and checkout branch
+- `git_unique_branch(repo_path: Path, base_name: str) -> str`: Create branch with collision detection — appends `-2`, `-3`, etc. using `git ls-remote --heads` (works with shallow clones)
 - `git_commit(repo_path: Path, message: str, author_name: str, author_email: str) -> bool`: Stage all, commit, return False if nothing to commit
 - `git_push(repo_path: Path, remote: str, branch: str, token: str) -> None`: Push with token sanitization
 - `git_apply_patch(repo_path: Path, patch: str) -> None`: Apply unified diff with `git apply --3way --binary`
 - `git_head_sha(repo_path: Path) -> str`: Get current HEAD commit SHA
-- `git_diff_staged(repo_path: Path) -> str`: Capture staged diff (`git diff --cached --binary`)
+- `git_diff_staged(repo_path: Path) -> str`: Capture staged diff (`git diff --cached --binary`), preserves trailing whitespace
 - `_validate_patch(patch: str) -> None`: Validate patch (no `../` path traversal, size ≤ MAX_PATCH_SIZE)
 - `_validate_clone_url(url: str) -> None`: Ensure HTTPS, no embedded credentials, valid host/path
 - `_sanitize_url_for_log(url: str) -> str`: Remove credentials from URL

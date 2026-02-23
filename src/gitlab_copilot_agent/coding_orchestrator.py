@@ -13,7 +13,12 @@ from gitlab_copilot_agent.coding_engine import run_coding_task
 from gitlab_copilot_agent.coding_workflow import apply_coding_result
 from gitlab_copilot_agent.concurrency import DistributedLock, MemoryLock, ProcessedIssueTracker
 from gitlab_copilot_agent.config import Settings
-from gitlab_copilot_agent.git_operations import git_clone, git_commit, git_create_branch, git_push
+from gitlab_copilot_agent.git_operations import (
+    git_clone,
+    git_commit,
+    git_push,
+    git_unique_branch,
+)
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_models import JiraIssue
@@ -90,7 +95,7 @@ class CodingOrchestrator:
                         self._settings.gitlab_token,
                         clone_dir=self._settings.clone_dir,
                     )
-                    await git_create_branch(repo_path, f"agent/{issue.key.lower()}")
+                    branch = await git_unique_branch(repo_path, f"agent/{issue.key.lower()}")
                     result = await run_coding_task(
                         self._executor,
                         self._settings,
@@ -117,14 +122,14 @@ class CodingOrchestrator:
                     await git_push(
                         repo_path,
                         "origin",
-                        f"agent/{issue.key.lower()}",
+                        branch,
                         self._settings.gitlab_token,
                     )
                     mr_title = f"feat({issue.key.lower()}): {issue.fields.summary}"
                     mr_desc = f"Automated implementation for {issue.key}.\n\n{result.summary}"
                     mr_iid = await self._gitlab.create_merge_request(
                         project_mapping.gitlab_project_id,
-                        f"agent/{issue.key.lower()}",
+                        branch,
                         project_mapping.target_branch,
                         mr_title,
                         mr_desc,

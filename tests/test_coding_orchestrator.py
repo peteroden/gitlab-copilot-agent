@@ -44,7 +44,7 @@ _TEST_MAPPING = GitLabProjectMapping(
 @patch("gitlab_copilot_agent.coding_orchestrator.run_coding_task")
 @patch("gitlab_copilot_agent.coding_orchestrator.git_push")
 @patch("gitlab_copilot_agent.coding_orchestrator.git_commit")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_create_branch")
+@patch("gitlab_copilot_agent.coding_orchestrator.git_unique_branch")
 @patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
 async def test_handle_full_pipeline(
     mock_clone: AsyncMock,
@@ -55,6 +55,7 @@ async def test_handle_full_pipeline(
     tmp_path: Path,
 ) -> None:
     mock_clone.return_value = tmp_path
+    mock_branch.return_value = "agent/proj-42"
     mock_coding.return_value = CodingResult(summary="Changes made")
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
     mock_gitlab.create_merge_request.return_value = 1
@@ -74,7 +75,7 @@ async def test_handle_full_pipeline(
 @patch("gitlab_copilot_agent.coding_orchestrator.run_coding_task")
 @patch("gitlab_copilot_agent.coding_orchestrator.git_push")
 @patch("gitlab_copilot_agent.coding_orchestrator.git_commit")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_create_branch")
+@patch("gitlab_copilot_agent.coding_orchestrator.git_unique_branch")
 @patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
 async def test_in_review_transition_failure_is_non_blocking(
     mock_clone: AsyncMock,
@@ -86,6 +87,7 @@ async def test_in_review_transition_failure_is_non_blocking(
 ) -> None:
     """If 'In Review' transition fails, the task still completes successfully."""
     mock_clone.return_value = tmp_path
+    mock_branch.return_value = "agent/proj-42"
     mock_coding.return_value = CodingResult(summary="Changes made")
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
     mock_gitlab.create_merge_request.return_value = 1
@@ -104,7 +106,7 @@ async def test_in_review_transition_failure_is_non_blocking(
 @patch("gitlab_copilot_agent.coding_orchestrator.run_coding_task")
 @patch("gitlab_copilot_agent.coding_orchestrator.git_push")
 @patch("gitlab_copilot_agent.coding_orchestrator.git_commit")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_create_branch")
+@patch("gitlab_copilot_agent.coding_orchestrator.git_unique_branch")
 @patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
 async def test_custom_in_review_status_used(
     mock_clone: AsyncMock,
@@ -116,6 +118,7 @@ async def test_custom_in_review_status_used(
 ) -> None:
     """Custom JIRA_IN_REVIEW_STATUS is used for the transition."""
     mock_clone.return_value = tmp_path
+    mock_branch.return_value = "agent/proj-42"
     mock_coding.return_value = CodingResult(summary="Changes made")
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
     mock_gitlab.create_merge_request.return_value = 1

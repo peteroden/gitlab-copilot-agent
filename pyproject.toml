@@ -62,6 +62,7 @@ packages = ["src/gitlab_copilot_agent"]
 dev = [
     "fakeredis>=2.34.0",
     "lupa>=2.6",
+    "mypy>=1.14.1",
     "pytest-asyncio>=0.25.3",
     "pytest-cov>=7.0.0",
     "ruff>=0.9.6",
