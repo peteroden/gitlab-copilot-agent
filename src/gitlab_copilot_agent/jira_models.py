@@ -12,8 +12,8 @@ class JiraUser(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    account_id: str = Field(description="Jira Cloud account ID")
-    display_name: str = Field(description="User display name")
+    account_id: str | None = Field(default=None, description="Jira Cloud account ID")
+    display_name: str | None = Field(default=None, description="User display name")
     email_address: str | None = Field(default=None, description="User email if available")
 
 

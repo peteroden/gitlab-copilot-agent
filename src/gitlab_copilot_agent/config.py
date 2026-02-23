@@ -112,6 +112,15 @@ class Settings(BaseSettings):
         default=30,
         description="Polling interval in seconds",
     )
+    gitlab_poll_lookback: int = Field(
+        default=60,
+        description="Minutes to look back on startup for recent MRs (default: 60)",
+    )
+    gitlab_review_on_push: bool = Field(
+        default=True,
+        description="Re-review MRs when new commits are pushed (dedup per commit). "
+        "When false, each MR is reviewed only once (dedup per MR).",
+    )
 
     # Jira (all optional — service runs review-only without these)
     jira_url: str | None = Field(default=None, description="Jira instance URL")

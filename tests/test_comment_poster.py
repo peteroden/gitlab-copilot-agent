@@ -195,8 +195,8 @@ async def test_mixed_valid_and_invalid_positions() -> None:
     assert mr.notes.create.call_count == 2
 
 
-async def test_file_not_in_changes_uses_fallback() -> None:
-    """Comments for files not in MR changes should use fallback."""
+async def test_file_not_in_changes_is_skipped() -> None:
+    """Comments for files not in MR changes should be silently skipped."""
     gl = MagicMock()
 
     review = ParsedReview(
@@ -211,5 +211,5 @@ async def test_file_not_in_changes_uses_fallback() -> None:
     mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
     # No inline comment
     assert mr.discussions.create.call_count == 0
-    # Fallback + summary
-    assert mr.notes.create.call_count == 2
+    # Only summary note (file not in diff is skipped, not posted as fallback)
+    assert mr.notes.create.call_count == 1
