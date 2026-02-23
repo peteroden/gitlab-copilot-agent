@@ -184,7 +184,6 @@ async def git_apply_patch(repo_path: Path, patch: str) -> None:
             "-C",
             str(repo_path),
             "apply",
-            "--3way",
             "--whitespace=nowarn",
             "-",
             stdin=asyncio.subprocess.PIPE,
