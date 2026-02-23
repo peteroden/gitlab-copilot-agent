@@ -34,14 +34,15 @@ from demo_provision.config_generator import (  # noqa: E402
     generate_webhook_secret,
     print_config_output,
 )
-from demo_provision.gitlab_provisioner import (  # noqa: E402
-    create_project as gl_create_project,
-)
 from demo_provision.gitlab_provisioner import (
+    create_merge_request,
     create_webhook,
     get_namespace,
     load_template,
     push_files,
+)
+from demo_provision.gitlab_provisioner import (  # noqa: E402
+    create_project as gl_create_project,
 )
 from demo_provision.gitlab_provisioner import (
     get_project as gl_get_project,
@@ -71,7 +72,10 @@ def _require_value(cli_value: str | None, env_name: str) -> str:
     """Get a value from CLI arg (preferred) or environment variable, or exit."""
     value = (cli_value or "").strip() or os.environ.get(env_name, "").strip()
     if not value:
-        print(f"Error: --{env_name.lower().replace('_', '-')} or {env_name} env var is required.", file=sys.stderr)
+        print(
+            f"Error: --{env_name.lower().replace('_', '-')} or {env_name} env var is required.",
+            file=sys.stderr,
+        )
         sys.exit(1)
     return value
 
@@ -120,11 +124,27 @@ def main() -> None:
         default="AI Ready",
         help='Jira status that triggers the agent (default: "AI Ready")',
     )
-    parser.add_argument("--gitlab-url", default=None, help="GitLab instance URL (or GITLAB_URL env)")
-    parser.add_argument("--gitlab-token", default=None, help="GitLab API token (or GITLAB_TOKEN env)")
+    parser.add_argument(
+        "--use-existing-gitlab-project",
+        action="store_true",
+        help="Use an existing GitLab project instead of creating a new one.",
+    )
+    parser.add_argument(
+        "--use-existing-jira-project",
+        action="store_true",
+        help="Use an existing Jira project instead of creating a new one.",
+    )
+    parser.add_argument(
+        "--gitlab-url", default=None, help="GitLab instance URL (or GITLAB_URL env)"
+    )
+    parser.add_argument(
+        "--gitlab-token", default=None, help="GitLab API token (or GITLAB_TOKEN env)"
+    )
     parser.add_argument("--jira-url", default=None, help="Jira instance URL (or JIRA_URL env)")
     parser.add_argument("--jira-email", default=None, help="Jira user email (or JIRA_EMAIL env)")
-    parser.add_argument("--jira-api-token", default=None, help="Jira API token (or JIRA_API_TOKEN env)")
+    parser.add_argument(
+        "--jira-api-token", default=None, help="Jira API token (or JIRA_API_TOKEN env)"
+    )
     args = parser.parse_args()
 
     # Gather credentials (CLI flags take precedence over env vars)
@@ -142,27 +162,121 @@ def main() -> None:
 
     project_path = f"{args.gitlab_group}/{args.gitlab_project_name}"
     existing = gl_get_project(gl, project_path)
-    if existing:
+    if existing and not args.use_existing_gitlab_project:
         print(
             f"Error: GitLab project '{project_path}' already exists.\n"
-            f"Delete it or use a different --gitlab-project-name.",
+            f"Delete it, use a different --gitlab-project-name, "
+            f"or pass --use-existing-gitlab-project.",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    namespace = get_namespace(gl, args.gitlab_group)
-    project = gl_create_project(
-        gl,
-        name=args.gitlab_project_name,
-        namespace_id=namespace.id,
-        description="Demo project for GitLab Copilot Agent showcase",
-    )
+    if existing and args.use_existing_gitlab_project:
+        project = existing
+        print(f"✅ Using existing GitLab project: {project.web_url}")
+    else:
+        namespace = get_namespace(gl, args.gitlab_group)
+        project = gl_create_project(
+            gl,
+            name=args.gitlab_project_name,
+            namespace_id=namespace.id,
+            description="Demo project for GitLab Copilot Agent showcase",
+        )
 
-    # Push demo template files
-    template_files = load_template(TEMPLATE_DIR)
-    push_files(project, "main", template_files, "Initial demo code with intentional issues")
-    print(f"✅ GitLab project created: {project.web_url}")
-    print(f"   Pushed {len(template_files)} files to main branch")
+        # Push demo template files
+        template_files = load_template(TEMPLATE_DIR)
+        push_files(project, "main", template_files, "Initial demo code with intentional issues")
+        print(f"✅ GitLab project created: {project.web_url}")
+        print(f"   Pushed {len(template_files)} files to main branch")
+
+    # --- Create demo MR for agent to review ---
+    demo_mr = None
+    try:
+        demo_mr = create_merge_request(
+            project,
+            source_branch="feature/add-search-endpoint",
+            target_branch="main",
+            title="Add post search endpoint",
+            description=(
+                "Adds a search endpoint to find posts by keyword.\n\n"
+                "This MR has intentional issues for the agent to review."
+            ),
+            files={
+                "src/demo_app/search.py": (
+                    '"""Search functionality for the Blog Post API."""\n'
+                    "\n"
+                    "from demo_app.database import _get_connection\n"
+                    "\n"
+                    "\n"
+                    "def search_posts(query):\n"
+                    "    conn = _get_connection()\n"
+                    "    results = conn.execute(\n"
+                    "        f\"SELECT * FROM posts WHERE title LIKE '%{query}%'\""
+                    "\n"
+                    "        f\" OR content LIKE '%{query}%'\"\n"
+                    "    ).fetchall()\n"
+                    "    conn.close()\n"
+                    "    return [dict(row) for row in results]\n"
+                    "\n"
+                    "\n"
+                    "def search_by_date(start, end):\n"
+                    "    conn = _get_connection()\n"
+                    "    results = conn.execute(\n"
+                    '        f"SELECT * FROM posts WHERE created_at'
+                    " BETWEEN '{start}' AND '{end}'\"\n"
+                    "    ).fetchall()\n"
+                    "    conn.close()\n"
+                    "    return results\n"
+                ),
+                "src/demo_app/main.py": (
+                    '"""Blog Post API — main application."""\n'
+                    "\n"
+                    "from fastapi import FastAPI, HTTPException\n"
+                    "\n"
+                    "from demo_app import database\n"
+                    "from demo_app.auth import verify_api_key\n"
+                    "from demo_app.search import search_posts\n"
+                    "\n"
+                    "app = FastAPI(title='Blog Post API')\n"
+                    "\n"
+                    "\n"
+                    "@app.get('/posts/{post_id}')\n"
+                    "def get_post(post_id: str):\n"
+                    "    try:\n"
+                    "        post = database.get_post(post_id)\n"
+                    "        if not post:\n"
+                    "            raise HTTPException(status_code=404)\n"
+                    "        return post\n"
+                    "    except Exception as e:\n"
+                    "        print(f'Error: {e}')\n"
+                    "        raise\n"
+                    "\n"
+                    "\n"
+                    "@app.get('/posts')\n"
+                    "def list_posts(author: str | None = None):\n"
+                    "    if author:\n"
+                    "        return database.get_posts_by_author(author)\n"
+                    "    return database.get_posts_by_author('%')\n"
+                    "\n"
+                    "\n"
+                    "@app.get('/search')\n"
+                    "def search(q: str):\n"
+                    "    return search_posts(q)\n"
+                    "\n"
+                    "\n"
+                    "@app.post('/posts')\n"
+                    "def create_post(title: str, content: str, author: str,"
+                    " api_key: str):\n"
+                    "    if not verify_api_key(api_key):\n"
+                    "        raise HTTPException(status_code=401)\n"
+                    "    return database.create_post(title, content, author)\n"
+                ),
+            },
+            commit_message="Add search endpoint with keyword matching",
+        )
+        print(f"✅ Demo MR created: {demo_mr.web_url}")
+    except Exception as e:
+        print(f"⚠️  Could not create demo MR: {e}")
 
     # --- Webhook setup ---
     webhook_secret = generate_webhook_secret()
@@ -182,40 +296,54 @@ def main() -> None:
     jira_client = jira_build_client(jira_url, jira_email, jira_api_token)
     try:
         existing_jira = jira_get_project(jira_client, args.jira_project_key)
-        if existing_jira:
+        if existing_jira and not args.use_existing_jira_project:
             print(
                 f"Error: Jira project '{args.jira_project_key}' already exists.\n"
-                f"Delete it or use a different --jira-project-key.",
+                f"Delete it, use a different --jira-project-key, "
+                f"or pass --use-existing-jira-project.",
                 file=sys.stderr,
             )
             sys.exit(1)
 
-        current_user = get_current_user(jira_client)
-        lead_account_id = current_user["accountId"]
+        issue_keys: list[str] = []
+        if existing_jira and args.use_existing_jira_project:
+            project_id = str(existing_jira["id"])
+            print(f"✅ Using existing Jira project: {args.jira_project_key}")
+        else:
+            current_user = get_current_user(jira_client)
+            lead_account_id = current_user["accountId"]
 
-        jira_project_data = jira_create_project(
-            jira_client,
-            key=args.jira_project_key,
-            name=f"Copilot Demo ({args.jira_project_key})",
-            lead_account_id=lead_account_id,
-        )
-        print(f"✅ Jira project created: {args.jira_project_key}")
+            jira_project_data = jira_create_project(
+                jira_client,
+                key=args.jira_project_key,
+                name=f"Copilot Demo ({args.jira_project_key})",
+                lead_account_id=lead_account_id,
+            )
+            project_id = str(jira_project_data["id"])
+            print(f"✅ Jira project created: {args.jira_project_key}")
 
         # Ensure workflow statuses exist on the project board
         # Workflow: To Do → AI Ready → In Progress → In Review → Done
-        project_id = str(jira_project_data["id"])
-        jira_create_statuses(
+        created = jira_create_statuses(
             jira_client,
             [
-                (args.trigger_status, "NEW"),        # To Do category
-                ("In Review", "INDETERMINATE"),       # In Progress category
+                (args.trigger_status, "NEW"),  # To Do category
+                ("In Review", "INDETERMINATE"),  # In Progress category
             ],
             project_id,
         )
-        print(f"✅ Created '{args.trigger_status}' and 'In Review' statuses on Jira board")
+        if created:
+            print(f"✅ Created '{args.trigger_status}' and 'In Review' statuses on Jira board")
+        else:
+            print(
+                "⚠️  Could not create statuses via API"
+                " (team-managed projects require manual setup).\n"
+                "   Add these columns in Jira UI:"
+                " Board → Board settings → Columns\n"
+                f"   Required columns: {args.trigger_status}, In Review"
+            )
 
         # Create demo issues
-        issue_keys: list[str] = []
         for issue_data in DEMO_ISSUES:
             key = create_issue(
                 jira_client,
@@ -233,12 +361,14 @@ def main() -> None:
         gitlab_url=gitlab_url,
         gitlab_project_url=project.web_url,
         gitlab_project_path=project.path_with_namespace,
+        gitlab_project_id=project.id,
         jira_url=jira_url,
         jira_project_key=args.jira_project_key,
         jira_issue_keys=issue_keys,
         webhook_secret=webhook_secret,
         webhook_url=webhook_url,
         webhook_configured=webhook_configured,
+        demo_mr_url=demo_mr.web_url if demo_mr else None,
     )
 
 

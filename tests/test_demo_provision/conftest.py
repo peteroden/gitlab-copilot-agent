@@ -19,6 +19,8 @@ GITLAB_PROJECT_PATH = f"{GITLAB_GROUP}/{GITLAB_PROJECT_NAME}"
 GITLAB_PROJECT_URL = f"{GITLAB_URL}/{GITLAB_PROJECT_PATH}"
 JIRA_LEAD_ACCOUNT_ID = "abc123def456"
 
+GITLAB_PROJECT_ID = 42
+
 TEMPLATE_DIR = Path(__file__).parent.parent.parent / "scripts" / "demo_templates" / "blog-api"
 
 

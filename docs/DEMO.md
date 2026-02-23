@@ -113,6 +113,95 @@ The demo repository is a FastAPI blog post API with these intentional issues:
 | `.github/skills/security-patterns/SKILL.md` | Skill | Approved/forbidden security patterns |
 | `.github/agents/security-reviewer.agent.md` | Agent | Custom security review specialist |
 
+## Automated Video Recording
+
+Record a 2-3 minute demo video using Playwright. The script connects to your existing browser session (preserving logins), records all interactions, and uses an embedded OTEL collector to detect when the agent completes operations — no arbitrary sleeps.
+
+### Prerequisites
+
+1. **Install Playwright** (one-time):
+   ```bash
+   uv pip install 'playwright>=1.48.0'
+   ```
+   No need to run `playwright install` — the script connects to your existing browser via CDP.
+
+2. **Launch your Chromium-based browser with remote debugging**:
+   ```bash
+   # Edge (macOS)
+   /Applications/Microsoft\ Edge.app/Contents/MacOS/Microsoft\ Edge --remote-debugging-port=9222
+
+   # Chrome (macOS)
+   /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+
+   # Linux (either)
+   microsoft-edge --remote-debugging-port=9222
+   google-chrome --remote-debugging-port=9222
+   ```
+
+3. **Log into GitLab and Jira** in that Chrome window.
+
+4. **Start the agent** with OTEL export pointed at the recording script's collector:
+   ```bash
+   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 uv run uvicorn ...
+   ```
+
+5. **Ensure the demo environment is provisioned** (see Quick Start above).
+
+### Recording
+
+```bash
+uv run python scripts/demo_record.py \
+  --gitlab-mr-url https://gitlab.com/myorg/copilot-demo/-/merge_requests/1 \
+  --jira-board-url https://myorg.atlassian.net/jira/software/projects/DEMO/boards/42
+```
+
+The script runs three scenes:
+
+| Scene | What happens | Transition trigger |
+|-------|-------------|-------------------|
+| 1. Code Review | Navigates to MR, scrolls through review comments | `review_complete` OTEL event |
+| 2. /copilot Command | Types `/copilot fix ...` on the MR, shows commit + diff | `copilot_command_complete` event |
+| 3. Jira Flow | Shows Jira board → agent codes → MR created → "In Review" | `coding_task_complete` event |
+
+### Options
+
+```
+--otel-port PORT     OTEL collector port (default: 4317)
+--cdp-url URL        Chrome DevTools URL (default: http://localhost:9222)
+--output-dir DIR     Video output directory (default: demo-video/)
+--skip-scene N       Skip scene N (1, 2, or 3). Repeatable.
+--gitlab-base-url    Override auto-detected GitLab base URL
+--project-path       Override auto-detected project path
+```
+
+### Examples
+
+```bash
+# Record only Scene 1 (code review)
+uv run python scripts/demo_record.py \
+  --gitlab-mr-url https://gitlab.com/myorg/copilot-demo/-/merge_requests/1 \
+  --jira-board-url https://myorg.atlassian.net/jira/software/projects/DEMO/boards/42 \
+  --skip-scene 2 --skip-scene 3
+
+# Use a different OTEL port
+uv run python scripts/demo_record.py \
+  --otel-port 4318 \
+  --gitlab-mr-url ... \
+  --jira-board-url ...
+```
+
+### Output
+
+Video is saved as `.webm` in `demo-video/`. Convert to MP4:
+
+```bash
+ffmpeg -i demo-video/video.webm -c:v libx264 demo-video/demo.mp4
+```
+
+### How It Works
+
+The script embeds a lightweight OTEL collector (same pattern as `scripts/otel_console_collector.py`) that listens for agent log events via gRPC. When the agent emits `review_complete`, `copilot_command_complete`, etc., the script refreshes the page and transitions to the next scene. If an event doesn't arrive within the timeout, it falls back to page refresh + visual detection.
+
 ## Cleanup
 
 The script prints cleanup URLs at the end. To remove demo resources manually:

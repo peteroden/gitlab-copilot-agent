@@ -67,7 +67,7 @@ def push_files(
     # Use "update" for README.md and "create" for everything else.
     existing = set()
     try:
-        tree = project.repository_tree(ref=branch, get_all=True)
+        tree = project.repository_tree(ref=branch, recursive=True, get_all=True)
         existing = {item["path"] for item in tree}
     except Exception:
         pass
@@ -88,6 +88,40 @@ def push_files(
         }
     )
     log.info("gitlab_files_pushed", branch=branch, file_count=len(files))
+
+
+def create_merge_request(
+    project: Any,
+    source_branch: str,
+    target_branch: str,
+    title: str,
+    description: str,
+    *,
+    files: dict[str, str] | None = None,
+    commit_message: str = "Add feature changes",
+) -> Any:
+    """Create a branch with file changes and open an MR.
+
+    If *files* is provided, commits them to *source_branch* first.
+    Returns the MR object.
+    """
+    # Create the branch
+    project.branches.create({"branch": source_branch, "ref": target_branch})
+    log.info("gitlab_branch_created", branch=source_branch)
+
+    if files:
+        push_files(project, source_branch, files, commit_message)
+
+    mr = project.mergerequests.create(
+        {
+            "source_branch": source_branch,
+            "target_branch": target_branch,
+            "title": title,
+            "description": description,
+        }
+    )
+    log.info("gitlab_mr_created", mr_iid=mr.iid, url=mr.web_url)
+    return mr
 
 
 def create_webhook(
