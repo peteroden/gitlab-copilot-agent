@@ -26,4 +26,4 @@ COPY --chown=app:app src/ src/
 COPY --chown=app:app scripts/entrypoint.sh /opt/entrypoint.sh
 EXPOSE 8000
 ENTRYPOINT ["/opt/entrypoint.sh"]
-CMD ["uv", "run", "uvicorn", "gitlab_copilot_agent.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "python", "-m", "gitlab_copilot_agent.main"]

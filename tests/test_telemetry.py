@@ -10,7 +10,7 @@ from opentelemetry.sdk.trace import TracerProvider
 
 from gitlab_copilot_agent.telemetry import (
     add_trace_context,
-    configure_stdlib_logging,
+    configure_logging,
     emit_to_otel_logs,
     get_tracer,
     init_telemetry,
@@ -91,9 +91,9 @@ def test_emit_to_otel_logs_emits_when_configured(monkeypatch: pytest.MonkeyPatch
         assert args[0][1] == "clone_done"
 
 
-def test_configure_stdlib_logging_routes_through_structlog() -> None:
+def test_configure_logging_routes_through_structlog() -> None:
     """stdlib logging should use structlog ProcessorFormatter after configuration."""
-    configure_stdlib_logging()
+    configure_logging()
     root = logging.getLogger()
     assert len(root.handlers) == 1
     handler = root.handlers[0]
@@ -102,9 +102,9 @@ def test_configure_stdlib_logging_routes_through_structlog() -> None:
     assert isinstance(handler.formatter, ProcessorFormatter)
 
 
-def test_configure_stdlib_logging_suppresses_otel_exporters() -> None:
+def test_configure_logging_suppresses_otel_exporters() -> None:
     """OTEL exporter loggers should be set to ERROR to suppress retry noise."""
-    configure_stdlib_logging()
+    configure_logging()
     for name in (
         "opentelemetry.exporter.otlp.proto.grpc",
         "opentelemetry.sdk.trace.export",

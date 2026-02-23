@@ -1,12 +1,14 @@
 """FastAPI application entrypoint."""
 
 import glob
+import os
 import shutil
 import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import structlog
+import uvicorn
 from fastapi import FastAPI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
@@ -25,26 +27,13 @@ from gitlab_copilot_agent.project_mapping import ProjectMap
 from gitlab_copilot_agent.redis_state import create_dedup, create_lock, create_result_store
 from gitlab_copilot_agent.task_executor import LocalTaskExecutor, TaskExecutor
 from gitlab_copilot_agent.telemetry import (
-    add_trace_context,
-    configure_stdlib_logging,
-    emit_to_otel_logs,
+    configure_logging,
     init_telemetry,
     shutdown_telemetry,
 )
 from gitlab_copilot_agent.webhook import router as webhook_router
 
-structlog.configure(
-    processors=[
-        structlog.contextvars.merge_contextvars,
-        structlog.stdlib.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        add_trace_context,  # type: ignore[list-item]
-        emit_to_otel_logs,  # type: ignore[list-item]
-        structlog.processors.format_exc_info,
-        structlog.dev.ConsoleRenderer(),
-    ],
-)
-configure_stdlib_logging()
+configure_logging()
 
 log = structlog.get_logger()
 
@@ -169,3 +158,9 @@ async def health() -> dict[str, object]:
             "watermark": gl_poller._watermark,
         }
     return result
+
+
+if __name__ == "__main__":
+    host = os.environ.get("HOST", "0.0.0.0")  # noqa: S104
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run("gitlab_copilot_agent.main:app", host=host, port=port, log_config=None)
