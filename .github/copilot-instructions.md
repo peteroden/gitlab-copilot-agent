@@ -58,6 +58,16 @@ Yolo agents: document assumptions in commit messages and PR descriptions.
 - Pin all dependency versions.
 - Fail fast — surface errors immediately with clear messages.
 
+## Hard Rules
+
+These are non-negotiable. Violating any of these is a session failure.
+
+1. **NEVER merge PRs.** Create the PR, then stop. The user reviews and merges all PRs. No exceptions, no "it's a small change", no "CI passed so it's safe."
+2. **Run the full CI-equivalent locally before every commit.** If the project has a `make lint`, `make test`, or equivalent — run it. Do not run individual tools (e.g., just the formatter) as a shortcut. If CI fails on something you could have caught locally, that's a bug in your process.
+3. **Cross-model code review before every PR push.** No exceptions for "small" PRs. Invoke the `code-review` skill or a code-review agent using a different model than the one that wrote the code.
+4. **Verify your git branch before every commit.** Run `git branch --show-current` before committing, especially after rebase, stash, or checkout operations. Committing to the wrong branch wastes time and risks force-push accidents.
+5. **Smoke-test behavioral changes.** Unit tests passing is necessary but not sufficient. If you change logging, telemetry, startup behavior, or error handling — verify with a quick manual run if possible. Don't let the user discover broken behavior live.
+
 ## PR Requirements
 
 - ≤200 diff lines (additions + deletions). If larger, split into stacked PRs.
