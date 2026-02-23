@@ -95,8 +95,8 @@ async def test_orchestrator_cleans_up_on_error(
     """Verify cleanup runs even when review raises."""
     mock_gl_instance = mock_client_class.return_value
     mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
+    mock_gl_instance.get_mr_details = AsyncMock(side_effect=RuntimeError("SDK crashed"))
     mock_gl_instance.cleanup = AsyncMock()
-    mock_run_review.side_effect = RuntimeError("SDK crashed")
 
     payload = MergeRequestWebhookPayload(
         object_kind="merge_request",

@@ -182,8 +182,8 @@ async def test_review_pipeline_records_error_metrics(
     """handle_review records reviews_total with outcome=error on failure."""
     mock_gl = mock_client_class.return_value
     mock_gl.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
+    mock_gl.get_mr_details = AsyncMock(side_effect=RuntimeError("boom"))
     mock_gl.cleanup = AsyncMock()
-    mock_run_review.side_effect = RuntimeError("boom")
 
     mock_total = MagicMock()
     mock_duration = MagicMock()
