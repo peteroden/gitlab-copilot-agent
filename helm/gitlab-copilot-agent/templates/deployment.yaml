@@ -14,6 +14,8 @@ spec:
       labels:
         {{- include "app.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: controller
+      annotations:
+        deploy-timestamp: {{ now | date "20060102150405" | quote }}
     spec:
       serviceAccountName: {{ include "app.serviceAccountName" . }}
       {{- with .Values.hostAliases }}

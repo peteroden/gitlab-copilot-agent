@@ -26,17 +26,32 @@ _collector_reachable = False
 _log = structlog.get_logger()
 
 
-def configure_stdlib_logging() -> None:
-    """Route stdlib logging through structlog so all output is consistent.
+def configure_logging() -> None:
+    """Set up all logging: structlog processors and stdlib routing.
 
-    This makes OTEL SDK messages (and any other stdlib logger) flow through
-    structlog's processor chain, producing timestamped key=value output.
+    Call once at module load before any log output.
     """
     # Suppress gRPC C-core abseil noise (init warnings before absl::InitializeLog)
     os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 
+    renderer = structlog.dev.ConsoleRenderer()
+
+    # Structlog pipeline
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.stdlib.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            add_trace_context,  # type: ignore[list-item]
+            emit_to_otel_logs,  # type: ignore[list-item]
+            structlog.processors.format_exc_info,
+            renderer,
+        ],
+    )
+
+    # Route stdlib logging (uvicorn, OTEL SDK, etc.) through structlog
     formatter = structlog.stdlib.ProcessorFormatter(
-        processor=structlog.dev.ConsoleRenderer(),
+        processor=renderer,
         foreign_pre_chain=[
             structlog.stdlib.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
