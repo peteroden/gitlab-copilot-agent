@@ -209,6 +209,18 @@ Only used when `TASK_EXECUTOR=kubernetes`.
 - **Default**: `30`
 - **Description**: Polling interval in seconds
 
+### `GITLAB_POLL_LOOKBACK`
+- **Type**: `int`
+- **Required**: ❌ No
+- **Default**: `60`
+- **Description**: Minutes to look back on startup for recently created or updated MRs. The deduplication store prevents re-reviewing the same commit, so a generous lookback is safe.
+
+### `GITLAB_REVIEW_ON_PUSH`
+- **Type**: `bool`
+- **Required**: ❌ No
+- **Default**: `True`
+- **Description**: When `true` (default), the agent re-reviews an MR each time a new commit is pushed. When `false`, each MR is reviewed only once regardless of subsequent commits. Useful for reducing noise when developers iterate frequently on an MR.
+
 ---
 
 ## Jira Integration

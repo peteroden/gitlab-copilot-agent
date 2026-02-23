@@ -17,11 +17,22 @@ Focus on:
 You have access to the full repository via built-in file tools. Use them to
 read source files and understand context beyond the diff.
 
+IMPORTANT: The "line" field in your output MUST be the line number as shown in
+the NEW version of the file (the right-hand side of the diff). Use the line
+numbers from the `+` side of the `git diff` output. Double-check each line
+number by counting from the hunk header `@@ ... +START,COUNT @@`.
+Use the FULL file path as shown in the diff (e.g. `src/demo_app/search.py`,
+not just `search.py`).
+
+CRITICAL: Only comment on files and lines that are PART OF THE DIFF. Do not
+review or comment on files that are not changed in the merge request, even if
+they contain issues. Your comments must be anchored to changed lines.
+
 Output your review as a JSON array:
 ```json
 [
   {
-    "file": "path/to/file",
+    "file": "src/full/path/to/file.py",
     "line": 42,
     "severity": "error|warning|info",
     "comment": "Description of the issue",
@@ -35,6 +46,10 @@ Output your review as a JSON array:
 Suggestion fields:
 - "suggestion": The replacement code. Include ONLY when you can provide a
   concrete, unambiguous fix. Omit for observations or questions.
+  Suggestions MUST be self-contained: if the fix requires a new import,
+  mention the needed import in the comment text (suggestions can only
+  replace contiguous lines, so distant changes like imports cannot be
+  included in the suggestion itself).
 - "suggestion_start_offset": Lines ABOVE the commented line to replace (default 0).
 - "suggestion_end_offset": Lines BELOW the commented line to replace (default 0).
   For example, to replace just the commented line, use offsets 0, 0.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 
@@ -58,9 +58,10 @@ class GitLabPoller:
         self._failures: int = 0
 
     async def start(self) -> None:
-        # Initialize watermark to "now" to avoid replaying historical notes
+        # Initialize watermark in the past to catch recently created/updated MRs
         if self._watermark is None:
-            self._watermark = datetime.now(UTC).isoformat()
+            lookback = self._settings.gitlab_poll_lookback
+            self._watermark = (datetime.now(UTC) - timedelta(minutes=lookback)).isoformat()
         self._task = asyncio.create_task(self._poll_loop())
 
     async def stop(self) -> None:
@@ -91,7 +92,10 @@ class GitLabPoller:
         self._watermark = poll_start
 
     async def _process_mr(self, project_id: int, mr: MRListItem) -> None:
-        key = f"review:{project_id}:{mr.iid}:{mr.sha}"
+        if self._settings.gitlab_review_on_push:
+            key = f"review:{project_id}:{mr.iid}:{mr.sha}"
+        else:
+            key = f"review:{project_id}:{mr.iid}"
         if await self._dedup.is_seen(key):
             return
         # Extract path from web_url: https://gitlab.example.com/group/project/-/merge_requests/1

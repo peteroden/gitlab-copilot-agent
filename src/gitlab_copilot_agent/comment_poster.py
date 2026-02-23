@@ -80,7 +80,9 @@ async def post_review(
 
         # Precompute valid positions once for all comments
         valid_positions: set[tuple[str, int]] = set()
+        diff_files: set[str] = set()
         for change in changes:
+            diff_files.add(change.new_path)
             valid_positions |= _parse_hunk_lines(change.diff, change.new_path)
 
         for c in review.comments:
@@ -90,10 +92,15 @@ async def post_review(
                 end = c.suggestion_end_offset
                 body += f"\n\n```suggestion:-{start}+{end}\n{c.suggestion}\n```"
 
+            # Skip comments on files not in the diff entirely
+            if c.file not in diff_files:
+                log.info("Skipping comment on file not in diff: %s:%d", c.file, c.line)
+                continue
+
             # Validate position before attempting inline comment
             if not _is_valid_position(c.file, c.line, valid_positions):
                 log.warning(
-                    "Comment position not in diff, using fallback note for %s:%d",
+                    "Comment position not in diff hunk, using fallback note for %s:%d",
                     c.file,
                     c.line,
                 )
