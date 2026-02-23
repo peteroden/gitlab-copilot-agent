@@ -51,6 +51,13 @@ async def handle_review(
                 clone_dir=settings.clone_dir,
             )
 
+            mr_details = await gl_client.get_mr_details(project.id, mr.iid)
+
+            # Build diff text from MR changes so the LLM reviews only the diff
+            diff_text = "\n".join(
+                f"--- a/{c.old_path}\n+++ b/{c.new_path}\n{c.diff}" for c in mr_details.changes
+            )
+
             review_req = ReviewRequest(
                 title=mr.title,
                 description=mr.description,
@@ -59,7 +66,12 @@ async def handle_review(
             )
 
             raw_result = await run_review(
-                executor, settings, str(repo_path), project.git_http_url, review_req
+                executor,
+                settings,
+                str(repo_path),
+                project.git_http_url,
+                review_req,
+                diff_text=diff_text,
             )
             parsed = parse_review(raw_result.summary)
 
@@ -68,7 +80,6 @@ async def handle_review(
                 inline_comments=len(parsed.comments),
             )
 
-            mr_details = await gl_client.get_mr_details(project.id, mr.iid)
             gl = gitlab.Gitlab(settings.gitlab_url, private_token=settings.gitlab_token)
 
             await post_review(
