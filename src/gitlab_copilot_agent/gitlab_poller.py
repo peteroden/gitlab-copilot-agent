@@ -55,13 +55,17 @@ class GitLabPoller:
         self._interval: int = 30
         self._task: asyncio.Task[None] | None = None
         self._watermark: str | None = None
+        self._note_watermark: str | None = None
         self._failures: int = 0
 
     async def start(self) -> None:
-        # Initialize watermark in the past to catch recently created/updated MRs
+        # MR watermark looks back to catch recently created/updated MRs
         if self._watermark is None:
             lookback = self._settings.gitlab_poll_lookback
             self._watermark = (datetime.now(UTC) - timedelta(minutes=lookback)).isoformat()
+        # Note watermark starts at "now" to avoid replaying /copilot commands
+        if self._note_watermark is None:
+            self._note_watermark = datetime.now(UTC).isoformat()
         self._task = asyncio.create_task(self._poll_loop())
 
     async def stop(self) -> None:
@@ -90,6 +94,7 @@ class GitLabPoller:
                 await self._process_mr(pid, mr)
             await self._process_notes(pid, mrs)
         self._watermark = poll_start
+        self._note_watermark = poll_start
 
     async def _process_mr(self, project_id: int, mr: MRListItem) -> None:
         if self._settings.gitlab_review_on_push:
@@ -127,7 +132,7 @@ class GitLabPoller:
     async def _process_notes(self, project_id: int, mrs: list[MRListItem]) -> None:
         for mr in mrs:
             notes = await self._client.list_mr_notes(
-                project_id, mr.iid, created_after=self._watermark
+                project_id, mr.iid, created_after=self._note_watermark
             )
             for note in notes:
                 if note.system:
