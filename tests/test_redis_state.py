@@ -202,6 +202,61 @@ def test_create_dedup_redis_backend() -> None:
 # -- Config validation tests --
 
 
+async def test_dedup_is_seen_returns_false_on_connection_error() -> None:
+    """RedisDedup.is_seen returns False when Redis is unreachable."""
+    from unittest.mock import AsyncMock
+
+    from redis.exceptions import ConnectionError as RedisConnError
+
+    mock_client = AsyncMock()
+    mock_client.exists.side_effect = RedisConnError("Connection refused")
+    store = RedisDedup(mock_client)
+    assert not await store.is_seen(DEDUP_KEY)
+
+
+async def test_dedup_mark_seen_tolerates_connection_error() -> None:
+    """RedisDedup.mark_seen logs warning but does not raise on connection error."""
+    from unittest.mock import AsyncMock
+
+    from redis.exceptions import ConnectionError as RedisConnError
+
+    mock_client = AsyncMock()
+    mock_client.set.side_effect = RedisConnError("Connection refused")
+    store = RedisDedup(mock_client)
+    await store.mark_seen(DEDUP_KEY)  # Should not raise
+
+
+async def test_result_store_get_returns_none_on_connection_error() -> None:
+    """RedisResultStore.get returns None when Redis is unreachable."""
+    from unittest.mock import AsyncMock
+
+    from redis.exceptions import ConnectionError as RedisConnError
+
+    from gitlab_copilot_agent.redis_state import RedisResultStore
+
+    mock_client = AsyncMock()
+    mock_client.get.side_effect = RedisConnError("Connection refused")
+    store = RedisResultStore(mock_client)
+    assert await store.get("task:123") is None
+
+
+async def test_result_store_set_tolerates_connection_error() -> None:
+    """RedisResultStore.set logs warning but does not raise on connection error."""
+    from unittest.mock import AsyncMock
+
+    from redis.exceptions import ConnectionError as RedisConnError
+
+    from gitlab_copilot_agent.redis_state import RedisResultStore
+
+    mock_client = AsyncMock()
+    mock_client.set.side_effect = RedisConnError("Connection refused")
+    store = RedisResultStore(mock_client)
+    await store.set("task:123", "result")  # Should not raise
+
+
+# -- Config validation tests --
+
+
 def test_config_redis_requires_url() -> None:
     """STATE_BACKEND=redis without REDIS_URL raises ValidationError."""
     with pytest.raises(Exception, match="REDIS_URL"):
