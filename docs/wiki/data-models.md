@@ -336,6 +336,22 @@ See [configuration-reference.md](configuration-reference.md) for all fields.
 
 ---
 
+## Coding Pipeline Models (`coding_engine.py`)
+
+### `CodingAgentOutput`
+**Purpose**: Structured output expected from the coding agent's final message.
+
+**Config**: `strict=True`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `summary` | `str` | Brief description of changes made and test results |
+| `files_changed` | `list[str]` | Paths of files intentionally created, modified, or deleted (excludes generated artifacts like `__pycache__/`, `*.pyc`) |
+
+**Parsing**: Extracted from agent response via regex matching fenced JSON blocks (`` ```json ... ``` ``). If the agent doesn't include a valid JSON block, the session retries once with explicit format instructions.
+
+---
+
 ## Task Execution Models (`task_executor.py`, `review_engine.py`)
 
 ### `TaskParams`

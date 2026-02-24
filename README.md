@@ -231,6 +231,12 @@ The service supports two execution backends controlled by `TASK_EXECUTOR`:
 
 When using Kubernetes execution, the pod boundary provides process isolation (see [ADR-0003](docs/adr/0003-kubernetes-migration-plan.md)). Configure with `K8S_*` environment variables above.
 
+**Coding task reliability**:
+- Agent outputs structured JSON listing files intentionally changed (prevents accidental artifact commits)
+- In-session retry if agent doesn't return required format
+- Branch name collision detection appends `-2`, `-3`, etc. on retry
+- Stale completed K8s Jobs are automatically replaced on re-execution
+
 ## Troubleshooting
 
 ### Common Issues

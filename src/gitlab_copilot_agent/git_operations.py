@@ -101,6 +101,28 @@ async def git_create_branch(repo_path: Path, branch_name: str) -> None:
     await log.ainfo("branch_created", branch=branch_name, repo=str(repo_path))
 
 
+async def git_unique_branch(repo_path: Path, base_name: str) -> str:
+    """Create a branch with *base_name*, appending ``-2``, ``-3``, … on collision.
+
+    Uses ``git ls-remote --heads`` to check remote branches (works with shallow
+    clones).  Previous attempts are preserved for comparison.  Returns the
+    actual branch name used.
+    """
+    raw = await _run_git(repo_path, "ls-remote", "--heads", "origin")
+    remote_branches: set[str] = set()
+    for line in raw.splitlines():
+        ref = line.split("\t", 1)[-1] if "\t" in line else ""
+        remote_branches.add(ref.removeprefix("refs/heads/"))
+
+    candidate = base_name
+    attempt = 1
+    while candidate in remote_branches:
+        attempt += 1
+        candidate = f"{base_name}-{attempt}"
+    await git_create_branch(repo_path, candidate)
+    return candidate
+
+
 async def git_commit(
     repo_path: Path,
     message: str,
@@ -152,10 +174,31 @@ async def git_head_sha(repo_path: Path) -> str:
 
 
 async def git_diff_staged(repo_path: Path) -> str:
-    """Return staged diff including binary files. Caller must `git add` first."""
-    raw = await _run_git(repo_path, "diff", "--cached", "--binary")
-    # _run_git strips trailing whitespace; patches need a final newline
-    return f"{raw}\n" if raw else ""
+    """Return staged diff including binary files. Caller must `git add` first.
+
+    Unlike other git helpers this reads stdout **without stripping** so that
+    trailing context lines (blank lines rendered as a single space) are
+    preserved — ``git apply`` requires the hunk to be complete.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        "-C",
+        str(repo_path),
+        "diff",
+        "--cached",
+        "--binary",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_GIT_TIMEOUT)
+    except TimeoutError as e:
+        proc.kill()
+        await proc.wait()
+        raise RuntimeError("git diff --cached timed out") from e
+    if proc.returncode != 0:
+        raise RuntimeError(f"git diff --cached failed: {stderr.decode().strip()}")
+    return stdout.decode()
 
 
 _PATH_TRAVERSAL_RE = re.compile(r"(^|/)\.\.(/|$)")

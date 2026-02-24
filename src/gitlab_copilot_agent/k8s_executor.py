@@ -130,7 +130,14 @@ class KubernetesTaskExecutor:
         except Exception as exc:  # noqa: BLE001
             if getattr(exc, "status", None) != 409:
                 raise
-            log.info("job_already_exists", job_name=job_name)
+            # Stale completed job from a previous run — delete and recreate
+            status = await asyncio.to_thread(self._read_job_status, job_name)
+            if status in ("succeeded", "failed"):
+                log.info("stale_job_replaced", job_name=job_name, old_status=status)
+                await asyncio.to_thread(self._delete_job, job_name)
+                await asyncio.to_thread(self._create_job, job_name, task)
+            else:
+                log.info("job_already_running", job_name=job_name)
         return await self._wait_for_result(job_name, task)
 
     # -- k8s helpers (synchronous, called via to_thread) ------------------

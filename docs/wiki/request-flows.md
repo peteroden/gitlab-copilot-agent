@@ -290,7 +290,8 @@ sequenceDiagram
             CODING->>GIT: git_clone(clone_url, target_branch, token)
             GIT-->>CODING: repo_path: Path
             
-            CODING->>GIT: git_create_branch(repo_path, "agent/{issue-key}")
+            CODING->>GIT: git_unique_branch(repo_path, "agent/{issue-key}")
+            Note over GIT: Checks remote refs via git ls-remote<br/>Appends -2, -3 on collision
             
             CODING->>EXEC: execute(TaskParams: coding, Jira prompt)
             EXEC->>COP: run_copilot_session(repo_path, CODING_SYSTEM_PROMPT, jira_prompt)

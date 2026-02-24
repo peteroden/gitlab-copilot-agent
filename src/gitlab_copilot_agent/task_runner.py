@@ -10,7 +10,7 @@ from urllib.parse import ParseResult, urlparse
 
 import structlog
 
-from gitlab_copilot_agent.coding_engine import CODING_SYSTEM_PROMPT
+from gitlab_copilot_agent.coding_engine import CODING_SYSTEM_PROMPT, parse_agent_output
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.copilot_session import run_copilot_session
 from gitlab_copilot_agent.git_operations import (
@@ -28,6 +28,22 @@ ENV_BRANCH, ENV_TASK_PAYLOAD = "BRANCH", "TASK_PAYLOAD"
 ENV_REDIS_URL = "REDIS_URL"
 VALID_TASK_TYPES: frozenset[str] = frozenset({"review", "coding", "echo"})
 _RESULT_TTL = 3600  # 1 hour
+
+_RETRY_PROMPT = (
+    "Your response did not include the required JSON output block. "
+    "Please output ONLY a fenced JSON block with your summary and the "
+    "list of files you intentionally changed:\n\n"
+    "```json\n"
+    '{"summary": "Brief description of changes", "files_changed": ["path/to/file.py"]}\n'
+    "```"
+)
+
+
+def _coding_response_validator(response: str) -> str | None:
+    """Return a follow-up prompt if the coding response is missing structured output."""
+    if parse_agent_output(response) is not None:
+        return None
+    return _RETRY_PROMPT
 
 
 async def _store_result(task_id: str, result: str) -> None:
@@ -86,8 +102,21 @@ def _validate_repo_url(repo_url: str, gitlab_url: str) -> None:
 async def _build_coding_result(
     repo_path: Path, summary: str, bound_log: structlog.stdlib.BoundLogger
 ) -> str:
-    """Stage files, capture diff and base SHA, return serialized CodingResult."""
-    await _run_git_simple(repo_path, "add", "-A")
+    """Stage explicitly listed files, capture diff and base SHA."""
+    agent_output = parse_agent_output(summary)
+    if not agent_output or not agent_output.files_changed:
+        raise RuntimeError(
+            "Agent did not return a valid files_changed list. "
+            "Cannot determine which files to commit."
+        )
+
+    for f in agent_output.files_changed:
+        if ".." in f.split("/"):
+            await bound_log.awarning("path_traversal_skipped", file=f)
+            continue
+        await _run_git_simple(repo_path, "add", "--", f)
+    await bound_log.ainfo("staged_explicit_files", count=len(agent_output.files_changed))
+
     base_sha = await git_head_sha(repo_path)
     patch = await git_diff_staged(repo_path)
     if len(patch.encode()) > MAX_PATCH_SIZE:
@@ -96,7 +125,7 @@ async def _build_coding_result(
     return json.dumps(
         {
             "result_type": "coding",
-            "summary": summary,
+            "summary": agent_output.summary,
             "patch": patch,
             "base_sha": base_sha,
         }
@@ -151,9 +180,18 @@ async def run_task() -> int:
         repo_url, branch, settings.gitlab_token, clone_dir=settings.clone_dir
     )
     try:
+        if task_type == "coding":
+            from gitlab_copilot_agent.coding_engine import ensure_gitignore
+
+            ensure_gitignore(str(repo_path))
         prompt = REVIEW_SYSTEM_PROMPT if task_type == "review" else CODING_SYSTEM_PROMPT
         summary = await run_copilot_session(
-            settings, str(repo_path), prompt, user_prompt, task_type=task_type
+            settings,
+            str(repo_path),
+            prompt,
+            user_prompt,
+            task_type=task_type,
+            validate_response=_coding_response_validator if task_type == "coding" else None,
         )
         if task_type == "coding":
             result = await _build_coding_result(repo_path, summary, bound_log)

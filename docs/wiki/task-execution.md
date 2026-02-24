@@ -101,10 +101,12 @@ class LocalTaskExecutor:
 - Job failed: read pod logs, delete Job, raise RuntimeError with logs
 - Timeout: delete Job, raise TimeoutError
 
-**Idempotency**:
+**Idempotency & Stale Job Replacement**:
 - Check Redis before creating Job
-- If Job already exists (409 Conflict), continue to polling
-- Allows multiple executors to dispatch same task safely
+- If Job already exists (409 Conflict):
+  - **Completed** (succeeded/failed): delete stale Job and create a fresh one
+  - **Running**: reuse the existing Job (continue to polling)
+- Prevents stale completed Jobs from previous runs returning empty results on retry
 
 ---
 
@@ -118,10 +120,13 @@ class LocalTaskExecutor:
 3. Validate REPO_URL authority matches GITLAB_URL (host + port)
 4. Clone repo via `git_clone()`
 5. Call `run_copilot_session()` with appropriate system prompt
-6. **For coding tasks**: Capture diff after Copilot session:
-   - `git add -A` (stage all changes)
+   - **For coding tasks**: includes `validate_response` callback that checks for required JSON output; retries once in-session if missing
+6. **For coding tasks**: Parse structured output and stage files:
+   - Parse agent response as `CodingAgentOutput` (Pydantic model with `summary` and `files_changed`)
+   - Stage only explicitly listed files via `git add -- <file>` (not `git add -A`)
+   - Skip files that don't exist on disk (logged as warnings)
    - `git rev-parse HEAD` (capture base_sha)
-   - `git diff --cached --binary` (capture unified diff)
+   - `git diff --cached --binary --no-pager` (capture unified diff, preserving trailing whitespace)
    - Validate patch size ≤ `MAX_PATCH_SIZE` (10 MB, from `git_operations.py`)
    - Validate patch for path traversal (`../`)
    - Build `CodingResult(summary, patch, base_sha)`

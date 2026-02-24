@@ -309,6 +309,7 @@ kubernetes = [
 dev = [
     { name = "fakeredis" },
     { name = "lupa" },
+    { name = "mypy" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -345,6 +346,7 @@ provides-extras = ["kubernetes", "dev"]
 dev = [
     { name = "fakeredis", specifier = ">=2.34.0" },
     { name = "lupa", specifier = ">=2.6" },
+    { name = "mypy", specifier = ">=1.14.1" },
     { name = "pytest-asyncio", specifier = ">=0.25.3" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "ruff", specifier = ">=0.9.6" },
