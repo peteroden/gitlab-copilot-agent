@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from gitlab_copilot_agent.git_operations import (
+    TransientCloneError,
+    _is_transient_clone_error,
     _sanitize_url_for_log,
     _validate_clone_url,
     git_commit,
@@ -331,3 +333,139 @@ class TestSanitizeUrlForLog:
     def test_handles_invalid_url(self) -> None:
         """Invalid URLs should return placeholder."""
         assert _sanitize_url_for_log("not-a-url") == "<invalid-url>"
+
+
+class TestIsTransientCloneError:
+    """Test transient vs permanent error classification."""
+
+    def test_403_is_transient(self) -> None:
+        assert _is_transient_clone_error("The requested URL returned error: 403")
+
+    def test_500_is_transient(self) -> None:
+        assert _is_transient_clone_error("The requested URL returned error: 503")
+
+    def test_connection_refused_is_transient(self) -> None:
+        assert _is_transient_clone_error("fatal: unable to access: connection refused")
+
+    def test_timed_out_is_transient(self) -> None:
+        assert _is_transient_clone_error("fatal: timed out")
+
+    def test_could_not_resolve_host_is_transient(self) -> None:
+        assert _is_transient_clone_error("Could not resolve host: gitlab.example.com")
+
+    def test_401_is_permanent(self) -> None:
+        assert not _is_transient_clone_error("The requested URL returned error: 401")
+
+    def test_404_is_permanent(self) -> None:
+        assert not _is_transient_clone_error("The requested URL returned error: 404")
+
+    def test_repo_not_found_is_permanent(self) -> None:
+        assert not _is_transient_clone_error("repository not found")
+
+    def test_unrecognized_error_is_not_transient(self) -> None:
+        assert not _is_transient_clone_error("some unknown error")
+
+
+class TestGitCloneRetry:
+    """Test retry behavior in git_clone."""
+
+    async def test_retries_on_transient_error_then_succeeds(self) -> None:
+        """Clone should retry on transient errors and succeed when resolved."""
+        from unittest.mock import AsyncMock, patch
+
+        from gitlab_copilot_agent.git_operations import git_clone
+
+        call_count = 0
+
+        async def mock_exec(*args: str, **kwargs: object) -> AsyncMock:
+            nonlocal call_count
+            call_count += 1
+            proc = AsyncMock()
+            if call_count == 1:
+                proc.communicate.return_value = (
+                    b"",
+                    b"The requested URL returned error: 403",
+                )
+                proc.returncode = 128
+            else:
+                dest = Path(args[-1])
+                if dest.exists():
+                    (dest / ".git").mkdir(parents=True, exist_ok=True)
+                proc.communicate.return_value = (b"", b"")
+                proc.returncode = 0
+            return proc
+
+        with (
+            patch("asyncio.create_subprocess_exec", side_effect=mock_exec),
+            patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        ):
+            result = await git_clone(
+                "https://gitlab.com/test/repo.git",
+                "main",
+                GITLAB_TOKEN,
+                max_retries=3,
+                backoff_base=0.01,
+            )
+            try:
+                assert result.exists()
+                assert call_count == 2
+                mock_sleep.assert_awaited_once()
+            finally:
+                import shutil
+
+                shutil.rmtree(result, ignore_errors=True)
+
+    async def test_exhausts_retries_raises_transient_clone_error(self) -> None:
+        """After max retries, TransientCloneError should be raised."""
+        from unittest.mock import AsyncMock, patch
+
+        from gitlab_copilot_agent.git_operations import git_clone
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (
+            b"",
+            b"The requested URL returned error: 503",
+        )
+        mock_proc.returncode = 128
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+            patch("asyncio.sleep", new_callable=AsyncMock),
+        ):
+            with pytest.raises(TransientCloneError) as exc_info:
+                await git_clone(
+                    "https://gitlab.com/test/repo.git",
+                    "main",
+                    GITLAB_TOKEN,
+                    max_retries=2,
+                    backoff_base=0.01,
+                )
+            assert exc_info.value.attempts == 2
+            assert "2 attempts" in str(exc_info.value)
+
+    async def test_permanent_error_fails_immediately(self) -> None:
+        """Non-transient errors should fail immediately without retry."""
+        from unittest.mock import AsyncMock, patch
+
+        from gitlab_copilot_agent.git_operations import git_clone
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (
+            b"",
+            b"repository not found",
+        )
+        mock_proc.returncode = 128
+
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=mock_proc),
+            patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+        ):
+            with pytest.raises(RuntimeError, match="repository not found"):
+                await git_clone(
+                    "https://gitlab.com/test/repo.git",
+                    "main",
+                    GITLAB_TOKEN,
+                    max_retries=3,
+                    backoff_base=0.01,
+                )
+            mock_sleep.assert_not_awaited()
