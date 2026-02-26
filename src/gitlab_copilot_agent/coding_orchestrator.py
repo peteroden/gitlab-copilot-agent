@@ -14,6 +14,7 @@ from gitlab_copilot_agent.coding_workflow import apply_coding_result
 from gitlab_copilot_agent.concurrency import DistributedLock, MemoryLock, ProcessedIssueTracker
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.git_operations import (
+    TransientCloneError,
     git_clone,
     git_commit,
     git_push,
@@ -94,6 +95,8 @@ class CodingOrchestrator:
                         project_mapping.target_branch,
                         self._settings.gitlab_token,
                         clone_dir=self._settings.clone_dir,
+                        max_retries=self._settings.git_clone_max_retries,
+                        backoff_base=self._settings.git_clone_backoff_base,
                     )
                     branch = await git_unique_branch(repo_path, f"agent/{issue.key.lower()}")
                     result = await run_coding_task(
@@ -144,6 +147,20 @@ class CodingOrchestrator:
                     await bound_log.ainfo("coding_task_complete", mr_iid=mr_iid)
                     self._tracker.mark(issue.key)
                     outcome = "success"
+                except TransientCloneError as exc:
+                    await bound_log.aexception("coding_task_transient_failure")
+                    outcome = "transient_failure"
+                    try:
+                        await self._jira.add_comment(
+                            issue.key,
+                            f"⚠️ Git clone failed after {exc.attempts} attempts "
+                            f"due to a transient error.\n\n"
+                            f"**Error:** {exc}\n\n"
+                            f"This issue has been left in '{in_prog}'. "
+                            f"The agent will retry on the next poll cycle.",
+                        )
+                    except Exception:
+                        await bound_log.aexception("failure_comment_post_failed")
                 except Exception:
                     await bound_log.aexception("coding_task_failed")
                     try:

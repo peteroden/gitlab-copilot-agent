@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
+from gitlab_copilot_agent.git_operations import TransientCloneError
 from gitlab_copilot_agent.jira_models import JiraIssue, JiraIssueFields, JiraStatus
 from gitlab_copilot_agent.project_mapping import GitLabProjectMapping
 from gitlab_copilot_agent.task_executor import CodingResult
@@ -162,3 +163,32 @@ async def test_coding_failure_comment_posting_failure_is_logged(
         await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
 
     mock_jira.add_comment.assert_awaited_once()
+
+
+@patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
+async def test_transient_clone_failure_posts_detailed_comment(
+    mock_clone: AsyncMock,
+) -> None:
+    """Transient clone failure posts detailed comment and does not mark as processed."""
+    mock_clone.side_effect = TransientCloneError(
+        "git clone failed for https://gitlab.example.com/group/project.git after 3 attempts: "
+        "The requested URL returned error: 403",
+        attempts=3,
+    )
+    mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
+    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+
+    # Should NOT re-raise — transient failures are handled gracefully
+    await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
+
+    # Verify Jira comment content
+    assert mock_jira.add_comment.await_count == 1
+    call_args = mock_jira.add_comment.call_args
+    assert call_args[0][0] == "PROJ-42"
+    comment = call_args[0][1]
+    assert "3 attempts" in comment
+    assert "transient error" in comment
+    assert "retry on the next poll cycle" in comment
+
+    # Issue should NOT be marked as processed — allow retry on next poll
+    assert not orch._tracker.is_processed("PROJ-42")
