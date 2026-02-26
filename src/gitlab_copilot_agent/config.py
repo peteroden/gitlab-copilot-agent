@@ -97,6 +97,16 @@ class Settings(BaseSettings):
         default=None, description="Redis URL (required when STATE_BACKEND=redis)"
     )
 
+    # Git clone retry
+    git_clone_max_retries: int = Field(
+        default=3, ge=1, description="Max retry attempts for transient git clone failures"
+    )
+    git_clone_backoff_base: float = Field(
+        default=5.0,
+        ge=0,
+        description="Base interval in seconds for exponential backoff on clone retry",
+    )
+
     # Project allowlist (optional — scopes webhook and poller)
     gitlab_projects: str | None = Field(
         default=None,
