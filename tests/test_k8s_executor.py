@@ -634,6 +634,56 @@ class TestAlreadyExists:
         assert result.summary == CACHED_RESULT
         batch_v1.delete_namespaced_job.assert_not_called()
 
+    async def test_409_stale_job_retry_on_slow_deletion(
+        self,
+        batch_v1: MagicMock,
+        fake_result_store: Any,
+    ) -> None:
+        """409 persists after delete while K8s finalizes; retry with backoff succeeds."""
+        api_exc = sys.modules["kubernetes.client"].ApiException(status=409, reason="AlreadyExists")
+        create_call = 0
+
+        def create_side_effect(*_a: object, **_kw: object) -> None:
+            nonlocal create_call
+            create_call += 1
+            if create_call <= 3:
+                # Calls 1 (initial), 2 (first retry), 3 (second retry): still 409
+                raise api_exc
+            # Call 4: K8s finalized deletion, create succeeds
+            fake_result_store._data[TASK_ID] = CACHED_RESULT
+
+        batch_v1.create_namespaced_job.side_effect = create_side_effect
+
+        stale_job = MagicMock()
+        stale_job.status.succeeded = 1
+        stale_job.status.failed = None
+        batch_v1.read_namespaced_job.return_value = stale_job
+
+        executor = _make_executor(result_store=fake_result_store)
+        result = await executor.execute(_make_task())
+
+        assert result.summary == CACHED_RESULT
+        assert create_call == 4  # 1 initial + 3 retries (2 fail, 1 succeeds)
+        batch_v1.delete_namespaced_job.assert_called_once()
+
+    async def test_409_stale_job_retry_exhausted(
+        self,
+        batch_v1: MagicMock,
+        fake_result_store: Any,
+    ) -> None:
+        """All retries exhausted raises the 409."""
+        api_exc = sys.modules["kubernetes.client"].ApiException(status=409, reason="AlreadyExists")
+        batch_v1.create_namespaced_job.side_effect = api_exc
+
+        stale_job = MagicMock()
+        stale_job.status.succeeded = 1
+        stale_job.status.failed = None
+        batch_v1.read_namespaced_job.return_value = stale_job
+
+        executor = _make_executor(result_store=fake_result_store)
+        with pytest.raises(Exception, match="AlreadyExists"):
+            await executor.execute(_make_task())
+
 
 class TestFailedJobCleanup:
     async def test_failed_job_is_deleted(
