@@ -522,9 +522,9 @@ kubectl logs <pod-name> -n default
 ```
 
 **Common Causes**:
-- Missing env vars (GITLAB_TOKEN, GITHUB_TOKEN)
+- Missing env vars — the agent prints a human-friendly summary listing each missing variable and its description
 - Invalid REDIS_URL
-- Pydantic validation error
+- Invalid configuration combination (e.g., no LLM auth, no ingestion path)
 
 ---
 

@@ -61,7 +61,7 @@ def test_settings_missing_required_raises() -> None:
 
 def test_settings_requires_auth() -> None:
     """github_token or copilot_provider_type must be set."""
-    with pytest.raises(ValidationError, match="GITHUB_TOKEN or COPILOT_PROVIDER_TYPE"):
+    with pytest.raises(ValidationError, match="No LLM authentication configured"):
         Settings(
             gitlab_url=GITLAB_URL,
             gitlab_token=GITLAB_TOKEN,
@@ -129,3 +129,39 @@ def test_local_executor_does_not_require_k8s_names() -> None:
     settings = make_settings(task_executor="local")
     assert settings.k8s_secret_name is None
     assert settings.k8s_configmap_name is None
+
+
+class TestPrintConfigErrors:
+    """Tests for the human-friendly startup error formatter."""
+
+    def test_missing_field_shown_with_env_var_and_description(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from gitlab_copilot_agent.main import _print_config_errors
+
+        try:
+            Settings()
+        except ValidationError as exc:
+            _print_config_errors(exc)
+
+        err = capsys.readouterr().err
+        assert "GITLAB_URL" in err
+        assert "GITLAB_TOKEN" in err
+        assert "configuration-reference.md" in err
+
+    def test_value_error_shown_as_message(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from gitlab_copilot_agent.main import _print_config_errors
+
+        try:
+            Settings(
+                gitlab_url=GITLAB_URL,
+                gitlab_token=GITLAB_TOKEN,
+                gitlab_webhook_secret=WEBHOOK_SECRET,
+            )
+        except ValidationError as exc:
+            _print_config_errors(exc)
+
+        err = capsys.readouterr().err
+        assert "No LLM authentication configured" in err
+        assert "GITHUB_TOKEN" in err
+        assert "COPILOT_PROVIDER_TYPE" in err

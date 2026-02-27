@@ -3,6 +3,7 @@
 import glob
 import os
 import shutil
+import sys
 import tempfile
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -11,6 +12,7 @@ import structlog
 import uvicorn
 from fastapi import FastAPI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from pydantic import ValidationError
 
 from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
 from gitlab_copilot_agent.concurrency import (
@@ -58,10 +60,34 @@ def _create_executor(backend: str, settings: Settings | None = None) -> TaskExec
     return LocalTaskExecutor()
 
 
+def _print_config_errors(exc: ValidationError) -> None:
+    """Print a human-friendly summary of configuration errors to stderr."""
+    lines = ["\n❌ Configuration error:\n"]
+    for error in exc.errors():
+        loc = ".".join(str(p) for p in error["loc"]) if error["loc"] else "?"
+        env_var = loc.upper()
+        desc = ""
+        if loc in Settings.model_fields:
+            desc = Settings.model_fields[loc].description or ""
+        err_type = error["type"]
+        if err_type == "missing":
+            lines.append(f"  {env_var:<40} (missing) {desc}")
+        elif err_type == "value_error":
+            lines.append(f"  {error['msg']}")
+        else:
+            lines.append(f"  {env_var:<40} {error['msg']}")
+    lines.append("\nSee docs/wiki/configuration-reference.md for all settings.\n")
+    print("\n".join(lines), file=sys.stderr)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_telemetry()
-    settings = Settings()
+    try:
+        settings = Settings()
+    except ValidationError as exc:
+        _print_config_errors(exc)
+        sys.exit(1)
     _cleanup_stale_repos(settings.clone_dir)
     app.state.settings = settings
     app.state.executor = _create_executor(settings.task_executor, settings)
