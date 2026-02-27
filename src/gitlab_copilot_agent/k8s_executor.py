@@ -88,7 +88,7 @@ def _build_env(task: TaskParams, settings: Settings) -> list[object]:
     # Required keys are always mounted; optional keys only when the setting is non-empty.
     _secret_vars: list[tuple[str, str | None]] = [
         ("GITLAB_TOKEN", settings.gitlab_token),  # always required
-        ("GITLAB_WEBHOOK_SECRET", settings.gitlab_webhook_secret),  # always required
+        ("GITLAB_WEBHOOK_SECRET", settings.gitlab_webhook_secret),  # optional — skipped when None
         ("GITHUB_TOKEN", settings.github_token),
         ("COPILOT_PROVIDER_API_KEY", settings.copilot_provider_api_key),
     ]

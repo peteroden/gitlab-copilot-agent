@@ -18,7 +18,9 @@ router = APIRouter()
 HANDLED_ACTIONS = frozenset({"open", "update"})
 
 
-def _validate_webhook_token(received: str | None, expected: str) -> None:
+def _validate_webhook_token(received: str | None, expected: str | None) -> None:
+    if expected is None:
+        raise HTTPException(status_code=403, detail="Webhook secret not configured")
     if received is None or not hmac.compare_digest(received, expected):
         raise HTTPException(status_code=401, detail="Invalid webhook token")
 
