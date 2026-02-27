@@ -208,7 +208,12 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _check_auth(self) -> "Settings":
         if not self.github_token and not self.copilot_provider_type:
-            raise ValueError("Either GITHUB_TOKEN or COPILOT_PROVIDER_TYPE must be set")
+            raise ValueError(
+                "No LLM authentication configured. Set one of:\n"
+                "  • GITHUB_TOKEN — GitHub PAT for Copilot LLM access\n"
+                "  • COPILOT_PROVIDER_TYPE + COPILOT_PROVIDER_BASE_URL + "
+                "COPILOT_PROVIDER_API_KEY — BYOK (Azure OpenAI, OpenAI direct)"
+            )
         if self.state_backend == "redis" and not self.redis_url:
             raise ValueError("REDIS_URL is required when STATE_BACKEND=redis")
         if self.gitlab_poll:
