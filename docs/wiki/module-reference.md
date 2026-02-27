@@ -251,8 +251,9 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Key Classes**:
 - `KubernetesTaskExecutor`: Implements `TaskExecutor`
-  - `execute(task: TaskParams) -> TaskResult`: Create Job, poll for completion, retrieve result from Redis. On 409 (Job exists): replaces stale completed Jobs, reuses running ones.
+  - `execute(task: TaskParams) -> TaskResult`: Create Job, poll for completion, retrieve result from Redis. On 409 (Job exists): replaces stale completed Jobs (with retry backoff), reuses running ones.
   - `_create_job(job_name: str, task: TaskParams) -> None`: Create K8s Job with task env vars and optional hostAliases
+  - `_create_job_with_retry(job_name: str, task: TaskParams) -> None`: Retry `_create_job` with exponential backoff on 409 (handles async K8s deletion)
   - `_read_job_status(job_name: str) -> str`: Return "succeeded", "failed", or "running"
   - `_read_job_annotation(job_name: str) -> str | None`: Read result annotation
   - `_read_pod_logs(job_name: str) -> str`: Read pod logs for failed Job
