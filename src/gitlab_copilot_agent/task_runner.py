@@ -10,7 +10,7 @@ from urllib.parse import ParseResult, urlparse
 
 import structlog
 
-from gitlab_copilot_agent.coding_engine import CODING_SYSTEM_PROMPT, parse_agent_output
+from gitlab_copilot_agent.coding_engine import parse_agent_output
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.copilot_session import run_copilot_session
 from gitlab_copilot_agent.git_operations import (
@@ -20,7 +20,7 @@ from gitlab_copilot_agent.git_operations import (
     git_head_sha,
 )
 from gitlab_copilot_agent.git_operations import _sanitize_url_for_log as _sanitize_url
-from gitlab_copilot_agent.review_engine import SYSTEM_PROMPT as REVIEW_SYSTEM_PROMPT
+from gitlab_copilot_agent.prompt_defaults import get_prompt
 
 log = structlog.get_logger()
 ENV_TASK_TYPE, ENV_TASK_ID, ENV_REPO_URL = "TASK_TYPE", "TASK_ID", "REPO_URL"
@@ -184,7 +184,7 @@ async def run_task() -> int:
             from gitlab_copilot_agent.coding_engine import ensure_gitignore
 
             ensure_gitignore(str(repo_path))
-        prompt = REVIEW_SYSTEM_PROMPT if task_type == "review" else CODING_SYSTEM_PROMPT
+        prompt = get_prompt(settings, "review" if task_type == "review" else "coding")
         summary = await run_copilot_session(
             settings,
             str(repo_path),

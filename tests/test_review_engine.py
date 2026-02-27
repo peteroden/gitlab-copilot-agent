@@ -2,8 +2,8 @@
 
 from unittest.mock import AsyncMock
 
+from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.review_engine import (
-    SYSTEM_PROMPT,
     ReviewRequest,
     build_review_prompt,
     run_review,
@@ -48,6 +48,6 @@ async def test_run_review_delegates_to_executor() -> None:
 
     assert result == "Review result"
     task = mock_executor.execute.call_args[0][0]
-    assert task.system_prompt == SYSTEM_PROMPT
+    assert task.system_prompt == get_prompt(settings, "review")
     assert "Add feature X" in task.user_prompt
     assert "git diff main...feature/x" in task.user_prompt

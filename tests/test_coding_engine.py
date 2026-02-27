@@ -9,6 +9,7 @@ from gitlab_copilot_agent.coding_engine import (
     ensure_gitignore,
     run_coding_task,
 )
+from gitlab_copilot_agent.prompt_defaults import get_prompt
 from tests.conftest import EXAMPLE_CLONE_URL, make_settings
 
 
@@ -61,6 +62,6 @@ async def test_run_coding_task_delegates_to_executor(tmp_path: Path) -> None:
 
     assert result == "Changes completed"
     task = mock_executor.execute.call_args[0][0]
-    assert task.system_prompt == CODING_SYSTEM_PROMPT
+    assert task.system_prompt == get_prompt(make_settings(), "coding")
     assert "PROJ-789" in task.user_prompt
     assert (tmp_path / ".gitignore").exists()
