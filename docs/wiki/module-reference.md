@@ -116,7 +116,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `build_mr_coding_prompt(instruction: str, mr_title: str, source_branch: str, target_branch: str) -> str`: Build user prompt
 - `handle_copilot_comment(settings: Settings, payload: NoteWebhookPayload, executor: TaskExecutor, repo_locks: DistributedLock | None) -> None`: Clone → code → apply result → commit → push → comment
 
-**Internal Imports**: `config`, `models`, `task_executor`, `gitlab_client`, `git_operations`, `coding_engine`, `coding_workflow`, `concurrency`, `telemetry`
+**Internal Imports**: `config`, `models`, `task_executor`, `gitlab_client`, `git_operations`, `coding_workflow`, `prompt_defaults`, `concurrency`, `telemetry`
 
 **Depended On By**: `webhook.py`, `gitlab_poller.py`
 
@@ -150,7 +150,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Purpose**: Review prompt construction and execution.
 
 **Key Constants**:
-- `SYSTEM_PROMPT: str`: System prompt for code review agent (instructs JSON output format with suggestions)
+- `REVIEW_SYSTEM_PROMPT: str`: Review system prompt (re-exported from `prompt_defaults.DEFAULT_REVIEW_PROMPT`)
 
 **Key Models**:
 - `ReviewRequest`: MR metadata (title, description, source/target branches)
@@ -159,7 +159,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `build_review_prompt(req: ReviewRequest) -> str`: Build user prompt instructing agent to run `git diff`
 - `run_review(executor: TaskExecutor, settings: Settings, repo_path: str, repo_url: str, review_request: ReviewRequest) -> str`: Execute review task and return raw response
 
-**Internal Imports**: `config`, `task_executor`
+**Internal Imports**: `config`, `prompt_defaults`, `task_executor`
 
 **Depended On By**: `orchestrator.py`
 
@@ -169,7 +169,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Purpose**: Coding task prompt construction and .gitignore hygiene.
 
 **Key Constants**:
-- `CODING_SYSTEM_PROMPT: str`: System prompt for coding agent (workflow, guidelines, output format)
+- `CODING_SYSTEM_PROMPT: str`: Coding system prompt (re-exported from `prompt_defaults.DEFAULT_CODING_PROMPT`)
 - `_PYTHON_GITIGNORE_PATTERNS: list[str]`: Standard Python ignore patterns
 
 **Key Functions**:
@@ -178,9 +178,29 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `run_coding_task(...) -> str`: Ensure .gitignore, execute coding task
 - `parse_agent_output(text: str) -> CodingAgentOutput`: Extract structured JSON from agent response (Pydantic-validated `summary` + `files_changed`)
 
-**Internal Imports**: `config`, `task_executor`
+**Internal Imports**: `config`, `prompt_defaults`, `task_executor`
 
-**Depended On By**: `coding_orchestrator.py`, `mr_comment_handler.py`
+**Depended On By**: `coding_orchestrator.py`
+
+---
+
+### `prompt_defaults.py`
+**Purpose**: Canonical source of built-in system prompts and configurable prompt resolution.
+
+**Key Types**:
+- `PromptType = Literal["coding", "review", "mr_comment"]`
+
+**Key Constants**:
+- `DEFAULT_CODING_PROMPT: str`: Built-in coding system prompt
+- `DEFAULT_REVIEW_PROMPT: str`: Built-in review system prompt
+- `DEFAULT_MR_COMMENT_PROMPT: str`: Built-in MR comment system prompt (same as coding)
+
+**Key Functions**:
+- `get_prompt(settings: Settings, prompt_type: PromptType) -> str`: Resolve the effective system prompt for a given type. Resolution: global base (`SYSTEM_PROMPT` + suffix) → type-specific override or built-in default + suffix → combined result.
+
+**Internal Imports**: `config` (TYPE_CHECKING only)
+
+**Depended On By**: `review_engine.py`, `coding_engine.py`, `mr_comment_handler.py`, `task_runner.py`
 
 ---
 
@@ -299,7 +319,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `_parse_task_payload(raw: str) -> dict[str, str]`: Parse JSON payload
 - `_validate_repo_url(repo_url: str, gitlab_url: str) -> None`: Ensure repo_url authority matches gitlab_url
 
-**Internal Imports**: `config`, `copilot_session`, `git_operations`, `coding_engine`, `review_engine`, `task_executor`
+**Internal Imports**: `config`, `copilot_session`, `git_operations`, `coding_engine`, `prompt_defaults`, `task_executor`
 
 **Depended On By**: K8s Job container command
 
@@ -653,6 +673,7 @@ All use `extra="ignore"` config.
 | `coding_orchestrator.py` | Processing | 142 | Jira task implementation |
 | `review_engine.py` | Processing | 91 | Review prompt construction |
 | `coding_engine.py` | Processing | 109 | Coding prompt construction |
+| `prompt_defaults.py` | Processing | 164 | System prompt defaults & resolution |
 | `task_executor.py` | Execution | 53 | TaskExecutor protocol |
 | `k8s_executor.py` | Execution | 219 | K8s Job orchestration |
 | `copilot_session.py` | Execution | 143 | SDK wrapper |
@@ -673,4 +694,4 @@ All use `extra="ignore"` config.
 | `metrics.py` | Telemetry | 52 | Metrics instruments |
 | `process_sandbox.py` | Utils | 20 | CLI path resolution |
 
-**Total: 29 modules, ~3,270 lines of code**
+**Total: 30 modules, ~3,430 lines of code**

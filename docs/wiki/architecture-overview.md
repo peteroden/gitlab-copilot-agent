@@ -91,6 +91,7 @@ graph TB
 - **`coding_workflow.py`**: Shared helper for applying coding results (diff passback from k8s pods)
 - **`review_engine.py`**: Review prompt construction and execution
 - **`coding_engine.py`**: Coding task prompt construction and .gitignore hygiene
+- **`prompt_defaults.py`**: Canonical system prompt defaults and `get_prompt()` resolver
 
 ### 3. Execution Layer
 - **`task_executor.py`**: TaskExecutor protocol + LocalTaskExecutor

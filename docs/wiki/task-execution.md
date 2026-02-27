@@ -119,7 +119,7 @@ class LocalTaskExecutor:
 2. Validate TASK_TYPE ∈ {"review", "coding", "echo"}
 3. Validate REPO_URL authority matches GITLAB_URL (host + port)
 4. Clone repo via `git_clone()`
-5. Call `run_copilot_session()` with appropriate system prompt
+5. Call `run_copilot_session()` with `get_prompt(settings, type)` system prompt
    - **For coding tasks**: includes `validate_response` callback that checks for required JSON output; retries once in-session if missing
 6. **For coding tasks**: Parse structured output and stage files:
    - Parse agent response as `CodingAgentOutput` (Pydantic model with `summary` and `files_changed`)
@@ -150,7 +150,7 @@ $ python -m gitlab_copilot_agent.task_runner
 
 ### System Prompts
 
-#### REVIEW_SYSTEM_PROMPT (`review_engine.py`)
+#### DEFAULT_REVIEW_PROMPT (`prompt_defaults.py`)
 ```
 You are a senior code reviewer. Review the merge request diff thoroughly.
 
@@ -160,13 +160,15 @@ Focus on:
 - Performance issues
 - Code clarity and maintainability
 
-You have access to the full repository via built-in file tools. Use them to
-read source files and understand context beyond the diff.
+IMPORTANT: The "line" field in your output MUST be the line number as shown in
+the NEW version of the file (the right-hand side of the diff).
+
+CRITICAL: Only comment on files and lines that are PART OF THE DIFF.
 
 Output your review as a JSON array:
 [
   {
-    "file": "path/to/file",
+    "file": "src/full/path/to/file.py",
     "line": 42,
     "severity": "error|warning|info",
     "comment": "Description of the issue",
@@ -180,7 +182,7 @@ After the JSON array, add a brief summary paragraph.
 If the code looks good, return an empty array and say so in the summary.
 ```
 
-#### CODING_SYSTEM_PROMPT (`coding_engine.py`)
+#### DEFAULT_CODING_PROMPT (`prompt_defaults.py`)
 ```
 You are a senior software engineer implementing requested changes.
 
@@ -188,21 +190,48 @@ Your workflow:
 1. Read the task description carefully to understand requirements
 2. Explore the existing codebase using file tools to understand structure and conventions
 3. Make minimal, focused changes that address the task
-4. Follow existing project conventions (code style, patterns, architecture)
-5. Ensure .gitignore exists with standard ignores for the project language
-6. Run the project linter if available and fix any issues
-7. Run tests if available to verify your changes
-8. Output a summary of changes made
+4. Follow existing project conventions for code style, formatting, and architecture
+5. However, always prioritize security and quality standards defined in repo config
+   files (AGENTS.md, skills, instructions appended to the system prompt) over patterns
+   observed in existing code — if existing code contains anti-patterns such as SQL
+   injection, hardcoded secrets, or bare exception handling, do NOT replicate them
+6. Ensure .gitignore exists with standard ignores for the project language
+7. Run the project linter if available and fix any issues
+8. Run tests if available to verify your changes
+9. Output your results in the EXACT format described below
 
 Guidelines:
 - Make the smallest change that solves the problem
 - Preserve existing behavior unless explicitly required to change it
 - Follow SOLID principles and existing patterns
-- Add tests for new functionality
+- Add tests for new functionality — test behavior, not error message strings
 - Update documentation if needed
 - Do not introduce new dependencies without strong justification
 - Never commit generated or cached files (__pycache__, .pyc, node_modules, etc.)
+
+Output format:
+Your final message MUST end with a JSON block listing the files you changed.
 ```
+
+#### Prompt Configurability
+
+All system prompts are resolved at runtime via `get_prompt(settings, type)` from `prompt_defaults.py`. The built-in defaults shown above can be overridden or extended using environment variables:
+
+| Env Var | Effect |
+|---------|--------|
+| `SYSTEM_PROMPT` | Global base prompt prepended to **all** persona prompts |
+| `SYSTEM_PROMPT_SUFFIX` | Appended to global base prompt |
+| `CODING_SYSTEM_PROMPT` | Full override of the coding system prompt |
+| `CODING_SYSTEM_PROMPT_SUFFIX` | Appended to the default coding system prompt |
+| `REVIEW_SYSTEM_PROMPT` | Full override of the review system prompt |
+| `REVIEW_SYSTEM_PROMPT_SUFFIX` | Appended to the default review system prompt |
+| `MR_COMMENT_SYSTEM_PROMPT` | Full override of the MR comment system prompt |
+| `MR_COMMENT_SYSTEM_PROMPT_SUFFIX` | Appended to the default MR comment system prompt |
+
+**Resolution order** (per persona):
+1. **Global base**: `SYSTEM_PROMPT` + `SYSTEM_PROMPT_SUFFIX` (both optional, concatenated)
+2. **Type-specific**: `<TYPE>_SYSTEM_PROMPT` override **or** built-in default + `<TYPE>_SYSTEM_PROMPT_SUFFIX`
+3. **Result**: global base + type-specific (global omitted when empty)
 
 ---
 
