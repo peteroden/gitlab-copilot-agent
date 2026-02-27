@@ -2,13 +2,23 @@
 
 ## Purpose
 
-Project-specific security patterns for the Blog Post API. Reference these when reviewing authentication, database queries, and input handling.
+Project-specific security patterns for the Blog Post API. Reference these when writing or reviewing authentication, database queries, and input handling.
 
 ## Use When
 
-- Reviewing database query implementations
-- Checking authentication/authorization code
+- Writing or reviewing database query implementations
+- Writing or reviewing authentication/authorization code
 - Validating input handling and error responses
+
+## When Writing Code
+
+Follow these patterns in all new and modified code:
+
+- **Database queries**: Always use parameterized statements with `?` placeholders. Never use f-strings, `.format()`, or `+` concatenation in SQL.
+- **Secrets**: Load from `os.environ` or FastAPI `Settings`. Never assign literal credential values in source code.
+- **Authentication**: Use FastAPI `Security()` with `APIKeyHeader` or `HTTPBearer` for auth dependencies, and `Depends()` for general DI. Never accept API keys as query parameters.
+- **Error responses**: Return structured `HTTPException` with safe `detail` messages. Never expose internal errors, stack traces, or SQL details to clients.
+- **Logging**: Use the `logging` module. Never log credentials, API keys, or full exception tracebacks at INFO level or below.
 
 ## Database Queries
 
