@@ -53,6 +53,32 @@ class Settings(BaseSettings):
         default=None, description="GitHub token for Copilot auth (if not using BYOK)"
     )
 
+    # System prompts (override or append to built-in defaults)
+    system_prompt: str | None = Field(
+        default=None, description="Global base prompt prepended to all persona prompts"
+    )
+    system_prompt_suffix: str | None = Field(
+        default=None, description="Appended to global base prompt"
+    )
+    coding_system_prompt: str | None = Field(
+        default=None, description="Full override of coding system prompt"
+    )
+    coding_system_prompt_suffix: str | None = Field(
+        default=None, description="Appended to default coding system prompt"
+    )
+    review_system_prompt: str | None = Field(
+        default=None, description="Full override of review system prompt"
+    )
+    review_system_prompt_suffix: str | None = Field(
+        default=None, description="Appended to default review system prompt"
+    )
+    mr_comment_system_prompt: str | None = Field(
+        default=None, description="Full override of MR comment system prompt"
+    )
+    mr_comment_system_prompt_suffix: str | None = Field(
+        default=None, description="Appended to default MR comment system prompt"
+    )
+
     # Server
     host: str = Field(default="0.0.0.0", description="Server bind host")
     port: int = Field(default=8000, description="Server bind port")

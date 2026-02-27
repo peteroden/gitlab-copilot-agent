@@ -8,13 +8,13 @@ from pathlib import Path
 
 import structlog
 
-from gitlab_copilot_agent.coding_engine import CODING_SYSTEM_PROMPT
 from gitlab_copilot_agent.coding_workflow import apply_coding_result
 from gitlab_copilot_agent.concurrency import DistributedLock
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.git_operations import git_clone, git_commit, git_push
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.models import NoteWebhookPayload
+from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams
 from gitlab_copilot_agent.telemetry import get_tracer
 
@@ -84,7 +84,7 @@ async def handle_copilot_comment(
                     task_id=f"mr-{project.id}-{mr.iid}",
                     repo_url=project.git_http_url,
                     branch=mr.source_branch,
-                    system_prompt=CODING_SYSTEM_PROMPT,
+                    system_prompt=get_prompt(settings, "mr_comment"),
                     user_prompt=build_mr_coding_prompt(
                         instruction, mr.title, mr.source_branch, mr.target_branch
                     ),

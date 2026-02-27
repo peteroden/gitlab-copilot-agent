@@ -124,7 +124,7 @@ sequenceDiagram
     GIT-->>MRC: repo_path: Path
     
     MRC->>EXEC: execute(TaskParams: coding, prompt=instruction)
-    EXEC->>COP: run_copilot_session(repo_path, CODING_SYSTEM_PROMPT, instruction)
+    EXEC->>COP: run_copilot_session(repo_path, get_prompt(settings, "coding"), instruction)
     COP-->>EXEC: result: TaskResult
     EXEC-->>MRC: result: TaskResult
     
@@ -294,7 +294,7 @@ sequenceDiagram
             Note over GIT: Checks remote refs via git ls-remote<br/>Appends -2, -3 on collision
             
             CODING->>EXEC: execute(TaskParams: coding, Jira prompt)
-            EXEC->>COP: run_copilot_session(repo_path, CODING_SYSTEM_PROMPT, jira_prompt)
+            EXEC->>COP: run_copilot_session(repo_path, get_prompt(settings, "coding"), jira_prompt)
             COP-->>EXEC: result: TaskResult
             EXEC-->>CODING: result: TaskResult
             

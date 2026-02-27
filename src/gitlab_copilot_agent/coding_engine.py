@@ -1,4 +1,4 @@
-"""Shared coding system prompt, Jira-specific prompt builder, and git hygiene."""
+"""Jira-specific prompt builder, coding agent output parsing, and git hygiene."""
 
 from __future__ import annotations
 
@@ -8,7 +8,11 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from gitlab_copilot_agent.config import Settings
+from gitlab_copilot_agent.prompt_defaults import DEFAULT_CODING_PROMPT, get_prompt
 from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams, TaskResult
+
+# Re-export for backward compatibility (canonical source is prompt_defaults)
+CODING_SYSTEM_PROMPT = DEFAULT_CODING_PROMPT
 
 
 class CodingAgentOutput(BaseModel):
@@ -47,46 +51,6 @@ _PYTHON_GITIGNORE_PATTERNS = [
     "build/",
     ".venv/",
 ]
-
-CODING_SYSTEM_PROMPT = """\
-You are a senior software engineer implementing requested changes.
-
-Your workflow:
-1. Read the task description carefully to understand requirements
-2. Explore the existing codebase using file tools to understand structure and conventions
-3. Make minimal, focused changes that address the task
-4. Follow existing project conventions (code style, patterns, architecture)
-5. Ensure .gitignore exists with standard ignores for the project language
-6. Run the project linter if available and fix any issues
-7. Run tests if available to verify your changes
-8. Output your results in the EXACT format described below
-
-Guidelines:
-- Make the smallest change that solves the problem
-- Preserve existing behavior unless explicitly required to change it
-- Follow SOLID principles and existing patterns
-- Add tests for new functionality — test behavior, not error message strings
-- Update documentation if needed
-- Do not introduce new dependencies without strong justification
-- Never commit generated or cached files (__pycache__, .pyc, node_modules, etc.)
-
-Output format:
-Your final message MUST end with a JSON block listing the files you changed.
-Only list source files you intentionally created, modified, or deleted — never include
-generated files like __pycache__/, *.pyc, *.egg-info, node_modules/, etc.
-Include deleted files so the deletion is captured in the patch.
-
-```json
-{
-  "summary": "Brief description of changes made and test results",
-  "files_changed": [
-    "src/app/main.py",
-    "src/app/utils.py",
-    "tests/test_main.py"
-  ]
-}
-```
-"""
 
 
 def build_jira_coding_prompt(issue_key: str, summary: str, description: str | None) -> str:
@@ -141,7 +105,7 @@ async def run_coding_task(
         task_id=issue_key,
         repo_url=repo_url,
         branch=branch,
-        system_prompt=CODING_SYSTEM_PROMPT,
+        system_prompt=get_prompt(settings, "coding"),
         user_prompt=build_jira_coding_prompt(issue_key, summary, description),
         settings=settings,
         repo_path=repo_path,
