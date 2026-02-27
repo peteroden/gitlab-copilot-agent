@@ -38,7 +38,10 @@ class Settings(BaseSettings):
     # GitLab
     gitlab_url: str = Field(description="GitLab instance URL")
     gitlab_token: str = Field(description="GitLab API private token")
-    gitlab_webhook_secret: str = Field(description="Secret for validating webhook payloads")
+    gitlab_webhook_secret: str | None = Field(
+        default=None,
+        description="Secret for validating webhook payloads (required for webhook mode)",
+    )
 
     # Copilot / LLM
     copilot_model: str = Field(default="gpt-4", description="Model to use for reviews")
@@ -212,6 +215,11 @@ class Settings(BaseSettings):
             entries = [e.strip() for e in (self.gitlab_projects or "").split(",") if e.strip()]
             if not entries:
                 raise ValueError("GITLAB_PROJECTS is required when GITLAB_POLL=true")
+        if not self.gitlab_poll and not self.gitlab_webhook_secret:
+            raise ValueError(
+                "GITLAB_WEBHOOK_SECRET is required when GITLAB_POLL is not enabled. "
+                "Set GITLAB_WEBHOOK_SECRET for webhook mode or GITLAB_POLL=true for polling mode."
+            )
         return self
 
     @model_validator(mode="after")

@@ -304,7 +304,7 @@ graph TB
 **Credentials Passed** (via K8s Secret refs when `k8s_secret_name` configured):
 - `GITLAB_TOKEN` (clone only — pod has no push access)
 - `GITHUB_TOKEN` (or `COPILOT_PROVIDER_API_KEY`) via `secretKeyRef`
-- `GITLAB_WEBHOOK_SECRET` (required by Settings validation, not used in pod)
+- `GITLAB_WEBHOOK_SECRET` (optional — only when webhooks are used, not used in pod)
 
 Only the 3 tokens needed by Job pods are mounted — other secrets (`JIRA_*`, etc.) are excluded to limit blast radius.
 

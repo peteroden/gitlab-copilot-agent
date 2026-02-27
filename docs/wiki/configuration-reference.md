@@ -20,11 +20,11 @@ Every environment variable in `config.py`, grouped by category.
 - **Validation**: Non-empty string
 
 ### `GITLAB_WEBHOOK_SECRET`
-- **Type**: `str`
-- **Required**: ✅ Yes
-- **Description**: Secret for validating webhook payloads via HMAC (X-Gitlab-Token header)
-- **Security**: Must match GitLab webhook configuration
-- **Validation**: Non-empty string
+- **Type**: `str | None`
+- **Required**: ❌ No (required for webhook mode, optional for polling-only)
+- **Default**: `None`
+- **Description**: Secret for validating webhook payloads via HMAC (X-Gitlab-Token header). When not set, the `/webhook` endpoint returns 403.
+- **Security**: Must match GitLab webhook configuration when using webhooks
 
 ---
 
@@ -474,7 +474,7 @@ Helm `values.yaml` maps to env vars via `configmap.yaml` and `secret.yaml`:
 |------------|---------|---------|
 | `gitlab.url` | `GITLAB_URL` | ❌ |
 | `gitlab.token` | `GITLAB_TOKEN` | ✅ |
-| `gitlab.webhookSecret` | `GITLAB_WEBHOOK_SECRET` | ✅ |
+| `gitlab.webhookSecret` | `GITLAB_WEBHOOK_SECRET` | ✅ (optional for polling-only) |
 | `github.token` | `GITHUB_TOKEN` | ✅ |
 | `controller.copilotProviderType` | `COPILOT_PROVIDER_TYPE` | ❌ |
 | `controller.copilotProviderBaseUrl` | `COPILOT_PROVIDER_BASE_URL` | ❌ |

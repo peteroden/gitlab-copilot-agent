@@ -7,7 +7,7 @@ import pytest
 from httpx import AsyncClient
 
 from gitlab_copilot_agent.main import app
-from tests.conftest import HEADERS, MR_IID, MR_PAYLOAD, PROJECT_ID, make_mr_payload
+from tests.conftest import HEADERS, MR_IID, MR_PAYLOAD, PROJECT_ID, make_mr_payload, make_settings
 
 NON_ALLOWED_PROJECT_ID = 999
 
@@ -17,6 +17,16 @@ async def test_webhook_rejects_bad_token(client: AsyncClient, token: str | None)
     headers = {"X-Gitlab-Token": token} if token else {}
     resp = await client.post("/webhook", json=MR_PAYLOAD, headers=headers)
     assert resp.status_code == 401
+
+
+async def test_webhook_returns_403_when_secret_not_configured(client: AsyncClient) -> None:
+    """Polling-only mode: no webhook secret configured → 403."""
+    app.state.settings = make_settings(
+        gitlab_webhook_secret=None, gitlab_poll=True, gitlab_projects="group/project"
+    )
+    resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+    assert resp.status_code == 403
+    assert "not configured" in resp.json()["detail"]
 
 
 async def test_webhook_ignores_non_mr_event(client: AsyncClient) -> None:

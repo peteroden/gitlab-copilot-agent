@@ -30,6 +30,20 @@ def test_settings_loads_required_env_vars(monkeypatch: pytest.MonkeyPatch) -> No
     assert settings.gitlab_webhook_secret == WEBHOOK_SECRET
 
 
+def test_settings_loads_without_webhook_secret() -> None:
+    """Webhook secret is optional for polling-only mode."""
+    settings = make_settings(
+        gitlab_webhook_secret=None, gitlab_poll=True, gitlab_projects="group/project"
+    )
+    assert settings.gitlab_webhook_secret is None
+
+
+def test_settings_rejects_no_ingestion_path() -> None:
+    """Must have at least one event path: webhook secret or polling."""
+    with pytest.raises(ValidationError, match="GITLAB_WEBHOOK_SECRET is required"):
+        make_settings(gitlab_webhook_secret=None)
+
+
 def test_settings_defaults() -> None:
     """Verify optional fields have correct defaults (without requiring env vars)."""
     settings = make_settings()

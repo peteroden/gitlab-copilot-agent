@@ -34,7 +34,7 @@ telemetry:
 jobRunner: { image: "", cpuLimit: "1", memoryLimit: 1Gi, timeout: 600 }
 service: { type: ClusterIP }
 serviceAccount: { create: true, name: "" }
-gitlab: { url: "", token: "", webhookSecret: "" }
+gitlab: { url: "", token: "", webhookSecret: "" }  # webhookSecret is optional for polling-only mode
 github: { token: "" }
 jira:
   url: ""

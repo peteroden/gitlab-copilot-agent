@@ -120,7 +120,7 @@ jobRunner:
 gitlab:
   url: ""                  # GITLAB_URL
   token: ""                # GITLAB_TOKEN (secret)
-  webhookSecret: ""        # GITLAB_WEBHOOK_SECRET (secret)
+  webhookSecret: ""        # GITLAB_WEBHOOK_SECRET (secret, optional for polling-only)
 
 github:
   token: ""                # GITHUB_TOKEN (secret)
@@ -213,7 +213,7 @@ cp .env.k3d.example .env.k3d
 ```bash
 GITLAB_URL=https://gitlab.example.com
 GITLAB_TOKEN=glpat-xxxxx
-GITLAB_WEBHOOK_SECRET=my-secret
+GITLAB_WEBHOOK_SECRET=my-secret  # optional for polling-only mode
 GITHUB_TOKEN=ghp_xxxxx
 COPILOT_PROVIDER_TYPE=
 COPILOT_PROVIDER_BASE_URL=
@@ -479,14 +479,14 @@ kubectl get hpa -n default
 
 **Fields**:
 - `GITLAB_TOKEN`
-- `GITLAB_WEBHOOK_SECRET`
+- `GITLAB_WEBHOOK_SECRET` (if webhook mode enabled)
 - `GITHUB_TOKEN`
 - `COPILOT_PROVIDER_API_KEY` (if BYOK)
 - `JIRA_API_TOKEN` (if Jira enabled)
 - `REDIS_PASSWORD` (auto-generated if not set via `redis.password`)
 - `REDIS_URL` (auto-generated with password embedded)
 
-**Job Pod Credentials**: When the K8s executor is used, Job pods receive sensitive env vars (`GITLAB_TOKEN`, `GITHUB_TOKEN`, `COPILOT_PROVIDER_API_KEY`, `GITLAB_WEBHOOK_SECRET`) via `secretKeyRef` pointing to this Secret — not as plaintext. Only the tokens needed by Job pods are mounted; other secrets (Jira, etc.) are excluded.
+**Job Pod Credentials**: When the K8s executor is used, Job pods receive sensitive env vars (`GITLAB_TOKEN`, `GITHUB_TOKEN`, `COPILOT_PROVIDER_API_KEY`, and `GITLAB_WEBHOOK_SECRET` if set) via `secretKeyRef` pointing to this Secret — not as plaintext. Only the tokens needed by Job pods are mounted; other secrets (Jira, etc.) are excluded.
 
 **Base64 Encoding**: Handled automatically by Helm.
 
