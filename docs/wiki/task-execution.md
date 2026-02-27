@@ -104,7 +104,7 @@ class LocalTaskExecutor:
 **Idempotency & Stale Job Replacement**:
 - Check Redis before creating Job
 - If Job already exists (409 Conflict):
-  - **Completed** (succeeded/failed): delete stale Job and create a fresh one
+  - **Completed** (succeeded/failed): delete stale Job and recreate with exponential backoff retry (up to 5 attempts, 0.1s doubling) to handle async K8s deletion
   - **Running**: reuse the existing Job (continue to polling)
 - Prevents stale completed Jobs from previous runs returning empty results on retry
 

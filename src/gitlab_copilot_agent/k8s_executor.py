@@ -23,6 +23,8 @@ log = structlog.get_logger()
 _JOB_POLL_INTERVAL = 2  # seconds between status checks
 _TTL_AFTER_FINISHED = 300
 _ANNOTATION_KEY = "results.copilot-agent/summary"
+_STALE_JOB_RETRY_MAX = 5
+_STALE_JOB_RETRY_BASE_DELAY = 0.1  # seconds; doubles each attempt
 
 
 def _sanitize_job_name(task_type: str, task_id: str) -> str:
@@ -135,10 +137,29 @@ class KubernetesTaskExecutor:
             if status in ("succeeded", "failed"):
                 log.info("stale_job_replaced", job_name=job_name, old_status=status)
                 await asyncio.to_thread(self._delete_job, job_name)
-                await asyncio.to_thread(self._create_job, job_name, task)
+                await self._create_job_with_retry(job_name, task)
             else:
                 log.info("job_already_running", job_name=job_name)
         return await self._wait_for_result(job_name, task)
+
+    async def _create_job_with_retry(self, job_name: str, task: TaskParams) -> None:
+        """Retry _create_job with exponential backoff while K8s finalizes deletion."""
+        delay = _STALE_JOB_RETRY_BASE_DELAY
+        for attempt in range(1, _STALE_JOB_RETRY_MAX + 1):
+            try:
+                await asyncio.to_thread(self._create_job, job_name, task)
+                return
+            except Exception as exc:  # noqa: BLE001
+                if getattr(exc, "status", None) != 409 or attempt == _STALE_JOB_RETRY_MAX:
+                    raise
+                log.info(
+                    "stale_job_retry",
+                    job_name=job_name,
+                    attempt=attempt,
+                    delay=delay,
+                )
+                await asyncio.sleep(delay)
+                delay *= 2
 
     # -- k8s helpers (synchronous, called via to_thread) ------------------
 
