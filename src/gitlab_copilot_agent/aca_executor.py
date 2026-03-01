@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 _JOB_POLL_INTERVAL = 5  # seconds; ACA API is slower than k8s, use longer interval
+_EXECUTION_LOCK_TTL = 900  # sentinel TTL to prevent duplicate executions
+_EXECUTION_LOCK_PREFIX = "aca_exec:"
 
 
 def _build_env_overrides(task: TaskParams) -> list[dict[str, str]]:
@@ -69,7 +71,17 @@ class ContainerAppsTaskExecutor:
         if cached is not None:
             return _parse_result(cached, task.task_type)
 
+        # Idempotency: check if another worker already started this task.
+        # Unlike k8s Jobs (deterministic names + 409 conflict), ACA Jobs
+        # always create new executions, so we use a Redis sentinel.
+        lock_key = f"{_EXECUTION_LOCK_PREFIX}{task.task_id}"
+        existing = await self._store.get(lock_key)
+        if existing is not None:
+            log.info("aca_execution_already_started", task_id=task.task_id)
+            return await self._wait_for_result(existing, task)
+
         execution_name = await asyncio.to_thread(self._start_execution, task)
+        await self._store.set(lock_key, execution_name, ttl=_EXECUTION_LOCK_TTL)
         return await self._wait_for_result(execution_name, task)
 
     def _create_client(self) -> object:
