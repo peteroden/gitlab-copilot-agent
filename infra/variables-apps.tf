@@ -33,3 +33,40 @@ variable "redis_capacity" {
   type        = number
   default     = 0
 }
+
+# --- Container Apps ---
+
+variable "controller_image" {
+  description = "Container image for the controller"
+  type        = string
+}
+
+variable "controller_min_replicas" {
+  description = "Minimum replicas for the controller (0 = scale to zero)"
+  type        = number
+  default     = 0
+}
+
+variable "controller_max_replicas" {
+  description = "Maximum replicas for the controller"
+  type        = number
+  default     = 1
+}
+
+# --- GitLab / Copilot ---
+
+variable "gitlab_url" {
+  description = "GitLab instance URL"
+  type        = string
+}
+
+variable "gitlab_projects" {
+  description = "Comma-separated GitLab project paths or IDs to scope poller"
+  type        = string
+}
+
+variable "copilot_model" {
+  description = "LLM model name for Copilot sessions"
+  type        = string
+  default     = "gpt-4"
+}

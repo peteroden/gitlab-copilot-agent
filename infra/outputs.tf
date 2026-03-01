@@ -13,6 +13,11 @@ output "acr_login_server" {
   value       = azurerm_container_registry.main.login_server
 }
 
+output "controller_fqdn" {
+  description = "FQDN of the controller Container App"
+  value       = azurerm_container_app.controller.latest_revision_fqdn
+}
+
 output "redis_hostname" {
   description = "Azure Cache for Redis hostname"
   value       = azurerm_redis_cache.main.hostname
