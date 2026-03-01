@@ -146,8 +146,11 @@ def create_webhook(
 
 def load_template(template_dir: Path) -> dict[str, str]:
     """Load all files from a template directory into a dict of path→content."""
+    skip_dirs = {"__pycache__", ".git"}
     files: dict[str, str] = {}
     for file_path in sorted(template_dir.rglob("*")):
+        if any(part in skip_dirs for part in file_path.parts):
+            continue
         if file_path.is_file() and not file_path.name.startswith(".DS_Store"):
             relative = file_path.relative_to(template_dir).as_posix()
             files[relative] = file_path.read_text()
