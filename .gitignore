@@ -14,3 +14,11 @@ build/
 .coverage
 .env.k3d
 demo.env
+
+# Terraform (S2: state must never be committed)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
