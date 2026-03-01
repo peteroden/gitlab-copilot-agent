@@ -57,6 +57,14 @@ def _create_executor(backend: str, settings: Settings | None = None) -> TaskExec
 
         store = create_result_store("redis", settings.redis_url)
         return KubernetesTaskExecutor(settings=settings, result_store=store)
+    if backend == "container_apps":
+        if settings is None or not settings.redis_url:
+            msg = "Settings with redis_url required for container_apps executor"
+            raise ValueError(msg)
+        from gitlab_copilot_agent.aca_executor import ContainerAppsTaskExecutor
+
+        store = create_result_store("redis", settings.redis_url)
+        return ContainerAppsTaskExecutor(settings=settings, result_store=store)
     return LocalTaskExecutor()
 
 
