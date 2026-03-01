@@ -137,3 +137,74 @@ resource "azurerm_container_app" "controller" {
 
   tags = var.tags
 }
+
+# --- Task Runner Container Apps Job ---
+
+resource "azurerm_container_app_job" "task_runner" {
+  name                         = "job-task-runner"
+  location                     = azurerm_resource_group.main.location
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  resource_group_name          = azurerm_resource_group.main.name
+  replica_timeout_in_seconds   = var.job_timeout
+
+  manual_trigger_config {
+    parallelism              = 1
+    replica_completion_count = 1
+  }
+
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.job.id]
+  }
+
+  registry {
+    server   = azurerm_container_registry.main.login_server
+    identity = azurerm_user_assigned_identity.job.id
+  }
+
+  template {
+    container {
+      name    = "task"
+      image   = var.job_image
+      cpu     = var.job_cpu
+      memory  = var.job_memory
+      command = [".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]
+
+      env {
+        name  = "GITLAB_URL"
+        value = var.gitlab_url
+      }
+      env {
+        name  = "COPILOT_MODEL"
+        value = var.copilot_model
+      }
+
+      # S1: Secrets via Key Vault references
+      dynamic "env" {
+        for_each = local.kv_secrets
+        content {
+          name        = upper(replace(env.key, "-", "_"))
+          secret_name = env.key
+        }
+      }
+    }
+  }
+
+  dynamic "secret" {
+    for_each = local.kv_secrets
+    content {
+      name                = secret.key
+      key_vault_secret_id = "${azurerm_key_vault.main.vault_uri}secrets/${secret.value}"
+      identity            = azurerm_user_assigned_identity.job.id
+    }
+  }
+
+  tags = var.tags
+}
+
+# Controller: permission to start job executions via ARM API
+resource "azurerm_role_assignment" "controller_job_start" {
+  scope                = azurerm_container_app_job.task_runner.id
+  role_definition_name = "Contributor"
+  principal_id         = azurerm_user_assigned_identity.controller.principal_id
+}

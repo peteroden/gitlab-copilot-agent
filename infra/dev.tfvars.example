@@ -1,3 +1,11 @@
 subscription_id     = "00000000-0000-0000-0000-000000000000"
 resource_group_name = "rg-copilot-dev"
 location            = "eastus2"
+
+# Container images (update after ACR build)
+controller_image = "acrrg-copilot-dev.azurecr.io/controller:latest"
+job_image        = "acrrg-copilot-dev.azurecr.io/task-runner:latest"
+
+# GitLab
+gitlab_url      = "https://gitlab.example.com"
+gitlab_projects = "group/project1,group/project2"

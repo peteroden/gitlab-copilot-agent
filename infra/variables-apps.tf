@@ -41,6 +41,29 @@ variable "controller_image" {
   type        = string
 }
 
+variable "job_image" {
+  description = "Container image for the task runner job"
+  type        = string
+}
+
+variable "job_cpu" {
+  description = "CPU cores for job executions"
+  type        = number
+  default     = 1.0
+}
+
+variable "job_memory" {
+  description = "Memory (Gi) for job executions"
+  type        = string
+  default     = "2Gi"
+}
+
+variable "job_timeout" {
+  description = "Job execution timeout in seconds"
+  type        = number
+  default     = 600
+}
+
 variable "controller_min_replicas" {
   description = "Minimum replicas for the controller (0 = scale to zero)"
   type        = number
