@@ -189,10 +189,12 @@ class GitLabClient:
 
         def _list() -> list[MRListItem]:
             project = self._gl.projects.get(project_id)
-            kwargs: dict[str, object] = {"state": state, "get_all": True}
             if updated_after is not None:
-                kwargs["updated_after"] = updated_after
-            mrs = project.mergerequests.list(**kwargs)
+                mrs = project.mergerequests.list(
+                    state=state, get_all=True, updated_after=updated_after
+                )
+            else:
+                mrs = project.mergerequests.list(state=state, get_all=True)
             return [MRListItem.model_validate(mr.attributes) for mr in mrs]
 
         return await asyncio.to_thread(_list)
@@ -205,10 +207,10 @@ class GitLabClient:
         def _list() -> list[NoteListItem]:
             project = self._gl.projects.get(project_id)
             mr = project.mergerequests.get(mr_iid)
-            kwargs: dict[str, object] = {"get_all": True}
             if created_after is not None:
-                kwargs["created_after"] = created_after
-            notes = mr.notes.list(**kwargs)
+                notes = mr.notes.list(get_all=True, created_after=created_after)
+            else:
+                notes = mr.notes.list(get_all=True)
             return [NoteListItem.model_validate(n.attributes) for n in notes]
 
         return await asyncio.to_thread(_list)
