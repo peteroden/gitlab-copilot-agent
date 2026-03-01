@@ -131,6 +131,45 @@ def test_local_executor_does_not_require_k8s_names() -> None:
     assert settings.k8s_configmap_name is None
 
 
+# -- Azure Container Apps executor config tests --
+
+ACA_SUBSCRIPTION_ID = "00000000-0000-0000-0000-000000000000"
+ACA_RESOURCE_GROUP = "rg-test"
+ACA_JOB_NAME = "copilot-job"
+ACA_REDIS_URL = "rediss://test-redis.redis.cache.windows.net:6380"
+
+
+def test_aca_executor_requires_azure_settings() -> None:
+    """task_executor=container_apps fails without required Azure settings."""
+    with pytest.raises(ValidationError, match="ACA_SUBSCRIPTION_ID"):
+        make_settings(task_executor="container_apps", redis_url=ACA_REDIS_URL)
+
+
+def test_aca_executor_requires_redis_url() -> None:
+    """task_executor=container_apps requires REDIS_URL for result passback."""
+    with pytest.raises(ValidationError, match="REDIS_URL is required"):
+        make_settings(
+            task_executor="container_apps",
+            aca_subscription_id=ACA_SUBSCRIPTION_ID,
+            aca_resource_group=ACA_RESOURCE_GROUP,
+            aca_job_name=ACA_JOB_NAME,
+        )
+
+
+def test_aca_executor_accepts_valid_config() -> None:
+    """task_executor=container_apps succeeds with all required settings."""
+    settings = make_settings(
+        task_executor="container_apps",
+        aca_subscription_id=ACA_SUBSCRIPTION_ID,
+        aca_resource_group=ACA_RESOURCE_GROUP,
+        aca_job_name=ACA_JOB_NAME,
+        redis_url=ACA_REDIS_URL,
+        state_backend="redis",
+    )
+    assert settings.aca_subscription_id == ACA_SUBSCRIPTION_ID
+    assert settings.aca_job_timeout == 600
+
+
 class TestPrintConfigErrors:
     """Tests for the human-friendly startup error formatter."""
 
