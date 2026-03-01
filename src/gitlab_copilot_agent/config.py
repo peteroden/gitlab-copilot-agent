@@ -95,8 +95,9 @@ class Settings(BaseSettings):
     )
 
     # Task execution
-    task_executor: Literal["local", "kubernetes"] = Field(
-        default="local", description="Task executor backend: 'local' or 'k8s'"
+    task_executor: Literal["local", "kubernetes", "container_apps"] = Field(
+        default="local",
+        description="Task executor backend: 'local', 'kubernetes', or 'container_apps'",
     )
 
     # K8s executor settings (only used when task_executor="kubernetes")
@@ -116,6 +117,20 @@ class Settings(BaseSettings):
     )
     k8s_job_instance_label: str = Field(
         default="", description="Helm release instance label for Job pod NetworkPolicy scoping"
+    )
+
+    # Azure Container Apps executor settings (only used when task_executor="container_apps")
+    aca_subscription_id: str = Field(
+        default="", description="Azure subscription ID for Container Apps"
+    )
+    aca_resource_group: str = Field(
+        default="", description="Azure resource group containing the Container Apps Job"
+    )
+    aca_job_name: str = Field(
+        default="", description="Name of the Azure Container Apps Job resource"
+    )
+    aca_job_timeout: int = Field(
+        default=600, description="Container Apps Job execution timeout in seconds"
     )
 
     # State backend
@@ -236,4 +251,25 @@ class Settings(BaseSettings):
                 "K8S_SECRET_NAME not set — Job pod credentials will use plaintext env vars. "
                 "Set K8S_SECRET_NAME for secure credential injection via K8s Secrets."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_aca_resources(self) -> "Settings":
+        if self.task_executor == "container_apps":
+            missing = [
+                name
+                for name, val in [
+                    ("ACA_SUBSCRIPTION_ID", self.aca_subscription_id),
+                    ("ACA_RESOURCE_GROUP", self.aca_resource_group),
+                    ("ACA_JOB_NAME", self.aca_job_name),
+                ]
+                if not val
+            ]
+            if missing:
+                raise ValueError(f"Container Apps executor requires: {', '.join(missing)}")
+            if not self.redis_url:
+                raise ValueError(
+                    "REDIS_URL is required when TASK_EXECUTOR=container_apps "
+                    "(used for result passback from job executions)"
+                )
         return self
