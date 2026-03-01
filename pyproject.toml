@@ -44,6 +44,9 @@ addopts = "--cov=gitlab_copilot_agent --cov-report=term-missing --cov-fail-under
 markers = [
     "k8s: requires a running k8s cluster (deselect with '-m \"not k8s\"')",
 ]
+filterwarnings = [
+    "ignore:Call to '__init__' function with deprecated usage:DeprecationWarning",
+]
 
 [tool.mypy]
 strict = true
