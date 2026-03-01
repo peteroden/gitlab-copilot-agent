@@ -17,11 +17,11 @@ dependencies = [
     "structlog==25.5.0",
     "python-frontmatter>=1.1.0",
     "httpx==0.28.1",
-    "opentelemetry-api==1.30.0",
-    "opentelemetry-sdk==1.30.0",
-    "opentelemetry-exporter-otlp-proto-grpc==1.30.0",
-    "opentelemetry-instrumentation-fastapi==0.51b0",
-    "opentelemetry-instrumentation-httpx==0.51b0",
+    "opentelemetry-api~=1.39",
+    "opentelemetry-sdk~=1.39",
+    "opentelemetry-exporter-otlp-proto-grpc~=1.39",
+    "opentelemetry-instrumentation-fastapi~=0.60b1",
+    "opentelemetry-instrumentation-httpx~=0.60b1",
     "redis[hiredis]>=7.2.0",
 ]
 
