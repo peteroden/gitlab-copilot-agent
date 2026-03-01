@@ -7,6 +7,10 @@
     "ghcr.io/devcontainers/features/docker-in-docker:2": {},
     "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
       "minikube": "none"
+    },
+    "ghcr.io/devcontainers/features/terraform:1": {
+      "version": "1.9",
+      "tflint": "0.53.0"
     }
   },
   "postCreateCommand": "curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v5.7.5 bash && pipx install uv && uv sync --all-extras && chmod +x .venv/lib/python3.12/site-packages/copilot/bin/copilot && npm install -g @github/copilot && uv --version",

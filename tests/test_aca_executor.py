@@ -91,6 +91,7 @@ def _install_azure_stub() -> tuple[MagicMock, MagicMock]:
 
     models_mod.JobExecutionTemplate = _Passthrough  # type: ignore[attr-defined]
     models_mod.JobExecutionContainer = _Passthrough  # type: ignore[attr-defined]
+    models_mod.EnvironmentVar = _Passthrough  # type: ignore[attr-defined]
 
     sys.modules["azure"] = azure_mod
     sys.modules["azure.identity"] = identity_mod
