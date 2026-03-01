@@ -324,6 +324,32 @@ When `k8s_secret_name` is not set (non-Helm deployments), credentials fall back 
 
 **Code**: `k8s_executor.py` → `_create_job()`
 
+### Azure Container Apps Executor
+
+**Container Boundary**: Each task runs in an ephemeral Container Apps Job execution.
+
+**Isolation**:
+- Separate container instance per execution
+- User-assigned managed identity (no shared service principal)
+- Separate identities for controller and job (S4 — least privilege)
+- Resource limits: CPU, memory configured per job template
+- Execution auto-cleaned by Azure after completion
+
+**Secret Management (S1)**:
+- Secrets configured as Key Vault references on the Job template
+- **Never passed per-execution** — only non-sensitive env vars (task_id, repo_url, branch, prompts) are overridden at runtime
+- Key Vault access scoped via RBAC (Key Vault Secrets User role)
+
+**Identity Separation (S4)**:
+- Controller identity: ACR pull, Key Vault read (all secrets), Job trigger
+- Job identity: ACR pull, Key Vault read (task secrets only)
+
+**Authentication (S3)**: OIDC federation for CI/CD — no stored Azure credentials in GitHub Actions.
+
+**Result Path**: Job stores result in Redis (via private endpoint). Controller reads result — only the controller posts API calls.
+
+**Code**: `aca_executor.py` → `_start_execution()`
+
 ---
 
 ## Secret Handling

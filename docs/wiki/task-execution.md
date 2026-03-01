@@ -110,6 +110,37 @@ class LocalTaskExecutor:
 
 ---
 
+## ContainerAppsTaskExecutor
+
+**Module**: `src/gitlab_copilot_agent/aca_executor.py`
+
+**How it works**:
+
+1. Controller receives task via webhook/poller
+2. Builds non-sensitive env overrides (task_id, repo_url, branch, prompts)
+3. Sets Redis sentinel key `aca_exec:{task_id}` to prevent duplicate executions
+4. Starts a Container Apps Job execution via `azure-mgmt-appcontainers` SDK
+5. Polls execution status until completion or timeout
+6. Reads result from Redis via `ResultStore`
+
+**Security (S1)**: Secrets (GitLab token, GitHub token, Copilot API key, Redis URL) are configured on the Job template as Key Vault references — never passed per-execution. Only non-sensitive env vars are overridden at execution time.
+
+**Identity (S4)**: Controller and Job use separate user-assigned managed identities with least-privilege RBAC:
+- Controller: ACR pull, Key Vault Secrets User, Job trigger
+- Job: ACR pull, Key Vault Secrets User
+
+**Idempotency**: Redis sentinel key prevents duplicate job starts. Unlike K8s executor (which relies on deterministic names + 409 conflict), ACA uses a distributed lock pattern since Container Apps Job names are auto-generated.
+
+**Configuration**:
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `ACA_SUBSCRIPTION_ID` | Azure subscription ID | (required) |
+| `ACA_RESOURCE_GROUP` | Resource group containing the Job | (required) |
+| `ACA_JOB_NAME` | Container Apps Job resource name | (required) |
+| `ACA_JOB_TIMEOUT` | Execution timeout in seconds | 600 |
+
+---
+
 ## task_runner.py (K8s Job Entrypoint)
 
 **Purpose**: Standalone script that runs inside K8s Job pod, executes Copilot session, stores result in Redis.
@@ -511,19 +542,21 @@ _PYTHON_GITIGNORE_PATTERNS = [
 | Feature | LocalTaskExecutor | KubernetesTaskExecutor |
 |---------|-------------------|------------------------|
 | **Deployment** | Single pod only | Multi-pod, horizontal scaling |
-| **Isolation** | None (same process) | Pod-level (network, filesystem, process) |
-| **Resource Limits** | None (host limits) | CPU/memory via K8s |
-| **Repo Clone** | Caller clones | Job clones (task_runner.py) |
-| **Coding Result** | Files on disk, empty patch | Diff captured in pod, patch stored in Redis |
-| **Diff Handling** | N/A (caller sees changes) | `git apply --3way` by controller after result read |
-| **Timeout** | Per-call (default 300s) | Per-Job (default 600s) |
-| **Idempotency** | None (no result caching) | Redis result cache (1 hour TTL) |
-| **Failure Recovery** | Exception propagates | Pod logs captured, Job deleted |
-| **Concurrency** | Limited by pod resources | Unlimited (new Job per task) |
-| **Cleanup** | Caller responsible | Job auto-deleted (TTL 300s) |
-| **Security** | Same UID as service | Separate pod, runAsNonRoot |
+## Comparison: Local vs K8s vs Container Apps
 
-**Recommendation**: Use LocalTaskExecutor for dev/test, KubernetesTaskExecutor for production.
+| Feature | Local | Kubernetes | Container Apps |
+|---------|-------|------------|----------------|
+| **Isolation** | None (same process) | Pod-level | Container-level |
+| **Resource Limits** | None (host limits) | CPU/memory via K8s | CPU/memory via Job config |
+| **Repo Clone** | Caller clones | Job clones (task_runner.py) | Job clones (task_runner.py) |
+| **Coding Result** | Files on disk, empty patch | Diff captured in pod, patch stored in Redis | Diff captured in container, patch stored in Redis |
+| **Timeout** | Per-call (default 300s) | Per-Job (default 600s) | Per-execution (default 600s) |
+| **Idempotency** | None | Redis result cache + K8s 409 | Redis sentinel key + result cache |
+| **Secret Management** | Env vars | K8s Secrets | Key Vault references (S1) |
+| **Identity** | Service identity | Pod service account | User-assigned managed identity (S4) |
+| **Cleanup** | Caller responsible | Job auto-deleted (TTL 300s) | Execution auto-cleaned by Azure |
+
+**Recommendation**: Use LocalTaskExecutor for dev/test, KubernetesTaskExecutor for self-hosted K8s, ContainerAppsTaskExecutor for Azure-managed deployments.
 
 ---
 
