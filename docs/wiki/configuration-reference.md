@@ -107,10 +107,10 @@ At least one of these must be set:
 ## Task Execution
 
 ### `TASK_EXECUTOR`
-- **Type**: `Literal["local", "kubernetes"]`
+- **Type**: `Literal["local", "kubernetes", "container_apps"]`
 - **Required**: ❌ No
 - **Default**: `"local"`
-- **Options**: `"local"` (in-process), `"kubernetes"` (K8s Jobs)
+- **Options**: `"local"` (in-process), `"kubernetes"` (K8s Jobs), `"container_apps"` (Azure Container Apps Jobs)
 - **Description**: Task executor backend
 
 ---
@@ -181,6 +181,35 @@ Only used when `TASK_EXECUTOR=kubernetes`.
 - **Default**: `""` (empty)
 - **Description**: Helm release instance label added to Job pods as `app.kubernetes.io/instance`. Used by NetworkPolicies to scope access to pods within the same Helm release.
 - **Helm Value**: Auto-set to `{{ .Release.Name }}`
+
+---
+
+## Azure Container Apps Executor Settings
+
+Only used when `TASK_EXECUTOR=container_apps`. Requires `azure-mgmt-appcontainers` and `azure-identity` packages (install with `uv sync --extra azure`).
+
+### `ACA_SUBSCRIPTION_ID`
+- **Type**: `str | None`
+- **Required**: ⚠️ Yes if `TASK_EXECUTOR=container_apps`
+- **Description**: Azure subscription ID containing the Container Apps Job
+
+### `ACA_RESOURCE_GROUP`
+- **Type**: `str | None`
+- **Required**: ⚠️ Yes if `TASK_EXECUTOR=container_apps`
+- **Description**: Resource group containing the Container Apps Job
+
+### `ACA_JOB_NAME`
+- **Type**: `str | None`
+- **Required**: ⚠️ Yes if `TASK_EXECUTOR=container_apps`
+- **Description**: Name of the Container Apps Job resource to trigger
+
+### `ACA_JOB_TIMEOUT`
+- **Type**: `int`
+- **Required**: ❌ No
+- **Default**: `600`
+- **Description**: Maximum execution time in seconds before timeout
+
+**Validation**: If `TASK_EXECUTOR=container_apps`, all three ACA settings (`ACA_SUBSCRIPTION_ID`, `ACA_RESOURCE_GROUP`, `ACA_JOB_NAME`) must be set. A `ValueError` is raised at startup if any are missing.
 
 ---
 

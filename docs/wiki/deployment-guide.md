@@ -186,6 +186,59 @@ helm uninstall copilot-agent -n default
 
 ---
 
+## Azure Container Apps
+
+Alternative deployment target using Azure managed services. See [ADR-0004](../adr/0004-azure-container-apps-migration.md) for architecture decision.
+
+### Prerequisites
+
+- Azure subscription with Container Apps support
+- Terraform ≥1.9
+- Azure CLI authenticated (`az login`)
+
+### Infrastructure
+
+All infrastructure is defined in `infra/` as Terraform:
+
+```bash
+cd infra
+terraform init \
+  -backend-config="resource_group_name=<state-rg>" \
+  -backend-config="storage_account_name=<state-sa>" \
+  -backend-config="container_name=tfstate" \
+  -backend-config="key=dev.terraform.tfstate"
+
+terraform plan -var-file="dev.tfvars"
+terraform apply -var-file="dev.tfvars"
+```
+
+### Resources Provisioned
+
+| Resource | Purpose |
+|----------|---------|
+| VNet + subnets | Network isolation |
+| Azure Container Registry | Image storage |
+| Container Apps Environment | Managed runtime |
+| Controller Container App | Webhook/poller service |
+| Task Runner Job | Ephemeral task execution |
+| Azure Cache for Redis | State + result store (private endpoint) |
+| Key Vault | Secret storage (RBAC-enabled) |
+| Log Analytics | Centralized logging |
+
+### CI/CD
+
+Deploy via GitHub Actions workflow dispatch:
+
+```bash
+gh workflow run deploy.yml \
+  -f environment=dev \
+  -f image_tag=$(git rev-parse --short HEAD)
+```
+
+Requires GitHub environment secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME`, `TF_STATE_RESOURCE_GROUP`, `TF_STATE_STORAGE_ACCOUNT`.
+
+---
+
 ## k3d Local Development
 
 ### Prerequisites
