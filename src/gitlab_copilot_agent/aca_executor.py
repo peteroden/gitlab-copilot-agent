@@ -98,6 +98,7 @@ class ContainerAppsTaskExecutor:
     def _start_execution(self, task: TaskParams) -> str:
         """Start a Container Apps Job execution (synchronous, called via to_thread)."""
         from azure.mgmt.appcontainers.models import (  # type: ignore[import-not-found,import-untyped,unused-ignore]  # noqa: I001
+            EnvironmentVar,
             JobExecutionContainer,
             JobExecutionTemplate,
         )
@@ -109,7 +110,7 @@ class ContainerAppsTaskExecutor:
             containers=[
                 JobExecutionContainer(
                     name="task",
-                    env=[{"name": e["name"], "value": e["value"]} for e in env_overrides],
+                    env=[EnvironmentVar(name=e["name"], value=e["value"]) for e in env_overrides],
                 )
             ],
         )
