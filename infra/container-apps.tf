@@ -164,14 +164,6 @@ resource "azurerm_container_app" "controller" {
         value = azurerm_user_assigned_identity.controller.client_id
       }
       env {
-        name  = "OTEL_EXPORTER_OTLP_ENDPOINT"
-        value = "http://localhost:4318"
-      }
-      env {
-        name  = "OTEL_EXPORTER_OTLP_PROTOCOL"
-        value = "http/protobuf"
-      }
-      env {
         name  = "OTEL_SERVICE_NAME"
         value = "controller"
       }
@@ -285,14 +277,6 @@ resource "azurerm_container_app_job" "task_runner" {
       env {
         name  = "AZURE_CLIENT_ID"
         value = azurerm_user_assigned_identity.job.client_id
-      }
-      env {
-        name  = "OTEL_EXPORTER_OTLP_ENDPOINT"
-        value = "http://localhost:4318"
-      }
-      env {
-        name  = "OTEL_EXPORTER_OTLP_PROTOCOL"
-        value = "http/protobuf"
       }
       env {
         name  = "OTEL_SERVICE_NAME"
