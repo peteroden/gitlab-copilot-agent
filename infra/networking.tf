@@ -35,6 +35,14 @@ resource "azurerm_subnet" "redis" {
   address_prefixes     = [var.redis_subnet_prefix]
 }
 
+# Key Vault private endpoint subnet
+resource "azurerm_subnet" "keyvault" {
+  name                 = "snet-keyvault"
+  resource_group_name  = azurerm_resource_group.main.name
+  virtual_network_name = azurerm_virtual_network.main.name
+  address_prefixes     = [var.kv_subnet_prefix]
+}
+
 # --- NSGs ---
 
 resource "azurerm_network_security_group" "infra" {
@@ -66,6 +74,19 @@ resource "azurerm_network_security_group" "infra" {
     destination_port_range     = "6380"
     source_address_prefix      = var.infra_subnet_prefix
     destination_address_prefix = var.redis_subnet_prefix
+  }
+
+  # Allow outbound to Key Vault via private endpoint
+  security_rule {
+    name                       = "AllowKeyVaultOutbound"
+    priority                   = 120
+    direction                  = "Outbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = var.infra_subnet_prefix
+    destination_address_prefix = var.kv_subnet_prefix
   }
 
   # Deny all other outbound
