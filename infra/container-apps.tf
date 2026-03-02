@@ -40,16 +40,29 @@ resource "azurerm_container_app_environment" "main" {
 
 # Managed OTLP agent — forwards traces/metrics/logs to App Insights.
 # Not yet supported by azurerm; use azapi to patch the environment.
+# Must include logAnalyticsConfiguration to avoid API validation error on PATCH.
 resource "azapi_update_resource" "cae_otlp" {
   type        = "Microsoft.App/managedEnvironments@2024-08-02-preview"
   resource_id = azurerm_container_app_environment.main.id
 
   body = {
     properties = {
+      appLogsConfiguration = {
+        destination = "log-analytics"
+        logAnalyticsConfiguration = {
+          customerId = azurerm_log_analytics_workspace.main.workspace_id
+          sharedKey  = azurerm_log_analytics_workspace.main.primary_shared_key
+        }
+      }
       appInsightsConfiguration = {
         connectionString = azurerm_application_insights.main.connection_string
       }
       openTelemetryConfiguration = {
+        destinationsConfiguration = {
+          appInsightsConfiguration = {
+            connectionString = azurerm_application_insights.main.connection_string
+          }
+        }
         tracesConfiguration = {
           destinations = ["appInsights"]
         }
@@ -149,6 +162,14 @@ resource "azurerm_container_app" "controller" {
       env {
         name  = "AZURE_CLIENT_ID"
         value = azurerm_user_assigned_identity.controller.client_id
+      }
+      env {
+        name  = "OTEL_EXPORTER_OTLP_ENDPOINT"
+        value = "http://localhost:4318"
+      }
+      env {
+        name  = "OTEL_EXPORTER_OTLP_PROTOCOL"
+        value = "http/protobuf"
       }
       env {
         name  = "OTEL_SERVICE_NAME"
@@ -264,6 +285,14 @@ resource "azurerm_container_app_job" "task_runner" {
       env {
         name  = "AZURE_CLIENT_ID"
         value = azurerm_user_assigned_identity.job.client_id
+      }
+      env {
+        name  = "OTEL_EXPORTER_OTLP_ENDPOINT"
+        value = "http://localhost:4318"
+      }
+      env {
+        name  = "OTEL_EXPORTER_OTLP_PROTOCOL"
+        value = "http/protobuf"
       }
       env {
         name  = "OTEL_SERVICE_NAME"
