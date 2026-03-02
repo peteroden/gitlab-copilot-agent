@@ -19,7 +19,7 @@ USER app
 WORKDIR /home/app/app
 COPY --chown=app:app pyproject.toml uv.lock ./
 
-RUN uv sync --no-dev --extra kubernetes --frozen && \
+RUN uv sync --no-dev --extra kubernetes --extra azure --frozen && \
     find .venv -name "copilot" -path "*/bin/copilot" -exec chmod +x {} \;
 
 COPY --chown=app:app src/ src/

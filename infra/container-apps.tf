@@ -40,7 +40,6 @@ locals {
     "gitlab-token"    = "gitlab-token"
     "github-token"    = "github-token"
     "copilot-api-key" = "copilot-api-key"
-    "redis-url"       = "redis-url"
   }
 }
 
@@ -107,6 +106,18 @@ resource "azurerm_container_app" "controller" {
       env {
         name  = "ACA_JOB_NAME"
         value = "job-task-runner"
+      }
+      env {
+        name  = "REDIS_HOST"
+        value = azurerm_redis_cache.main.hostname
+      }
+      env {
+        name  = "REDIS_PORT"
+        value = tostring(azurerm_redis_cache.main.ssl_port)
+      }
+      env {
+        name  = "AZURE_CLIENT_ID"
+        value = azurerm_user_assigned_identity.controller.client_id
       }
 
       # S1: Secrets via Key Vault references
@@ -177,6 +188,18 @@ resource "azurerm_container_app_job" "task_runner" {
       env {
         name  = "COPILOT_MODEL"
         value = var.copilot_model
+      }
+      env {
+        name  = "REDIS_HOST"
+        value = azurerm_redis_cache.main.hostname
+      }
+      env {
+        name  = "REDIS_PORT"
+        value = tostring(azurerm_redis_cache.main.ssl_port)
+      }
+      env {
+        name  = "AZURE_CLIENT_ID"
+        value = azurerm_user_assigned_identity.job.client_id
       }
 
       # S1: Secrets via Key Vault references

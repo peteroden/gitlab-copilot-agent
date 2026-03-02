@@ -50,20 +50,32 @@ def _cleanup_stale_repos(clone_dir: str | None = None) -> None:
 def _create_executor(backend: str, settings: Settings | None = None) -> TaskExecutor:
     """Factory: create a TaskExecutor for the given backend."""
     if backend == "kubernetes":
-        if settings is None or not settings.redis_url:
-            msg = "Settings with redis_url required for kubernetes executor"
+        if settings is None or not settings.redis_configured:
+            msg = "Settings with redis_url or redis_host required for kubernetes executor"
             raise ValueError(msg)
         from gitlab_copilot_agent.k8s_executor import KubernetesTaskExecutor
 
-        store = create_result_store("redis", settings.redis_url)
+        store = create_result_store(
+            "redis",
+            redis_url=settings.redis_url,
+            redis_host=settings.redis_host,
+            redis_port=settings.redis_port,
+            azure_client_id=settings.azure_client_id,
+        )
         return KubernetesTaskExecutor(settings=settings, result_store=store)
     if backend == "container_apps":
-        if settings is None or not settings.redis_url:
-            msg = "Settings with redis_url required for container_apps executor"
+        if settings is None or not settings.redis_configured:
+            msg = "Settings with redis_url or redis_host required for container_apps executor"
             raise ValueError(msg)
         from gitlab_copilot_agent.aca_executor import ContainerAppsTaskExecutor
 
-        store = create_result_store("redis", settings.redis_url)
+        store = create_result_store(
+            "redis",
+            redis_url=settings.redis_url,
+            redis_host=settings.redis_host,
+            redis_port=settings.redis_port,
+            azure_client_id=settings.azure_client_id,
+        )
         return ContainerAppsTaskExecutor(settings=settings, result_store=store)
     return LocalTaskExecutor()
 
@@ -118,9 +130,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.allowed_project_ids = allowed_project_ids
 
     # Shared lock manager for both webhook and Jira flows
-    repo_locks = create_lock(settings.state_backend, settings.redis_url)
+    repo_locks = create_lock(
+        settings.state_backend,
+        redis_url=settings.redis_url,
+        redis_host=settings.redis_host,
+        redis_port=settings.redis_port,
+        azure_client_id=settings.azure_client_id,
+    )
     app.state.repo_locks = repo_locks
-    dedup_store = create_dedup(settings.state_backend, settings.redis_url)
+    dedup_store = create_dedup(
+        settings.state_backend,
+        redis_url=settings.redis_url,
+        redis_host=settings.redis_host,
+        redis_port=settings.redis_port,
+        azure_client_id=settings.azure_client_id,
+    )
     app.state.dedup_store = dedup_store
     app.state.review_tracker = ReviewedMRTracker()
 

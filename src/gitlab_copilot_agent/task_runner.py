@@ -26,6 +26,9 @@ log = structlog.get_logger()
 ENV_TASK_TYPE, ENV_TASK_ID, ENV_REPO_URL = "TASK_TYPE", "TASK_ID", "REPO_URL"
 ENV_BRANCH, ENV_TASK_PAYLOAD = "BRANCH", "TASK_PAYLOAD"
 ENV_REDIS_URL = "REDIS_URL"
+ENV_REDIS_HOST = "REDIS_HOST"
+ENV_REDIS_PORT = "REDIS_PORT"
+ENV_AZURE_CLIENT_ID = "AZURE_CLIENT_ID"
 VALID_TASK_TYPES: frozenset[str] = frozenset({"review", "coding", "echo"})
 _RESULT_TTL = 3600  # 1 hour
 
@@ -47,13 +50,20 @@ def _coding_response_validator(response: str) -> str | None:
 
 
 async def _store_result(task_id: str, result: str) -> None:
-    """Persist result to Redis-backed ResultStore if REDIS_URL is set."""
+    """Persist result to Redis-backed ResultStore if Redis is configured."""
     redis_url = os.environ.get(ENV_REDIS_URL, "").strip()
-    if not redis_url:
+    redis_host = os.environ.get(ENV_REDIS_HOST, "").strip()
+    if not redis_url and not redis_host:
         return
     from gitlab_copilot_agent.redis_state import create_result_store
 
-    store = create_result_store("redis", redis_url)
+    store = create_result_store(
+        "redis",
+        redis_url=redis_url or None,
+        redis_host=redis_host or None,
+        redis_port=int(os.environ.get(ENV_REDIS_PORT, "6380")),
+        azure_client_id=os.environ.get(ENV_AZURE_CLIENT_ID),
+    )
     try:
         await store.set(task_id, result, ttl=_RESULT_TTL)
     finally:

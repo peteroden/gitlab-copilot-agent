@@ -180,8 +180,14 @@ def test_create_dedup_memory_backend() -> None:
 
 
 def test_create_lock_redis_missing_url() -> None:
-    with pytest.raises(ValueError, match="redis_url"):
+    with pytest.raises(ValueError, match="Either redis_url or redis_host"):
         create_lock("redis")
+
+
+def test_create_lock_redis_url_path() -> None:
+    """Factory creates RedisLock when redis_url is provided."""
+    lock = create_lock("redis", redis_url=REDIS_URL)
+    assert isinstance(lock, RedisLock)
 
 
 def test_create_dedup_redis_missing_url() -> None:

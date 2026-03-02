@@ -151,37 +151,88 @@ class RedisResultStore:
         await self._client.aclose()
 
 
-def create_lock(backend: str, redis_url: str | None = None) -> DistributedLock:
+def _create_redis_client(
+    redis_url: str | None = None,
+    redis_host: str | None = None,
+    redis_port: int = 6380,
+    azure_client_id: str | None = None,
+) -> Redis:
+    """Create a Redis async client using either a URL or Entra ID auth.
+
+    When *redis_host* is provided, authentication uses the ``redis-entraid``
+    credential provider with ``DefaultAzureCredential`` (managed identity in
+    Azure, CLI locally).  Falls back to ``redis_url`` for non-Azure envs.
+    """
+    import redis.asyncio as aioredis
+
+    if redis_host:
+        try:
+            from azure.identity import DefaultAzureCredential
+            from redis_entraid.cred_provider import (  # type: ignore[import-untyped]
+                create_from_default_azure_credential,
+            )
+        except ImportError as exc:  # pragma: no cover
+            msg = "redis-entraid and azure-identity are required for Entra ID Redis auth"
+            raise ImportError(msg) from exc
+
+        kwargs: dict[str, object] = {}
+        if azure_client_id:
+            kwargs["managed_identity_client_id"] = azure_client_id
+
+        credential_provider = create_from_default_azure_credential(
+            ("https://redis.azure.com/.default",),
+            credential=DefaultAzureCredential(**kwargs),
+        )
+        return aioredis.Redis(
+            host=redis_host,
+            port=redis_port,
+            ssl=True,
+            credential_provider=credential_provider,
+        )
+
+    if not redis_url:
+        msg = "Either redis_url or redis_host is required"
+        raise ValueError(msg)
+
+    return aioredis.from_url(redis_url)
+
+
+def create_lock(
+    backend: str,
+    redis_url: str | None = None,
+    redis_host: str | None = None,
+    redis_port: int = 6380,
+    azure_client_id: str | None = None,
+) -> DistributedLock:
     """Factory: create a Lock for the given backend."""
     if backend == "redis":
-        import redis.asyncio as aioredis
-
-        if not redis_url:
-            msg = "redis_url is required when backend='redis'"
-            raise ValueError(msg)
-        return RedisLock(aioredis.from_url(redis_url))
+        return RedisLock(_create_redis_client(redis_url, redis_host, redis_port, azure_client_id))
     return MemoryLock()
 
 
-def create_dedup(backend: str, redis_url: str | None = None) -> DeduplicationStore:
+def create_dedup(
+    backend: str,
+    redis_url: str | None = None,
+    redis_host: str | None = None,
+    redis_port: int = 6380,
+    azure_client_id: str | None = None,
+) -> DeduplicationStore:
     """Factory: create a DeduplicationStore for the given backend."""
     if backend == "redis":
-        import redis.asyncio as aioredis
-
-        if not redis_url:
-            msg = "redis_url is required when backend='redis'"
-            raise ValueError(msg)
-        return RedisDedup(aioredis.from_url(redis_url))
+        return RedisDedup(_create_redis_client(redis_url, redis_host, redis_port, azure_client_id))
     return MemoryDedup()
 
 
-def create_result_store(backend: str, redis_url: str | None = None) -> ResultStore:
+def create_result_store(
+    backend: str,
+    redis_url: str | None = None,
+    redis_host: str | None = None,
+    redis_port: int = 6380,
+    azure_client_id: str | None = None,
+) -> ResultStore:
     """Factory: create a ResultStore for the given backend."""
     if backend == "redis":
-        import redis.asyncio as aioredis
-
-        if not redis_url:
-            msg = "redis_url is required when backend='redis'"
-            raise ValueError(msg)
-        return RedisResultStore(aioredis.from_url(redis_url))
+        return RedisResultStore(
+            _create_redis_client(redis_url, redis_host, redis_port, azure_client_id)
+        )
     return MemoryResultStore()
