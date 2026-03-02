@@ -145,9 +145,9 @@ def test_aca_executor_requires_azure_settings() -> None:
         make_settings(task_executor="container_apps", redis_url=ACA_REDIS_URL)
 
 
-def test_aca_executor_requires_redis_url() -> None:
-    """task_executor=container_apps requires REDIS_URL for result passback."""
-    with pytest.raises(ValidationError, match="REDIS_URL is required"):
+def test_aca_executor_requires_redis() -> None:
+    """task_executor=container_apps requires Redis for result passback."""
+    with pytest.raises(ValidationError, match="REDIS_URL or REDIS_HOST is required"):
         make_settings(
             task_executor="container_apps",
             aca_subscription_id=ACA_SUBSCRIPTION_ID,
@@ -168,6 +168,21 @@ def test_aca_executor_accepts_valid_config() -> None:
     )
     assert settings.aca_subscription_id == ACA_SUBSCRIPTION_ID
     assert settings.aca_job_timeout == 600
+
+
+def test_aca_executor_accepts_redis_host() -> None:
+    """task_executor=container_apps succeeds with redis_host (Entra ID path)."""
+    settings = make_settings(
+        task_executor="container_apps",
+        aca_subscription_id=ACA_SUBSCRIPTION_ID,
+        aca_resource_group=ACA_RESOURCE_GROUP,
+        aca_job_name=ACA_JOB_NAME,
+        redis_host="test-redis.redis.cache.windows.net",
+        state_backend="redis",
+    )
+    assert settings.redis_configured is True
+    assert settings.redis_host == "test-redis.redis.cache.windows.net"
+    assert settings.redis_port == 6380
 
 
 class TestPrintConfigErrors:

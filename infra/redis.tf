@@ -9,10 +9,15 @@ resource "azurerm_redis_cache" "main" {
   minimum_tls_version  = "1.2"
   non_ssl_port_enabled = false
 
+  # Entra ID auth — no access keys needed
+  access_keys_authentication_enabled = false
+
   # Disable public access — traffic goes through private endpoint only
   public_network_access_enabled = false
 
-  redis_configuration {}
+  redis_configuration {
+    active_directory_authentication_enabled = true
+  }
 
   tags = var.tags
 }

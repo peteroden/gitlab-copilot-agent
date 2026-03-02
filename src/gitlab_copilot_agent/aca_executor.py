@@ -86,8 +86,8 @@ class ContainerAppsTaskExecutor:
 
     def _create_client(self) -> object:
         """Create a fresh Azure Container Apps management client."""
-        from azure.identity import DefaultAzureCredential  # type: ignore[import-not-found,import-untyped,unused-ignore]  # noqa: I001
-        from azure.mgmt.appcontainers import ContainerAppsAPIClient  # type: ignore[import-not-found,import-untyped,unused-ignore]  # noqa: I001
+        from azure.identity import DefaultAzureCredential
+        from azure.mgmt.appcontainers import ContainerAppsAPIClient
 
         credential = DefaultAzureCredential()
         return ContainerAppsAPIClient(
@@ -97,7 +97,7 @@ class ContainerAppsTaskExecutor:
 
     def _start_execution(self, task: TaskParams) -> str:
         """Start a Container Apps Job execution (synchronous, called via to_thread)."""
-        from azure.mgmt.appcontainers.models import (  # type: ignore[import-not-found,import-untyped,unused-ignore]  # noqa: I001
+        from azure.mgmt.appcontainers.models import (
             EnvironmentVar,
             JobExecutionContainer,
             JobExecutionTemplate,

@@ -46,3 +46,17 @@ resource "azurerm_role_assignment" "job_kv" {
   role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_user_assigned_identity.job.principal_id
 }
+
+# Controller: Redis data access via Entra ID
+resource "azurerm_role_assignment" "controller_redis" {
+  scope                = azurerm_redis_cache.main.id
+  role_definition_name = "Redis Cache Data Contributor"
+  principal_id         = azurerm_user_assigned_identity.controller.principal_id
+}
+
+# Job: Redis data access via Entra ID
+resource "azurerm_role_assignment" "job_redis" {
+  scope                = azurerm_redis_cache.main.id
+  role_definition_name = "Redis Cache Data Contributor"
+  principal_id         = azurerm_user_assigned_identity.job.principal_id
+}

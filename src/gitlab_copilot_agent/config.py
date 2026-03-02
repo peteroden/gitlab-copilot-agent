@@ -138,8 +138,20 @@ class Settings(BaseSettings):
         default="memory", description="State backend: 'memory' or 'redis'"
     )
     redis_url: str | None = Field(
-        default=None, description="Redis URL (required when STATE_BACKEND=redis)"
+        default=None, description="Redis connection string (local/non-Azure environments)"
     )
+    redis_host: str | None = Field(
+        default=None, description="Redis hostname for Entra ID auth (Azure environments)"
+    )
+    redis_port: int = Field(default=6380, description="Redis TLS port (used with redis_host)")
+    azure_client_id: str | None = Field(
+        default=None, description="Managed identity client ID for DefaultAzureCredential"
+    )
+
+    @property
+    def redis_configured(self) -> bool:
+        """True when Redis connectivity is configured (either URL or Entra host)."""
+        return bool(self.redis_url or self.redis_host)
 
     # Git clone retry
     git_clone_max_retries: int = Field(
@@ -229,8 +241,8 @@ class Settings(BaseSettings):
                 "  • COPILOT_PROVIDER_TYPE + COPILOT_PROVIDER_BASE_URL + "
                 "COPILOT_PROVIDER_API_KEY — BYOK (Azure OpenAI, OpenAI direct)"
             )
-        if self.state_backend == "redis" and not self.redis_url:
-            raise ValueError("REDIS_URL is required when STATE_BACKEND=redis")
+        if self.state_backend == "redis" and not self.redis_configured:
+            raise ValueError("REDIS_URL or REDIS_HOST is required when STATE_BACKEND=redis")
         if self.gitlab_poll:
             entries = [e.strip() for e in (self.gitlab_projects or "").split(",") if e.strip()]
             if not entries:
@@ -267,9 +279,9 @@ class Settings(BaseSettings):
             ]
             if missing:
                 raise ValueError(f"Container Apps executor requires: {', '.join(missing)}")
-            if not self.redis_url:
+            if not self.redis_configured:
                 raise ValueError(
-                    "REDIS_URL is required when TASK_EXECUTOR=container_apps "
+                    "REDIS_URL or REDIS_HOST is required when TASK_EXECUTOR=container_apps "
                     "(used for result passback from job executions)"
                 )
         return self
