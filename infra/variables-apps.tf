@@ -20,6 +20,12 @@ variable "redis_subnet_prefix" {
   default     = "10.0.2.0/24"
 }
 
+variable "kv_subnet_prefix" {
+  description = "CIDR for the Key Vault private endpoint subnet"
+  type        = string
+  default     = "10.0.3.0/24"
+}
+
 # --- Redis ---
 
 variable "redis_sku" {
@@ -92,4 +98,39 @@ variable "copilot_model" {
   description = "LLM model name for Copilot sessions"
   type        = string
   default     = "gpt-4"
+}
+
+# --- Jira (optional — leave empty to skip) ---
+
+variable "jira_url" {
+  description = "Jira instance URL (empty to disable Jira integration)"
+  type        = string
+  default     = ""
+}
+
+variable "jira_email" {
+  description = "Jira user email for basic auth"
+  type        = string
+  default     = ""
+}
+
+variable "jira_project_map" {
+  description = "JSON mapping Jira project keys to GitLab project config"
+  type        = string
+  default     = ""
+}
+
+# --- Key Vault Bootstrap ---
+
+variable "kv_bootstrap" {
+  description = "Enable to seed KV secrets in a single apply. Opens public access, seeds secrets, deploys apps, then closes public access."
+  type        = bool
+  default     = false
+}
+
+variable "kv_bootstrap_secrets" {
+  description = "Map of secret-name → value to seed into Key Vault. Only used when kv_bootstrap=true."
+  type        = map(string)
+  default     = {}
+  sensitive   = true
 }

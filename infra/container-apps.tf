@@ -32,15 +32,23 @@ resource "azurerm_container_app_environment" "main" {
   infrastructure_subnet_id   = azurerm_subnet.infra.id
 
   tags = var.tags
+
+  lifecycle {
+    ignore_changes = [infrastructure_resource_group_name]
+  }
 }
 
-# S1: Key Vault secret refs shared by controller and job
+# S1: Key Vault secret refs — base set shared by all workloads, plus controller-only
 locals {
-  kv_secrets = {
+  kv_secrets_base = {
     "gitlab-token"    = "gitlab-token"
     "github-token"    = "github-token"
     "copilot-api-key" = "copilot-api-key"
   }
+  kv_secrets_controller = merge(
+    local.kv_secrets_base,
+    var.jira_url != "" ? { "jira-api-token" = "jira-api-token" } : {}
+  )
 }
 
 # --- Controller Container App ---
@@ -120,9 +128,32 @@ resource "azurerm_container_app" "controller" {
         value = azurerm_user_assigned_identity.controller.client_id
       }
 
+      # Jira (non-secret env vars — only set when jira_url is provided)
+      dynamic "env" {
+        for_each = var.jira_url != "" ? [1] : []
+        content {
+          name  = "JIRA_URL"
+          value = var.jira_url
+        }
+      }
+      dynamic "env" {
+        for_each = var.jira_url != "" ? [1] : []
+        content {
+          name  = "JIRA_EMAIL"
+          value = var.jira_email
+        }
+      }
+      dynamic "env" {
+        for_each = var.jira_url != "" ? [1] : []
+        content {
+          name  = "JIRA_PROJECT_MAP"
+          value = var.jira_project_map
+        }
+      }
+
       # S1: Secrets via Key Vault references
       dynamic "env" {
-        for_each = local.kv_secrets
+        for_each = local.kv_secrets_controller
         content {
           name        = upper(replace(env.key, "-", "_"))
           secret_name = env.key
@@ -138,13 +169,15 @@ resource "azurerm_container_app" "controller" {
   }
 
   dynamic "secret" {
-    for_each = local.kv_secrets
+    for_each = local.kv_secrets_controller
     content {
       name                = secret.key
       key_vault_secret_id = "${azurerm_key_vault.main.vault_uri}secrets/${secret.value}"
       identity            = azurerm_user_assigned_identity.controller.id
     }
   }
+
+  depends_on = [null_resource.kv_seed_secrets]
 
   tags = var.tags
 }
@@ -204,7 +237,7 @@ resource "azurerm_container_app_job" "task_runner" {
 
       # S1: Secrets via Key Vault references
       dynamic "env" {
-        for_each = local.kv_secrets
+        for_each = local.kv_secrets_base
         content {
           name        = upper(replace(env.key, "-", "_"))
           secret_name = env.key
@@ -214,13 +247,15 @@ resource "azurerm_container_app_job" "task_runner" {
   }
 
   dynamic "secret" {
-    for_each = local.kv_secrets
+    for_each = local.kv_secrets_base
     content {
       name                = secret.key
       key_vault_secret_id = "${azurerm_key_vault.main.vault_uri}secrets/${secret.value}"
       identity            = azurerm_user_assigned_identity.job.id
     }
   }
+
+  depends_on = [null_resource.kv_seed_secrets]
 
   tags = var.tags
 }
