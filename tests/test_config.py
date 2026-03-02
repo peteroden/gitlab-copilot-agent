@@ -136,6 +136,7 @@ def test_local_executor_does_not_require_k8s_names() -> None:
 ACA_SUBSCRIPTION_ID = "00000000-0000-0000-0000-000000000000"
 ACA_RESOURCE_GROUP = "rg-test"
 ACA_JOB_NAME = "copilot-job"
+ACA_JOB_IMAGE = "myregistry.azurecr.io/copilot-agent:latest"
 ACA_REDIS_URL = "rediss://test-redis.redis.cache.windows.net:6380"
 
 
@@ -143,6 +144,18 @@ def test_aca_executor_requires_azure_settings() -> None:
     """task_executor=container_apps fails without required Azure settings."""
     with pytest.raises(ValidationError, match="ACA_SUBSCRIPTION_ID"):
         make_settings(task_executor="container_apps", redis_url=ACA_REDIS_URL)
+
+
+def test_aca_executor_requires_job_image() -> None:
+    """task_executor=container_apps fails without ACA_JOB_IMAGE."""
+    with pytest.raises(ValidationError, match="ACA_JOB_IMAGE"):
+        make_settings(
+            task_executor="container_apps",
+            aca_subscription_id=ACA_SUBSCRIPTION_ID,
+            aca_resource_group=ACA_RESOURCE_GROUP,
+            aca_job_name=ACA_JOB_NAME,
+            redis_url=ACA_REDIS_URL,
+        )
 
 
 def test_aca_executor_requires_redis() -> None:
@@ -153,6 +166,7 @@ def test_aca_executor_requires_redis() -> None:
             aca_subscription_id=ACA_SUBSCRIPTION_ID,
             aca_resource_group=ACA_RESOURCE_GROUP,
             aca_job_name=ACA_JOB_NAME,
+            aca_job_image=ACA_JOB_IMAGE,
         )
 
 
@@ -163,10 +177,12 @@ def test_aca_executor_accepts_valid_config() -> None:
         aca_subscription_id=ACA_SUBSCRIPTION_ID,
         aca_resource_group=ACA_RESOURCE_GROUP,
         aca_job_name=ACA_JOB_NAME,
+        aca_job_image=ACA_JOB_IMAGE,
         redis_url=ACA_REDIS_URL,
         state_backend="redis",
     )
     assert settings.aca_subscription_id == ACA_SUBSCRIPTION_ID
+    assert settings.aca_job_image == ACA_JOB_IMAGE
     assert settings.aca_job_timeout == 600
 
 
@@ -177,6 +193,7 @@ def test_aca_executor_accepts_redis_host() -> None:
         aca_subscription_id=ACA_SUBSCRIPTION_ID,
         aca_resource_group=ACA_RESOURCE_GROUP,
         aca_job_name=ACA_JOB_NAME,
+        aca_job_image=ACA_JOB_IMAGE,
         redis_host="test-redis.redis.cache.windows.net",
         state_backend="redis",
     )

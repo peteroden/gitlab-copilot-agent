@@ -31,6 +31,7 @@ REDIS_URL = "rediss://test-redis.redis.cache.windows.net:6380"
 ACA_SUBSCRIPTION_ID = "00000000-0000-0000-0000-000000000000"
 ACA_RESOURCE_GROUP = "rg-copilot-test"
 ACA_JOB_NAME = "copilot-job"
+ACA_JOB_IMAGE = "myregistry.azurecr.io/copilot-agent:test"
 ACA_JOB_TIMEOUT = 3  # short for tests
 EXECUTION_NAME = "copilot-job-exec-abc123"
 CACHED_RESULT = "cached review output"
@@ -47,6 +48,7 @@ def _make_settings(**overrides: Any) -> Any:
         "aca_subscription_id": ACA_SUBSCRIPTION_ID,
         "aca_resource_group": ACA_RESOURCE_GROUP,
         "aca_job_name": ACA_JOB_NAME,
+        "aca_job_image": ACA_JOB_IMAGE,
         "aca_job_timeout": ACA_JOB_TIMEOUT,
     }
     return make_settings(**(defaults | overrides))

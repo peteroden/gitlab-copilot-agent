@@ -110,6 +110,7 @@ class ContainerAppsTaskExecutor:
             containers=[
                 JobExecutionContainer(
                     name="task",
+                    image=self._settings.aca_job_image,
                     env=[EnvironmentVar(name=e["name"], value=e["value"]) for e in env_overrides],
                 )
             ],

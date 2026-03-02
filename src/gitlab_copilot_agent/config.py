@@ -129,6 +129,9 @@ class Settings(BaseSettings):
     aca_job_name: str = Field(
         default="", description="Name of the Azure Container Apps Job resource"
     )
+    aca_job_image: str = Field(
+        default="", description="Docker image for Container Apps Job executions"
+    )
     aca_job_timeout: int = Field(
         default=600, description="Container Apps Job execution timeout in seconds"
     )
@@ -274,6 +277,7 @@ class Settings(BaseSettings):
                     ("ACA_SUBSCRIPTION_ID", self.aca_subscription_id),
                     ("ACA_RESOURCE_GROUP", self.aca_resource_group),
                     ("ACA_JOB_NAME", self.aca_job_name),
+                    ("ACA_JOB_IMAGE", self.aca_job_image),
                 ]
                 if not val
             ]

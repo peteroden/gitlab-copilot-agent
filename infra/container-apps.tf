@@ -152,6 +152,10 @@ resource "azurerm_container_app" "controller" {
         value = "job-task-runner"
       }
       env {
+        name  = "ACA_JOB_IMAGE"
+        value = var.job_image
+      }
+      env {
         name  = "REDIS_HOST"
         value = azurerm_redis_cache.main.hostname
       }
