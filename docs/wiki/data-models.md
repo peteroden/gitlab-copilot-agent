@@ -302,8 +302,12 @@ See [configuration-reference.md](configuration-reference.md) for all fields.
 
 **Validators**:
 - `_check_auth()`: Ensure either GITHUB_TOKEN or COPILOT_PROVIDER_TYPE is set
-- `_check_auth()`: Validate REDIS_URL is set when STATE_BACKEND=redis
+- `_check_redis_for_remote_executors()`: Validate REDIS_URL or REDIS_HOST is set for kubernetes/container_apps executors
+- `_check_state_backend()`: Validate REDIS_URL or REDIS_HOST is set when STATE_BACKEND=redis
 - `_check_auth()`: Validate GITLAB_PROJECTS is set when GITLAB_POLL=true
+
+**Property**:
+- `redis_configured: bool` — True when either `redis_url` or `redis_host` is set (single source of truth for Redis availability)
 
 ---
 

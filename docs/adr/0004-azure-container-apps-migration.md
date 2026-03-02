@@ -53,7 +53,8 @@ Uses the Azure Container Apps Jobs API (`azure-mgmt-appcontainers`) to:
 
 Azure Container Apps Job executions expose env var values in Azure Activity Logs (90-day retention). To prevent secret leakage:
 
-- **Secrets are pre-configured on the Job template** as Key Vault secret references (GITLAB_TOKEN, GITHUB_TOKEN, COPILOT_PROVIDER_API_KEY, REDIS_URL)
+- **Secrets are pre-configured on the Job template** as Key Vault secret references (GITLAB_TOKEN, GITHUB_TOKEN, COPILOT_PROVIDER_API_KEY)
+- **Redis auth uses Entra ID** via managed identity (REDIS_HOST + AZURE_CLIENT_ID env vars) — no Redis password in Key Vault
 - **Per-execution overrides are non-sensitive only**: TASK_TYPE, TASK_ID, REPO_URL, BRANCH, SYSTEM_PROMPT, USER_PROMPT
 
 This differs from the k8s executor where secrets can be passed per-job via `secretKeyRef`. In Container Apps, the Job template is the security boundary.

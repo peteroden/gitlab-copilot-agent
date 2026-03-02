@@ -595,8 +595,10 @@ All use `extra="ignore"` config.
   - `aclose()`: Close Redis connection
 
 **Key Functions**:
-- `create_lock(backend: str, redis_url: str | None) -> DistributedLock`: Factory
-- `create_dedup(backend: str, redis_url: str | None) -> DeduplicationStore`: Factory
+- `create_lock(backend, redis_url, *, redis_host, redis_port, azure_client_id) -> DistributedLock`: Factory — uses Entra ID auth when `redis_host` is set, URL auth otherwise
+- `create_dedup(backend, redis_url, *, redis_host, redis_port, azure_client_id) -> DeduplicationStore`: Factory — same dual-path as `create_lock`
+- `create_result_store(redis_url, *, redis_host, redis_port, azure_client_id) -> Redis`: Factory for task result storage
+- `_create_redis_client(redis_url, *, redis_host, redis_port, azure_client_id) -> Redis`: Internal helper that creates a Redis client via Entra ID or URL
 
 **Internal Imports**: `concurrency`
 

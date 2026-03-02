@@ -426,8 +426,10 @@ Poll 2: watermark=None (in-memory) → set to now() → skip historical MRs
 **Config**: `STATE_BACKEND` env var (`"memory"` or `"redis"`)
 
 **Factory Functions**:
-- `redis_state.create_lock(backend, redis_url) -> DistributedLock`
-- `redis_state.create_dedup(backend, redis_url) -> DeduplicationStore`
+- `redis_state.create_lock(backend, redis_url, *, redis_host, redis_port, azure_client_id) -> DistributedLock`
+- `redis_state.create_dedup(backend, redis_url, *, redis_host, redis_port, azure_client_id) -> DeduplicationStore`
+
+When `redis_host` is provided, the factories use Microsoft Entra ID authentication (via `redis-entraid` + `DefaultAzureCredential`) instead of the connection string URL. This eliminates password management for Azure deployments.
 
 **When to Use Redis**:
 - Multi-pod deployments (horizontal scaling)

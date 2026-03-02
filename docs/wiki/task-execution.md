@@ -79,7 +79,7 @@ class LocalTaskExecutor:
 **Job Spec**:
 - **Image**: `settings.k8s_job_image`
 - **Command**: `[".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]`
-- **Env Vars**: TASK_TYPE, TASK_ID, REPO_URL, BRANCH, TASK_PAYLOAD, GITLAB_TOKEN, GITHUB_TOKEN, REDIS_URL, HOME=/tmp (Copilot CLI requires writable HOME)
+- **Env Vars**: TASK_TYPE, TASK_ID, REPO_URL, BRANCH, TASK_PAYLOAD, GITLAB_TOKEN, GITHUB_TOKEN, REDIS_URL (or REDIS_HOST + REDIS_PORT + AZURE_CLIENT_ID for Entra ID auth), HOME=/tmp (Copilot CLI requires writable HOME)
 - **hostAliases**: Optional JSON-encoded array from `K8S_JOB_HOST_ALIASES` for custom DNS (air-gapped, k3d dev)
 - **Resources**: CPU/memory limits from settings
 - **SecurityContext**: `runAsNonRoot`, `readOnlyRootFilesystem`, `capabilities.drop: ["ALL"]`
@@ -146,7 +146,7 @@ class LocalTaskExecutor:
 **Purpose**: Standalone script that runs inside K8s Job pod, executes Copilot session, stores result in Redis.
 
 **Flow**:
-1. Read env vars: TASK_TYPE, TASK_ID, REPO_URL, BRANCH, TASK_PAYLOAD
+1. Read env vars: TASK_TYPE, TASK_ID, REPO_URL, BRANCH, TASK_PAYLOAD, REDIS_URL or REDIS_HOST
 2. Validate TASK_TYPE ∈ {"review", "coding", "echo"}
 3. Validate REPO_URL authority matches GITLAB_URL (host + port)
 4. Clone repo via `git_clone()`
@@ -552,6 +552,7 @@ _PYTHON_GITIGNORE_PATTERNS = [
 | **Coding Result** | Files on disk, empty patch | Diff captured in pod, patch stored in Redis | Diff captured in container, patch stored in Redis |
 | **Timeout** | Per-call (default 300s) | Per-Job (default 600s) | Per-execution (default 600s) |
 | **Idempotency** | None | Redis result cache + K8s 409 | Redis sentinel key + result cache |
+| **Redis Auth** | URL (password) | URL (password via Secret) | Entra ID (managed identity) |
 | **Secret Management** | Env vars | K8s Secrets | Key Vault references (S1) |
 | **Identity** | Service identity | Pod service account | User-assigned managed identity (S4) |
 | **Cleanup** | Caller responsible | Job auto-deleted (TTL 300s) | Execution auto-cleaned by Azure |

@@ -413,8 +413,8 @@ readinessProbe:
 
 **Requirements**:
 - `STATE_BACKEND=redis`
-- `REDIS_URL` configured
-- Redis deployment (included in Helm chart)
+- `REDIS_URL` configured (Helm/self-hosted) **or** `REDIS_HOST` configured (Azure Entra ID auth)
+- Redis deployment (included in Helm chart, or Azure Cache for Redis)
 
 **Benefits**:
 - Horizontal scaling (multiple replicas)
@@ -576,7 +576,7 @@ kubectl logs <pod-name> -n default
 
 **Common Causes**:
 - Missing env vars — the agent prints a human-friendly summary listing each missing variable and its description
-- Invalid REDIS_URL
+- Invalid REDIS_URL or unreachable REDIS_HOST
 - Invalid configuration combination (e.g., no LLM auth, no ingestion path)
 
 ---
