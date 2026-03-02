@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && \
 
 RUN pip install --no-cache-dir uv
 
-RUN useradd -m -u 1000 app
+RUN useradd -m -u 1000 app && mkdir -p /home/app/app && chown app:app /home/app/app
 
 USER app
 

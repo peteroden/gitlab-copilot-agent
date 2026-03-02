@@ -47,16 +47,20 @@ resource "azurerm_role_assignment" "job_kv" {
   principal_id         = azurerm_user_assigned_identity.job.principal_id
 }
 
-# Controller: Redis data access via Entra ID
-resource "azurerm_role_assignment" "controller_redis" {
-  scope                = azurerm_redis_cache.main.id
-  role_definition_name = "Redis Cache Data Contributor"
-  principal_id         = azurerm_user_assigned_identity.controller.principal_id
+# Controller: Redis data access via Entra ID (data access policy, not RBAC)
+resource "azurerm_redis_cache_access_policy_assignment" "controller_redis" {
+  name               = "controller-data-contributor"
+  redis_cache_id     = azurerm_redis_cache.main.id
+  access_policy_name = "Data Contributor"
+  object_id          = azurerm_user_assigned_identity.controller.principal_id
+  object_id_alias    = azurerm_user_assigned_identity.controller.name
 }
 
-# Job: Redis data access via Entra ID
-resource "azurerm_role_assignment" "job_redis" {
-  scope                = azurerm_redis_cache.main.id
-  role_definition_name = "Redis Cache Data Contributor"
-  principal_id         = azurerm_user_assigned_identity.job.principal_id
+# Job: Redis data access via Entra ID (data access policy, not RBAC)
+resource "azurerm_redis_cache_access_policy_assignment" "job_redis" {
+  name               = "job-data-contributor"
+  redis_cache_id     = azurerm_redis_cache.main.id
+  access_policy_name = "Data Contributor"
+  object_id          = azurerm_user_assigned_identity.job.principal_id
+  object_id_alias    = azurerm_user_assigned_identity.job.name
 }
