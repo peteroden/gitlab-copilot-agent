@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 from typing import Any
 from urllib.parse import urlparse
 
 import structlog
 from opentelemetry import metrics, trace
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.trace import TracerProvider
@@ -57,7 +56,7 @@ def configure_logging() -> None:
             structlog.processors.TimeStamper(fmt="iso"),
         ],
     )
-    handler = logging.StreamHandler()
+    handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
 
     root = logging.getLogger()
@@ -75,24 +74,35 @@ def configure_logging() -> None:
         logging.getLogger(name).setLevel(logging.ERROR)
 
 
-def _check_grpc_connectivity(endpoint: str, timeout: float = 3.0) -> bool:
-    """Quick gRPC connectivity check. Returns True if the endpoint is reachable."""
+def _check_connectivity(endpoint: str, timeout: float = 3.0) -> bool:
+    """Quick connectivity check. Uses HTTP or gRPC based on protocol config."""
     try:
-        import grpc  # type: ignore[import-untyped]  # noqa: PLC0415
+        if _use_http_protocol():
+            import contextlib  # noqa: PLC0415
+            import urllib.error  # noqa: PLC0415
+            import urllib.request  # noqa: PLC0415
 
-        parsed = urlparse(endpoint)
-        target = f"{parsed.hostname}:{parsed.port or 4317}"
-        if parsed.scheme == "https":
-            channel = grpc.secure_channel(target, grpc.ssl_channel_credentials())
-        else:
-            channel = grpc.insecure_channel(target)
-        try:
-            grpc.channel_ready_future(channel).result(timeout=timeout)
+            url = endpoint.rstrip("/") + "/v1/traces"
+            req = urllib.request.Request(url, method="POST", data=b"")
+            with contextlib.suppress(urllib.error.HTTPError):
+                urllib.request.urlopen(req, timeout=timeout)  # noqa: S310
             return True
-        except grpc.FutureTimeoutError:
-            return False
-        finally:
-            channel.close()
+        else:
+            import grpc  # type: ignore[import-untyped]  # noqa: PLC0415
+
+            parsed = urlparse(endpoint)
+            target = f"{parsed.hostname}:{parsed.port or 4317}"
+            if parsed.scheme == "https":
+                channel = grpc.secure_channel(target, grpc.ssl_channel_credentials())
+            else:
+                channel = grpc.insecure_channel(target)
+            try:
+                grpc.channel_ready_future(channel).result(timeout=timeout)
+                return True
+            except grpc.FutureTimeoutError:
+                return False
+            finally:
+                channel.close()
     except Exception:
         return False
 
@@ -109,7 +119,7 @@ def _run_probe(endpoint: str, interval: float) -> None:
     """Execute a single probe; reschedule if still unreachable."""
     global _collector_reachable, _probe_timer  # noqa: PLW0603
     _probe_timer = None
-    if _check_grpc_connectivity(endpoint):
+    if _check_connectivity(endpoint):
         _collector_reachable = True
         _log.info(
             "otel_collector_connected",
@@ -118,6 +128,46 @@ def _run_probe(endpoint: str, interval: float) -> None:
         )
     else:
         _schedule_probe(endpoint, interval)
+
+
+def _use_http_protocol() -> bool:
+    """Return True if OTLP HTTP/protobuf protocol is configured."""
+    return os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc") == "http/protobuf"
+
+
+def _create_exporters() -> tuple[Any, Any, Any]:
+    """Create span, metric, and log exporters based on configured protocol."""
+    if _use_http_protocol():
+        return _create_http_exporters()
+    return _create_grpc_exporters()
+
+
+def _create_http_exporters() -> tuple[Any, Any, Any]:
+    from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+        OTLPLogExporter,  # noqa: PLC0415
+    )
+    from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+        OTLPMetricExporter,  # noqa: PLC0415
+    )
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+        OTLPSpanExporter,  # noqa: PLC0415
+    )
+
+    return OTLPSpanExporter(), OTLPMetricExporter(), OTLPLogExporter()
+
+
+def _create_grpc_exporters() -> tuple[Any, Any, Any]:
+    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+        OTLPLogExporter,  # noqa: PLC0415
+    )
+    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+        OTLPMetricExporter,  # noqa: PLC0415
+    )
+    from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+        OTLPSpanExporter,  # noqa: PLC0415
+    )
+
+    return OTLPSpanExporter(), OTLPMetricExporter(), OTLPLogExporter()
 
 
 def init_telemetry() -> None:
@@ -131,7 +181,6 @@ def init_telemetry() -> None:
         return
 
     from opentelemetry._logs import set_logger_provider
-    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
     from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
     from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
     from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
@@ -139,25 +188,27 @@ def init_telemetry() -> None:
 
     resource = Resource.create(
         {
-            "service.name": _SERVICE_NAME,
+            "service.name": os.environ.get("OTEL_SERVICE_NAME", _SERVICE_NAME),
             "service.version": os.environ.get("SERVICE_VERSION", "0.1.0"),
             "deployment.environment": os.environ.get("DEPLOYMENT_ENV", ""),
         }
     )
 
+    span_exporter, metric_exporter, log_exporter = _create_exporters()
+
     # Traces
     tracer_provider = TracerProvider(resource=resource)
-    tracer_provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+    tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
     trace.set_tracer_provider(tracer_provider)
 
     # Metrics
-    metric_reader = PeriodicExportingMetricReader(OTLPMetricExporter())
+    metric_reader = PeriodicExportingMetricReader(metric_exporter)
     meter_provider = MeterProvider(metric_readers=[metric_reader], resource=resource)
     metrics.set_meter_provider(meter_provider)
 
     # Logs → OTLP
     logger_provider = LoggerProvider(resource=resource)
-    logger_provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
+    logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
     set_logger_provider(logger_provider)
 
     handler = LoggingHandler(logger_provider=logger_provider)
@@ -173,7 +224,7 @@ def init_telemetry() -> None:
     _initialized = True
 
     # Connectivity probe — informational only (SDK buffers internally)
-    if _check_grpc_connectivity(endpoint):
+    if _check_connectivity(endpoint):
         _collector_reachable = True
         _log.info("otel_collector_connected", endpoint=endpoint)
     else:
@@ -274,4 +325,9 @@ def emit_to_otel_logs(logger: Any, method: str, event_dict: dict[str, Any]) -> d
     }
     extra = {k: v for k, v in event_dict.items() if k not in _reserved}
     logging.getLogger(_SERVICE_NAME).log(level, msg, extra=extra)
+
+    # Once OTLP is confirmed working, suppress stdout to avoid duplicate logs.
+    # Stdout remains the fallback during startup and if OTLP never connects.
+    if _collector_reachable:
+        raise structlog.DropEvent
     return event_dict

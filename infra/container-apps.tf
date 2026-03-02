@@ -38,6 +38,29 @@ resource "azurerm_container_app_environment" "main" {
   }
 }
 
+# Managed OTLP agent — forwards traces/metrics/logs to App Insights.
+# Not yet supported by azurerm; use azapi to patch the environment.
+resource "azapi_update_resource" "cae_otlp" {
+  type        = "Microsoft.App/managedEnvironments@2024-08-02-preview"
+  resource_id = azurerm_container_app_environment.main.id
+
+  body = {
+    properties = {
+      appInsightsConfiguration = {
+        connectionString = azurerm_application_insights.main.connection_string
+      }
+      openTelemetryConfiguration = {
+        tracesConfiguration = {
+          destinations = ["appInsights"]
+        }
+        logsConfiguration = {
+          destinations = ["appInsights"]
+        }
+      }
+    }
+  }
+}
+
 # S1: Key Vault secret refs — base set shared by all workloads, plus controller-only
 locals {
   kv_secrets_base = {
@@ -126,6 +149,14 @@ resource "azurerm_container_app" "controller" {
       env {
         name  = "AZURE_CLIENT_ID"
         value = azurerm_user_assigned_identity.controller.client_id
+      }
+      env {
+        name  = "OTEL_SERVICE_NAME"
+        value = "controller"
+      }
+      env {
+        name  = "DEPLOYMENT_ENV"
+        value = "dev"
       }
 
       # Jira (non-secret env vars — only set when jira_url is provided)
@@ -233,6 +264,14 @@ resource "azurerm_container_app_job" "task_runner" {
       env {
         name  = "AZURE_CLIENT_ID"
         value = azurerm_user_assigned_identity.job.client_id
+      }
+      env {
+        name  = "OTEL_SERVICE_NAME"
+        value = "task-runner"
+      }
+      env {
+        name  = "DEPLOYMENT_ENV"
+        value = "dev"
       }
 
       # S1: Secrets via Key Vault references

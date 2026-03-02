@@ -29,10 +29,10 @@ def test_init_telemetry_noop_without_endpoint(monkeypatch: pytest.MonkeyPatch) -
 def test_init_telemetry_configures_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
     with (
-        patch("gitlab_copilot_agent.telemetry.OTLPSpanExporter"),
-        patch("gitlab_copilot_agent.telemetry.OTLPMetricExporter"),
+        patch("opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter"),
+        patch("opentelemetry.exporter.otlp.proto.grpc.metric_exporter.OTLPMetricExporter"),
         patch("opentelemetry.exporter.otlp.proto.grpc._log_exporter.OTLPLogExporter"),
-        patch("gitlab_copilot_agent.telemetry._check_grpc_connectivity", return_value=True),
+        patch("gitlab_copilot_agent.telemetry._check_connectivity", return_value=True),
     ):
         init_telemetry()
         assert isinstance(trace.get_tracer_provider(), TracerProvider)
@@ -81,14 +81,33 @@ def test_emit_to_otel_logs_emits_when_configured(monkeypatch: pytest.MonkeyPatch
     import gitlab_copilot_agent.telemetry as tel_mod
 
     monkeypatch.setattr(tel_mod, "_otel_logging_configured", True)
+    monkeypatch.setattr(tel_mod, "_collector_reachable", False)
     with patch("gitlab_copilot_agent.telemetry.logging") as mock_logging:
         mock_logger = mock_logging.getLogger.return_value
         mock_logging.INFO = 20
         event_dict: dict[str, object] = {"event": "clone_done", "level": "info", "branch": "main"}
-        emit_to_otel_logs(None, "info", event_dict)
+        result = emit_to_otel_logs(None, "info", event_dict)
         mock_logger.log.assert_called_once()
-        args = mock_logger.log.call_args
-        assert args[0][1] == "clone_done"
+        assert result is event_dict  # Not dropped — stdout still active
+
+
+def test_emit_to_otel_logs_drops_event_when_collector_reachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once OTLP collector is confirmed, suppress stdout to avoid duplicate logs."""
+    import structlog
+
+    import gitlab_copilot_agent.telemetry as tel_mod
+
+    monkeypatch.setattr(tel_mod, "_otel_logging_configured", True)
+    monkeypatch.setattr(tel_mod, "_collector_reachable", True)
+    with patch("gitlab_copilot_agent.telemetry.logging") as mock_logging:
+        mock_logger = mock_logging.getLogger.return_value
+        mock_logging.INFO = 20
+        event_dict: dict[str, object] = {"event": "clone_done", "level": "info", "branch": "main"}
+        with pytest.raises(structlog.DropEvent):
+            emit_to_otel_logs(None, "info", event_dict)
+        mock_logger.log.assert_called_once()  # Still emitted to OTLP
 
 
 def test_configure_logging_routes_through_structlog() -> None:
@@ -121,10 +140,10 @@ def test_init_telemetry_starts_probe_when_unavailable(monkeypatch: pytest.Monkey
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
 
     with (
-        patch("gitlab_copilot_agent.telemetry.OTLPSpanExporter"),
-        patch("gitlab_copilot_agent.telemetry.OTLPMetricExporter"),
+        patch("opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter"),
+        patch("opentelemetry.exporter.otlp.proto.grpc.metric_exporter.OTLPMetricExporter"),
         patch("opentelemetry.exporter.otlp.proto.grpc._log_exporter.OTLPLogExporter"),
-        patch.object(tel_mod, "_check_grpc_connectivity", return_value=False),
+        patch.object(tel_mod, "_check_connectivity", return_value=False),
     ):
         init_telemetry()
         assert tel_mod._probe_timer is not None
@@ -143,10 +162,10 @@ def test_init_telemetry_no_probe_when_available(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
 
     with (
-        patch("gitlab_copilot_agent.telemetry.OTLPSpanExporter"),
-        patch("gitlab_copilot_agent.telemetry.OTLPMetricExporter"),
+        patch("opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter"),
+        patch("opentelemetry.exporter.otlp.proto.grpc.metric_exporter.OTLPMetricExporter"),
         patch("opentelemetry.exporter.otlp.proto.grpc._log_exporter.OTLPLogExporter"),
-        patch.object(tel_mod, "_check_grpc_connectivity", return_value=True),
+        patch.object(tel_mod, "_check_connectivity", return_value=True),
     ):
         init_telemetry()
         assert tel_mod._probe_timer is None
