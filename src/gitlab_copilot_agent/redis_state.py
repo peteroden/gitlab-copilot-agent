@@ -167,7 +167,6 @@ def _create_redis_client(
 
     if redis_host:
         try:
-            from azure.identity import DefaultAzureCredential
             from redis_entraid.cred_provider import (
                 create_from_default_azure_credential,
             )
@@ -175,13 +174,13 @@ def _create_redis_client(
             msg = "redis-entraid and azure-identity are required for Entra ID Redis auth"
             raise ImportError(msg) from exc
 
-        kwargs: dict[str, object] = {}
+        app_kwargs: dict[str, object] = {}
         if azure_client_id:
-            kwargs["managed_identity_client_id"] = azure_client_id
+            app_kwargs["managed_identity_client_id"] = azure_client_id
 
         credential_provider = create_from_default_azure_credential(
             ("https://redis.azure.com/.default",),
-            credential=DefaultAzureCredential(**kwargs),
+            app_kwargs=app_kwargs,
         )
         return aioredis.Redis(
             host=redis_host,
