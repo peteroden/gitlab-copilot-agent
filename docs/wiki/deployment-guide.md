@@ -222,8 +222,9 @@ terraform apply -var-file="dev.tfvars"
 | Controller Container App | Webhook/poller service |
 | Task Runner Job | Ephemeral task execution |
 | Azure Cache for Redis | State + result store (private endpoint) |
-| Key Vault | Secret storage (RBAC-enabled) |
+| Key Vault | Secret storage (RBAC-enabled, private endpoint) |
 | Log Analytics | Centralized logging |
+| Application Insights | Traces + structured logs via managed OTLP agent |
 
 ### CI/CD
 

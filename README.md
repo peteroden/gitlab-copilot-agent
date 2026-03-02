@@ -131,7 +131,9 @@ make k3d-deploy                 # deploy via Helm
 
 | Variable | Default | Description |
 |---|---|---|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `None` | OTLP gRPC endpoint — enables traces, metrics, logs |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `None` | OTLP endpoint — enables traces, metrics, logs export |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` | Protocol: `grpc` (port 4317) or `http/protobuf` (port 4318) |
+| `OTEL_SERVICE_NAME` | `gitlab-copilot-agent` | Service name in OTEL resource attributes |
 | `DEPLOYMENT_ENV` | — | Deployment environment label (e.g., production, staging) |
 | `SERVICE_VERSION` | `0.1.0` | Service version in OTEL resource attributes |
 

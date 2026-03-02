@@ -1,6 +1,6 @@
 # Observability
 
-OTEL setup, all 7 metrics, structured logging, trace correlation, Helm OTEL Collector configuration.
+OTEL setup, all 7 metrics, structured logging, trace correlation, Azure App Insights, Helm OTEL Collector configuration.
 
 ---
 
@@ -15,10 +15,19 @@ OTEL setup, all 7 metrics, structured logging, trace correlation, Helm OTEL Coll
 **Behavior**:
 - If `OTEL_EXPORTER_OTLP_ENDPOINT` unset → no-op (telemetry disabled)
 - If set → configure TracerProvider, MeterProvider, LoggerProvider
+- Protocol selected by `OTEL_EXPORTER_OTLP_PROTOCOL`: `grpc` (default) or `http/protobuf`
 
 **Called From**: `main.py` → `lifespan()` (on startup)
 
 **Shutdown**: `shutdown_telemetry()` called in lifespan cleanup (flushes buffers)
+
+### Connectivity Probe
+
+On startup, `init_telemetry()` probes the OTLP endpoint:
+- **Reachable** → `_collector_reachable = True`, stdout log output suppressed (OTLP-only)
+- **Unreachable** → logs go to both stdout and OTLP (SDK buffers internally), background probe retries every 30s
+
+This prevents duplicate logs: once OTLP is confirmed, structlog raises `DropEvent` after emitting to the OTLP pipeline, suppressing the `ConsoleRenderer` stdout output. stdlib logs (uvicorn, etc.) always go to stdout since they're not in the OTLP pipeline.
 
 ---
 
@@ -26,7 +35,7 @@ OTEL setup, all 7 metrics, structured logging, trace correlation, Helm OTEL Coll
 
 #### TracerProvider
 
-**Exporter**: OTLPSpanExporter (gRPC)
+**Exporter**: OTLPSpanExporter (gRPC or HTTP/protobuf, based on `OTEL_EXPORTER_OTLP_PROTOCOL`)
 
 **Processor**: BatchSpanProcessor (batches spans before export)
 
@@ -43,7 +52,7 @@ OTEL setup, all 7 metrics, structured logging, trace correlation, Helm OTEL Coll
 
 #### MeterProvider
 
-**Exporter**: OTLPMetricExporter (gRPC)
+**Exporter**: OTLPMetricExporter (gRPC or HTTP/protobuf, based on `OTEL_EXPORTER_OTLP_PROTOCOL`)
 
 **Reader**: PeriodicExportingMetricReader (exports metrics periodically)
 
@@ -55,13 +64,13 @@ OTEL setup, all 7 metrics, structured logging, trace correlation, Helm OTEL Coll
 
 #### LoggerProvider
 
-**Exporter**: OTLPLogExporter (gRPC)
+**Exporter**: OTLPLogExporter (gRPC or HTTP/protobuf, based on `OTEL_EXPORTER_OTLP_PROTOCOL`)
 
 **Processor**: BatchLogRecordProcessor
 
 **Handler**: `LoggingHandler` attached to `logging.getLogger("gitlab-copilot-agent")`
 
-**Integration**: structlog processor `emit_to_otel_logs` re-emits logs to stdlib logging
+**Integration**: structlog processor `emit_to_otel_logs` re-emits logs to stdlib logging. Once the OTLP collector is confirmed reachable, stdout output is suppressed to avoid duplicate logs.
 
 ---
 
@@ -219,9 +228,11 @@ copilot_session_duration.record(elapsed, {"task_type": "review"})
 
 ### Configuration
 
-**Location**: `main.py`
+**Location**: `telemetry.py` → `configure_logging()`
 
 **Library**: structlog
+
+**Output**: stdout (via `StreamHandler(sys.stdout)`) — Container Apps treats stderr as errors
 
 **Processors**:
 1. `structlog.contextvars.merge_contextvars` — Include context vars
@@ -598,11 +609,82 @@ uv run uvicorn gitlab_copilot_agent.main:app
 
 ---
 
+## Azure Container Apps (Managed OTLP Agent)
+
+Azure Container Apps provides a built-in managed OpenTelemetry agent that collects telemetry from apps and forwards it to Application Insights.
+
+### Architecture
+
+```
+App (localhost) → Managed OTLP Agent (sidecar) → Application Insights
+```
+
+- The managed agent runs as a sidecar on the Container Apps Environment
+- Apps send OTLP data to `localhost:4318` (HTTP) or `localhost:4317` (gRPC)
+- The agent auto-injects `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_EXPORTER_OTLP_PROTOCOL` env vars — do not set these manually
+- No private endpoint needed — traffic stays on localhost
+
+### Supported Destinations
+
+| Data Type | App Insights | Custom OTLP | Datadog |
+|-----------|:---:|:---:|:---:|
+| **Logs** | ✅ | ✅ | ✅ |
+| **Traces** | ✅ | ✅ | ✅ |
+| **Metrics** | ❌ | ✅ | ✅ |
+
+> **Note**: App Insights does not support metrics via the managed OTLP agent (as of 2025). Metrics are collected by the SDK but not forwarded.
+
+### Terraform Configuration
+
+The managed agent is configured via `azapi_update_resource` (not yet in the `azurerm` provider):
+
+```hcl
+resource "azapi_update_resource" "cae_otlp" {
+  type        = "Microsoft.App/managedEnvironments@2024-08-02-preview"
+  resource_id = azurerm_container_app_environment.main.id
+
+  body = {
+    properties = {
+      appInsightsConfiguration = {
+        connectionString = azurerm_application_insights.main.connection_string
+      }
+      openTelemetryConfiguration = {
+        tracesConfiguration = {
+          destinations = ["appInsights"]
+        }
+        logsConfiguration = {
+          destinations = ["appInsights"]
+        }
+      }
+    }
+  }
+}
+```
+
+### Log Routing Behavior
+
+| Phase | stdout (Log Analytics) | OTLP (App Insights) |
+|-------|:---:|:---:|
+| Startup (before OTLP confirmed) | ✅ | ✅ (buffered by SDK) |
+| OTLP confirmed reachable | ❌ (suppressed) | ✅ |
+| OTLP never connects | ✅ (permanent fallback) | ❌ |
+
+### Viewing Data
+
+- **Log Analytics**: `ContainerAppConsoleLogs_CL` table (stdout/stderr before OTLP connects)
+- **App Insights**: Transaction search (traces), Logs blade (structured logs with trace correlation)
+
+---
+
 ## Production Configuration
 
-**Recommendation**: Use managed observability platform (Datadog, Honeycomb, New Relic, etc.)
+**Recommendation**: Use managed observability (Azure App Insights for Container Apps, or Datadog/Honeycomb/New Relic for K8s)
 
-**Example (Datadog)**:
+### Azure Container Apps
+
+No additional configuration needed beyond the terraform above. The managed agent handles collection and forwarding. Set `OTEL_SERVICE_NAME` and `DEPLOYMENT_ENV` on each container app.
+
+### Kubernetes (Helm)
 ```yaml
 telemetry:
   otlpEndpoint: http://datadog-agent:4317
@@ -704,11 +786,15 @@ metric.add(1, {"outcome": "success"})  # ✅ Low cardinality
 **Telemetry Stack**:
 - **Metrics**: 7 instruments (counters, histograms)
 - **Traces**: Manual spans + FastAPI/HTTPX auto-instrumentation
-- **Logs**: structlog with OTLP export + trace correlation
+- **Logs**: structlog with OTLP export + trace correlation (stdout suppressed once OTLP confirmed)
 
-**Local Dev**: Console collector (logging exporter)
+**Protocol**: Configurable via `OTEL_EXPORTER_OTLP_PROTOCOL` — `grpc` (default) or `http/protobuf`
 
-**Production**: OTEL Collector DaemonSet → Prometheus/Jaeger/Loki
+**Azure Container Apps**: Managed OTLP agent → App Insights (traces + logs; metrics not supported)
+
+**Kubernetes**: OTEL Collector DaemonSet → Prometheus/Jaeger/Loki
+
+**Local Dev**: Console collector (logging exporter) or unset `OTEL_EXPORTER_OTLP_ENDPOINT` for stdout-only
 
 **Key Metrics**: `reviews_total`, `reviews_duration_seconds`, `webhook_errors_total`, `copilot_session_duration_seconds`
 
