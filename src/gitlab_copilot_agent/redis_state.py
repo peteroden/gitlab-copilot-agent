@@ -168,7 +168,7 @@ def _create_redis_client(
     if redis_host:
         try:
             from azure.identity import DefaultAzureCredential
-            from redis_entraid.cred_provider import (  # type: ignore[import-untyped]
+            from redis_entraid.cred_provider import (
                 create_from_default_azure_credential,
             )
         except ImportError as exc:  # pragma: no cover
