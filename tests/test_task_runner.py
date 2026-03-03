@@ -142,7 +142,7 @@ class TestRunTask:
             patch(f"{_M}._build_coding_result", AsyncMock(return_value=coding_json)),
             patch(f"{_M}._store_result", AsyncMock()),
             patch(f"{_M}.shutil.rmtree"),
-            patch("gitlab_copilot_agent.coding_engine.ensure_gitignore"),
+            patch("gitlab_copilot_agent.coding_engine.ensure_git_exclude"),
         ):
             assert await run_task() == 0
             assert ms.call_args[1]["task_type"] == "coding"

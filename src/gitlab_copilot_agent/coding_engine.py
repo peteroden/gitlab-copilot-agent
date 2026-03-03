@@ -66,17 +66,18 @@ def build_jira_coding_prompt(issue_key: str, summary: str, description: str | No
     )
 
 
-def ensure_gitignore(repo_root: str) -> bool:
-    """Ensure .gitignore at *repo_root* contains standard Python ignore patterns.
+def ensure_git_exclude(repo_root: str) -> bool:
+    """Write standard Python ignore patterns to ``.git/info/exclude``.
+
+    Uses the per-clone exclude file instead of ``.gitignore`` so that the
+    patterns never appear in ``git diff`` or pollute the user's repository.
 
     Returns True if the file was created or modified.
-    Refuses to write if .gitignore is a symlink or resolves outside repo_root.
     """
-    path = Path(repo_root) / ".gitignore"
-    root_resolved = Path(repo_root).resolve()
-    if path.is_symlink() or (path.exists() and not path.resolve().is_relative_to(root_resolved)):
+    exclude = Path(repo_root) / ".git" / "info" / "exclude"
+    if not exclude.parent.is_dir():
         return False
-    content = path.read_text() if path.exists() else ""
+    content = exclude.read_text() if exclude.exists() else ""
     existing = set(content.splitlines())
     missing = [p for p in _PYTHON_GITIGNORE_PATTERNS if p not in existing]
     if not missing:
@@ -84,7 +85,7 @@ def ensure_gitignore(repo_root: str) -> bool:
     suffix = "\n".join(missing) + "\n"
     if content and not content.endswith("\n"):
         suffix = "\n" + suffix
-    path.write_text(content + suffix)
+    exclude.write_text(content + suffix)
     return True
 
 
@@ -99,7 +100,7 @@ async def run_coding_task(
     description: str | None,
 ) -> TaskResult:
     """Run a Copilot agent session to implement changes from a Jira issue."""
-    ensure_gitignore(repo_path)
+    ensure_git_exclude(repo_path)
     task = TaskParams(
         task_type="coding",
         task_id=issue_key,

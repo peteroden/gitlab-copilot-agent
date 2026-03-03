@@ -252,9 +252,9 @@ async def run_task() -> int:
     )
     try:
         if task_type == "coding":
-            from gitlab_copilot_agent.coding_engine import ensure_gitignore
+            from gitlab_copilot_agent.coding_engine import ensure_git_exclude
 
-            ensure_gitignore(str(repo_path))
+            ensure_git_exclude(str(repo_path))
         prompt = get_prompt(settings, "review" if task_type == "review" else "coding")
         summary = await run_copilot_session(
             settings,
