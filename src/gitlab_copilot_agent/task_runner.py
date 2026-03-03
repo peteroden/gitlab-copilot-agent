@@ -31,7 +31,8 @@ ENV_REDIS_PORT = "REDIS_PORT"
 ENV_AZURE_CLIENT_ID = "AZURE_CLIENT_ID"
 VALID_TASK_TYPES: frozenset[str] = frozenset({"review", "coding", "echo"})
 _RESULT_TTL = 3600  # 1 hour
-_DISPATCH_QUEUE = "task_dispatch_queue"
+_DISPATCH_READ_RETRIES = 5
+_DISPATCH_READ_DELAY = 2.0  # seconds between retries
 
 _RETRY_PROMPT = (
     "Your response did not include the required JSON output block. "
@@ -72,12 +73,18 @@ async def _store_result(task_id: str, result: str) -> None:
 
 
 async def _load_dispatch_params() -> dict[str, str] | None:
-    """Try to load task params from the Redis dispatch queue.
+    """Load task params from Redis keyed by ACA execution name.
 
-    The queue stores full JSON payloads (atomic pop = data retrieval).
-    Returns a dict with task_type, task_id, repo_url, branch, system_prompt,
-    user_prompt — or None if no dispatched task is available.
+    The controller stores dispatch params at ``dispatch:{execution_name}``
+    after starting the job. The job discovers its own execution name via
+    the ``CONTAINER_APP_JOB_EXECUTION_NAME`` env var (injected by ACA).
+
+    Retries with backoff because the controller writes the key after
+    begin_start() returns — the job may start before the write completes.
     """
+    exec_name = os.environ.get("CONTAINER_APP_JOB_EXECUTION_NAME", "").strip()
+    if not exec_name:
+        return None
     redis_url = os.environ.get(ENV_REDIS_URL, "").strip()
     redis_host = os.environ.get(ENV_REDIS_HOST, "").strip()
     if not redis_url and not redis_host:
@@ -92,12 +99,22 @@ async def _load_dispatch_params() -> dict[str, str] | None:
         azure_client_id=os.environ.get(ENV_AZURE_CLIENT_ID),
     )
     try:
-        raw = await store.pop_task(_DISPATCH_QUEUE)
-        if raw is None:
-            return None
-        params: dict[str, str] = json.loads(raw)
-        await log.ainfo("dispatch_params_loaded", task_id=params.get("task_id"))
-        return params
+        dispatch_key = f"dispatch:{exec_name}"
+        # Retry: controller writes key after begin_start(), job may beat it
+        for attempt in range(_DISPATCH_READ_RETRIES):
+            raw = await store.get(dispatch_key)
+            if raw is not None:
+                params: dict[str, str] = json.loads(raw)
+                await log.ainfo(
+                    "dispatch_params_loaded",
+                    task_id=params.get("task_id"),
+                    execution=exec_name,
+                )
+                return params
+            if attempt < _DISPATCH_READ_RETRIES - 1:
+                await asyncio.sleep(_DISPATCH_READ_DELAY)
+        await log.awarning("dispatch_key_not_found", key=dispatch_key)
+        return None
     except Exception:
         await log.awarning("dispatch_load_failed", exc_info=True)
         return None

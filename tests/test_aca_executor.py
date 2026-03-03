@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import sys
 import types
@@ -130,7 +129,6 @@ class MemoryResultStore:
 
     def __init__(self) -> None:
         self._data: dict[str, str] = {}
-        self._queues: dict[str, list[str]] = {}
 
     async def get(self, key: str) -> str | None:
         return self._data.get(key)
@@ -139,16 +137,13 @@ class MemoryResultStore:
         self._data[key] = value
 
     async def push_task(self, queue: str, payload: str) -> None:
-        self._queues.setdefault(queue, []).append(payload)
+        pass  # unused in keyed dispatch, kept for protocol compliance
 
     async def pop_task(self, queue: str) -> str | None:
-        items = self._queues.get(queue, [])
-        return items.pop(0) if items else None
+        return None
 
     async def remove_task(self, queue: str, payload: str) -> None:
-        items = self._queues.get(queue, [])
-        with contextlib.suppress(ValueError):
-            items.remove(payload)
+        pass
 
     async def aclose(self) -> None:
         pass
@@ -264,11 +259,14 @@ class TestJobExecution:
         assert result.summary == "LGTM"
 
     @patch("gitlab_copilot_agent.aca_executor._JOB_POLL_INTERVAL", 0.01)
-    async def test_dispatches_params_via_redis_not_template(
+    async def test_dispatches_params_via_keyed_redis(
         self, jobs_mock: MagicMock, jobs_executions_mock: MagicMock
     ) -> None:
-        """Verify task params go to Redis and begin_start has no template."""
-        from gitlab_copilot_agent.aca_executor import ContainerAppsTaskExecutor
+        """Verify task params are stored keyed by execution name."""
+        from gitlab_copilot_agent.aca_executor import (
+            _DISPATCH_KEY_PREFIX,
+            ContainerAppsTaskExecutor,
+        )
 
         poller = MagicMock()
         exec_result = MagicMock()
@@ -284,7 +282,6 @@ class TestJobExecution:
         store = MemoryResultStore()
         review_json = json.dumps({"result_type": "review", "summary": "ok"})
 
-        # Set result after dispatch but before poll completes
         async def _set_result_later() -> None:
             await asyncio.sleep(0.01)
             await store.set(TASK_ID, review_json)
@@ -299,29 +296,31 @@ class TestJobExecution:
         _, kwargs = jobs_mock.begin_start.call_args
         assert "template" not in kwargs
 
+        # Dispatch payload stored keyed by execution name
+        dispatch_key = f"{_DISPATCH_KEY_PREFIX}{EXECUTION_NAME}"
+        raw = await store.get(dispatch_key)
+        assert raw is not None
+        params = json.loads(raw)
+        assert params["task_id"] == TASK_ID
+        assert params["repo_url"] == REPO_URL
+
     @patch("gitlab_copilot_agent.aca_executor._JOB_POLL_INTERVAL", 0.01)
-    async def test_cleans_up_queue_on_start_failure(self, jobs_mock: MagicMock) -> None:
-        """If begin_start fails, only the failed task's payload is removed."""
+    async def test_start_failure_does_not_leave_dispatch_key(self, jobs_mock: MagicMock) -> None:
+        """If begin_start fails, no dispatch key is written."""
         from gitlab_copilot_agent.aca_executor import (
-            _DISPATCH_QUEUE,
+            _DISPATCH_KEY_PREFIX,
             ContainerAppsTaskExecutor,
         )
 
         jobs_mock.begin_start.side_effect = RuntimeError("ACA API error")
-
         store = MemoryResultStore()
-        # Pre-seed an unrelated payload to prove remove_task is targeted
-        await store.push_task(_DISPATCH_QUEUE, '{"other": "task"}')
-
         executor = ContainerAppsTaskExecutor(settings=_make_settings(), result_store=store)
 
         with pytest.raises(RuntimeError, match="ACA API error"):
             await executor.execute(_make_task())
 
-        # The pre-existing payload must survive — only the failed one is removed
-        surviving = await store.pop_task(_DISPATCH_QUEUE)
-        assert surviving == '{"other": "task"}'
-        assert await store.pop_task(_DISPATCH_QUEUE) is None
+        # No dispatch keys should exist — payload is written AFTER begin_start
+        assert all(not k.startswith(_DISPATCH_KEY_PREFIX) for k in store._data)
 
     async def test_coding_result_includes_patch(
         self, jobs_mock: MagicMock, jobs_executions_mock: MagicMock

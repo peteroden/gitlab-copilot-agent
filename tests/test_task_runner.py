@@ -264,14 +264,21 @@ class TestStoreResult:
 class TestLoadDispatchParams:
     """Tests for _load_dispatch_params function."""
 
+    async def test_returns_none_when_no_exec_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns None when CONTAINER_APP_JOB_EXECUTION_NAME is not set."""
+        monkeypatch.delenv("CONTAINER_APP_JOB_EXECUTION_NAME", raising=False)
+        assert await _load_dispatch_params() is None
+
     async def test_returns_none_when_no_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Returns None when no Redis env vars are set."""
+        monkeypatch.setenv("CONTAINER_APP_JOB_EXECUTION_NAME", "exec-123")
         monkeypatch.delenv("REDIS_URL", raising=False)
         monkeypatch.delenv("REDIS_HOST", raising=False)
         assert await _load_dispatch_params() is None
 
-    async def test_returns_params_from_queue(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Loads and returns dispatch params from Redis queue."""
+    async def test_returns_params_by_execution_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Loads dispatch params keyed by execution name."""
+        monkeypatch.setenv("CONTAINER_APP_JOB_EXECUTION_NAME", "exec-123")
         monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
         dispatch = {
             "task_type": "review",
@@ -281,27 +288,50 @@ class TestLoadDispatchParams:
             "user_prompt": "p",
         }
         mock_store = MagicMock()
-        mock_store.pop_task = AsyncMock(return_value=json.dumps(dispatch))
+        mock_store.get = AsyncMock(return_value=json.dumps(dispatch))
         mock_store.aclose = AsyncMock()
         with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
             result = await _load_dispatch_params()
         assert result == dispatch
+        mock_store.get.assert_awaited_once_with("dispatch:exec-123")
         mock_store.aclose.assert_awaited_once()
 
-    async def test_returns_none_on_empty_queue(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Returns None when queue is empty."""
+    @patch(f"{_M}._DISPATCH_READ_RETRIES", 3)
+    @patch(f"{_M}._DISPATCH_READ_DELAY", 0.0)
+    async def test_retries_then_returns_none_when_key_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Retries before returning None when dispatch key not found."""
+        monkeypatch.setenv("CONTAINER_APP_JOB_EXECUTION_NAME", "exec-123")
         monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
         mock_store = MagicMock()
-        mock_store.pop_task = AsyncMock(return_value=None)
+        mock_store.get = AsyncMock(return_value=None)
         mock_store.aclose = AsyncMock()
         with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
             assert await _load_dispatch_params() is None
+        assert mock_store.get.await_count == 3
+
+    @patch(f"{_M}._DISPATCH_READ_RETRIES", 3)
+    @patch(f"{_M}._DISPATCH_READ_DELAY", 0.0)
+    async def test_succeeds_on_retry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns params after initial miss + successful retry."""
+        monkeypatch.setenv("CONTAINER_APP_JOB_EXECUTION_NAME", "exec-123")
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+        dispatch = {"task_type": "review", "task_id": "t-1"}
+        mock_store = MagicMock()
+        mock_store.get = AsyncMock(side_effect=[None, json.dumps(dispatch)])
+        mock_store.aclose = AsyncMock()
+        with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
+            result = await _load_dispatch_params()
+        assert result == dispatch
+        assert mock_store.get.await_count == 2
 
     async def test_returns_none_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Returns None and logs warning when pop_task raises."""
+        """Returns None and logs warning when get raises."""
+        monkeypatch.setenv("CONTAINER_APP_JOB_EXECUTION_NAME", "exec-123")
         monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
         mock_store = MagicMock()
-        mock_store.pop_task = AsyncMock(side_effect=RuntimeError("boom"))
+        mock_store.get = AsyncMock(side_effect=RuntimeError("boom"))
         mock_store.aclose = AsyncMock()
         with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
             assert await _load_dispatch_params() is None

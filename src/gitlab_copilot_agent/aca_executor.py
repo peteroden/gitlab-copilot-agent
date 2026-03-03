@@ -22,7 +22,8 @@ log = structlog.get_logger()
 _JOB_POLL_INTERVAL = 5  # seconds; ACA API is slower than k8s, use longer interval
 _EXECUTION_LOCK_TTL = 900  # sentinel TTL to prevent duplicate executions
 _EXECUTION_LOCK_PREFIX = "aca_exec:"
-_DISPATCH_QUEUE = "task_dispatch_queue"
+_DISPATCH_KEY_PREFIX = "dispatch:"
+_DISPATCH_TTL = 600  # 10 min — enough for job startup + param read
 
 
 def _build_dispatch_payload(task: TaskParams) -> str:
@@ -84,18 +85,13 @@ class ContainerAppsTaskExecutor:
             log.info("aca_execution_already_started", task_id=task.task_id)
             return await self._wait_for_result(existing, task)
 
-        # Write task params to Redis so the job can read them on startup.
-        # ACA begin_start(template=...) does a full REPLACE (not merge),
-        # so we pass no template and let the base job template run as-is.
+        # Start execution first to get the execution name, then write
+        # dispatch params keyed by that name. The job reads its own
+        # CONTAINER_APP_JOB_EXECUTION_NAME env var to find its payload.
+        execution_name = await asyncio.to_thread(self._start_execution, task)
+        dispatch_key = f"{_DISPATCH_KEY_PREFIX}{execution_name}"
         payload = _build_dispatch_payload(task)
-        await self._store.push_task(_DISPATCH_QUEUE, payload)
-
-        try:
-            execution_name = await asyncio.to_thread(self._start_execution, task)
-        except Exception:
-            # Compensating cleanup: remove the specific queued payload on failure
-            await self._store.remove_task(_DISPATCH_QUEUE, payload)
-            raise
+        await self._store.set(dispatch_key, payload, ttl=_DISPATCH_TTL)
 
         await self._store.set(lock_key, execution_name, ttl=_EXECUTION_LOCK_TTL)
         return await self._wait_for_result(execution_name, task)
