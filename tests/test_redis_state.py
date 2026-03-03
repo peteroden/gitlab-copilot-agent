@@ -260,6 +260,98 @@ async def test_result_store_set_tolerates_connection_error() -> None:
     await store.set("task:123", "result")  # Should not raise
 
 
+async def test_result_store_push_task() -> None:
+    """RedisResultStore.push_task calls LPUSH."""
+    from unittest.mock import AsyncMock
+
+    from gitlab_copilot_agent.redis_state import RedisResultStore
+
+    mock_client = AsyncMock()
+    store = RedisResultStore(mock_client)
+    await store.push_task("queue", '{"task": "data"}')
+    mock_client.lpush.assert_awaited_once()
+
+
+async def test_result_store_push_task_raises_on_error() -> None:
+    """RedisResultStore.push_task propagates errors (fail-fast)."""
+    from unittest.mock import AsyncMock
+
+    from redis.exceptions import ConnectionError as RedisConnError
+
+    from gitlab_copilot_agent.redis_state import RedisResultStore
+
+    mock_client = AsyncMock()
+    mock_client.lpush.side_effect = RedisConnError("Connection refused")
+    store = RedisResultStore(mock_client)
+    with pytest.raises(RedisConnError):
+        await store.push_task("queue", '{"task": "data"}')
+
+
+async def test_result_store_pop_task_returns_value() -> None:
+    """RedisResultStore.pop_task returns decoded string from RPOP."""
+    from unittest.mock import AsyncMock
+
+    from gitlab_copilot_agent.redis_state import RedisResultStore
+
+    mock_client = AsyncMock()
+    mock_client.rpop.return_value = b'{"task": "data"}'
+    store = RedisResultStore(mock_client)
+    result = await store.pop_task("queue")
+    assert result == '{"task": "data"}'
+
+
+async def test_result_store_pop_task_returns_none_on_empty() -> None:
+    """RedisResultStore.pop_task returns None when queue is empty."""
+    from unittest.mock import AsyncMock
+
+    from gitlab_copilot_agent.redis_state import RedisResultStore
+
+    mock_client = AsyncMock()
+    mock_client.rpop.return_value = None
+    store = RedisResultStore(mock_client)
+    assert await store.pop_task("queue") is None
+
+
+async def test_result_store_pop_task_tolerates_connection_error() -> None:
+    """RedisResultStore.pop_task returns None on connection error."""
+    from unittest.mock import AsyncMock
+
+    from redis.exceptions import ConnectionError as RedisConnError
+
+    from gitlab_copilot_agent.redis_state import RedisResultStore
+
+    mock_client = AsyncMock()
+    mock_client.rpop.side_effect = RedisConnError("Connection refused")
+    store = RedisResultStore(mock_client)
+    assert await store.pop_task("queue") is None
+
+
+async def test_result_store_remove_task() -> None:
+    """RedisResultStore.remove_task calls LREM with payload."""
+    from unittest.mock import AsyncMock
+
+    from gitlab_copilot_agent.redis_state import RedisResultStore
+
+    mock_client = AsyncMock()
+    store = RedisResultStore(mock_client)
+    await store.remove_task("queue", '{"task": "data"}')
+    mock_client.lrem.assert_awaited_once()
+
+
+async def test_result_store_remove_task_tolerates_connection_error() -> None:
+    """RedisResultStore.remove_task tolerates connection errors."""
+    from unittest.mock import AsyncMock
+
+    from redis.exceptions import ConnectionError as RedisConnError
+
+    from gitlab_copilot_agent.redis_state import RedisResultStore
+
+    mock_client = AsyncMock()
+    mock_client.lrem.side_effect = RedisConnError("Connection refused")
+    store = RedisResultStore(mock_client)
+    await store.remove_task("queue", '{"task": "data"}')  # Should not raise
+
+
 # -- Config validation tests --
 
 

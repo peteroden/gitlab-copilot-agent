@@ -23,6 +23,8 @@ RUN uv sync --no-dev --extra kubernetes --extra azure --frozen && \
     find .venv -name "copilot" -path "*/bin/copilot" -exec chmod +x {} \;
 
 COPY --chown=app:app src/ src/
+RUN uv sync --no-dev --extra kubernetes --extra azure --frozen
+
 COPY --chown=app:app scripts/entrypoint.sh /opt/entrypoint.sh
 EXPOSE 8000
 ENTRYPOINT ["/opt/entrypoint.sh"]

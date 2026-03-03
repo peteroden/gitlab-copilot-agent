@@ -285,3 +285,63 @@ class Settings(BaseSettings):
                     "(used for result passback from job executions)"
                 )
         return self
+
+
+class TaskRunnerSettings(BaseSettings):
+    """Minimal settings for the task runner job.
+
+    Unlike the full ``Settings``, this has no controller-specific validations
+    (webhook secret, polling projects, k8s/ACA executor config).  The task
+    runner only needs GitLab + Copilot credentials and prompt configuration.
+    """
+
+    model_config = {"env_prefix": ""}
+
+    # GitLab
+    gitlab_url: str = Field(description="GitLab instance URL")
+    gitlab_token: str = Field(description="GitLab API private token")
+
+    # Copilot / LLM
+    copilot_model: str = Field(default="gpt-4", description="Model to use")
+    copilot_provider_type: str | None = Field(default=None, description="BYOK provider type")
+    copilot_provider_base_url: str | None = Field(default=None, description="BYOK provider URL")
+    copilot_provider_api_key: str | None = Field(default=None, description="BYOK provider API key")
+    github_token: str | None = Field(default=None, description="GitHub token for Copilot auth")
+
+    # System prompts
+    system_prompt: str | None = Field(default=None, description="Global base prompt")
+    system_prompt_suffix: str | None = Field(default=None, description="Appended to global base")
+    coding_system_prompt: str | None = Field(default=None, description="Coding prompt override")
+    coding_system_prompt_suffix: str | None = Field(default=None, description="Coding suffix")
+    review_system_prompt: str | None = Field(default=None, description="Review prompt override")
+    review_system_prompt_suffix: str | None = Field(default=None, description="Review suffix")
+    mr_comment_system_prompt: str | None = Field(default=None, description="MR comment override")
+    mr_comment_system_prompt_suffix: str | None = Field(
+        default=None, description="MR comment suffix"
+    )
+
+    # Runtime
+    clone_dir: str | None = Field(default=None, description="Base directory for repo clones")
+    log_level: str = Field(default="info", description="Log level")
+
+    # Redis (for result storage)
+    state_backend: Literal["memory", "redis"] = Field(
+        default="memory", description="State backend"
+    )
+    redis_url: str | None = Field(default=None, description="Redis connection string")
+    redis_host: str | None = Field(default=None, description="Redis hostname for Entra ID auth")
+    redis_port: int = Field(default=6380, description="Redis TLS port")
+    azure_client_id: str | None = Field(default=None, description="Managed identity client ID")
+
+    @property
+    def redis_configured(self) -> bool:
+        """True when Redis connectivity is configured."""
+        return bool(self.redis_url or self.redis_host)
+
+    @model_validator(mode="after")
+    def _check_auth(self) -> "TaskRunnerSettings":
+        if not self.github_token and not self.copilot_provider_type:
+            raise ValueError(
+                "No LLM authentication configured. Set GITHUB_TOKEN or COPILOT_PROVIDER_TYPE."
+            )
+        return self

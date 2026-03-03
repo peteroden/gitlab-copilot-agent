@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from gitlab_copilot_agent.config import Settings
+    from gitlab_copilot_agent.config import Settings, TaskRunnerSettings
 
 PromptType = Literal["coding", "review", "mr_comment"]
 
@@ -130,7 +130,7 @@ _SUFFIX_FIELDS: dict[PromptType, str] = {
 }
 
 
-def get_prompt(settings: Settings, prompt_type: PromptType) -> str:
+def get_prompt(settings: Settings | TaskRunnerSettings, prompt_type: PromptType) -> str:
     """Resolve the effective system prompt for *prompt_type*.
 
     Resolution:

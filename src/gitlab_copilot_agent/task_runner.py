@@ -11,7 +11,7 @@ from urllib.parse import ParseResult, urlparse
 import structlog
 
 from gitlab_copilot_agent.coding_engine import parse_agent_output
-from gitlab_copilot_agent.config import Settings
+from gitlab_copilot_agent.config import TaskRunnerSettings
 from gitlab_copilot_agent.copilot_session import run_copilot_session
 from gitlab_copilot_agent.git_operations import (
     MAX_PATCH_SIZE,
@@ -31,6 +31,7 @@ ENV_REDIS_PORT = "REDIS_PORT"
 ENV_AZURE_CLIENT_ID = "AZURE_CLIENT_ID"
 VALID_TASK_TYPES: frozenset[str] = frozenset({"review", "coding", "echo"})
 _RESULT_TTL = 3600  # 1 hour
+_DISPATCH_QUEUE = "task_dispatch_queue"
 
 _RETRY_PROMPT = (
     "Your response did not include the required JSON output block. "
@@ -66,6 +67,40 @@ async def _store_result(task_id: str, result: str) -> None:
     )
     try:
         await store.set(task_id, result, ttl=_RESULT_TTL)
+    finally:
+        await store.aclose()
+
+
+async def _load_dispatch_params() -> dict[str, str] | None:
+    """Try to load task params from the Redis dispatch queue.
+
+    The queue stores full JSON payloads (atomic pop = data retrieval).
+    Returns a dict with task_type, task_id, repo_url, branch, system_prompt,
+    user_prompt — or None if no dispatched task is available.
+    """
+    redis_url = os.environ.get(ENV_REDIS_URL, "").strip()
+    redis_host = os.environ.get(ENV_REDIS_HOST, "").strip()
+    if not redis_url and not redis_host:
+        return None
+    from gitlab_copilot_agent.redis_state import create_result_store
+
+    store = create_result_store(
+        "redis",
+        redis_url=redis_url or None,
+        redis_host=redis_host or None,
+        redis_port=int(os.environ.get(ENV_REDIS_PORT, "6380")),
+        azure_client_id=os.environ.get(ENV_AZURE_CLIENT_ID),
+    )
+    try:
+        raw = await store.pop_task(_DISPATCH_QUEUE)
+        if raw is None:
+            return None
+        params: dict[str, str] = json.loads(raw)
+        await log.ainfo("dispatch_params_loaded", task_id=params.get("task_id"))
+        return params
+    except Exception:
+        await log.awarning("dispatch_load_failed", exc_info=True)
+        return None
     finally:
         await store.aclose()
 
@@ -159,22 +194,32 @@ async def _run_git_simple(repo_path: Path, *args: str) -> str:
 
 
 async def run_task() -> int:
-    try:
-        task_type = _get_required_env(ENV_TASK_TYPE)
-        task_id = _get_required_env(ENV_TASK_ID)
-        repo_url = _get_required_env(ENV_REPO_URL)
-        branch = _get_required_env(ENV_BRANCH)
-        payload_raw = _get_required_env(ENV_TASK_PAYLOAD)
-    except RuntimeError:
-        await log.aerror("missing_env_var", exc_info=True)
-        return 1
+    # Try Redis dispatch queue first (ACA executor), fall back to env vars (k8s)
+    params = await _load_dispatch_params()
+    if params is not None:
+        task_type = params["task_type"]
+        task_id = params["task_id"]
+        repo_url = params["repo_url"]
+        branch = params["branch"]
+        user_prompt = params["user_prompt"]
+        payload_raw = json.dumps({"prompt": user_prompt})
+    else:
+        try:
+            task_type = _get_required_env(ENV_TASK_TYPE)
+            task_id = _get_required_env(ENV_TASK_ID)
+            repo_url = _get_required_env(ENV_REPO_URL)
+            branch = _get_required_env(ENV_BRANCH)
+            payload_raw = _get_required_env(ENV_TASK_PAYLOAD)
+            user_prompt = _parse_task_payload(payload_raw).get("prompt", payload_raw)
+        except RuntimeError:
+            await log.aerror("missing_env_var", exc_info=True)
+            return 1
     bound_log = log.bind(task_id=task_id, task_type=task_type)
     if task_type not in VALID_TASK_TYPES:
         await bound_log.aerror("invalid_task_type", valid=sorted(VALID_TASK_TYPES))
         return 1
     if task_type == "echo":
         try:
-            user_prompt = _parse_task_payload(payload_raw).get("prompt", payload_raw)
             result = json.dumps({"echo": user_prompt, "task_id": task_id})
             await _store_result(task_id, result)
             await bound_log.ainfo("echo_complete")
@@ -182,10 +227,9 @@ async def run_task() -> int:
         except Exception:
             await bound_log.aerror("echo_failed", exc_info=True)
             return 1
-    settings = Settings()
+    settings = TaskRunnerSettings()
     _validate_repo_url(repo_url, settings.gitlab_url)
     await bound_log.ainfo("task_start", repo=_sanitize_url(repo_url), branch=branch)
-    user_prompt = _parse_task_payload(payload_raw).get("prompt", payload_raw)
     repo_path = await git_clone(
         repo_url, branch, settings.gitlab_token, clone_dir=settings.clone_dir
     )

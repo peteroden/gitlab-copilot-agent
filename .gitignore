@@ -22,3 +22,4 @@ demo.env
 *.tfvars
 !*.tfvars.example
 .terraform.lock.hcl
+infra/tfplan
