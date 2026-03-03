@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
 import types
@@ -74,7 +75,6 @@ def _install_azure_stub() -> tuple[MagicMock, MagicMock]:
     azure_mod = types.ModuleType("azure")
     mgmt_mod = types.ModuleType("azure.mgmt")
     aca_mod = types.ModuleType("azure.mgmt.appcontainers")
-    models_mod = types.ModuleType("azure.mgmt.appcontainers.models")
 
     credential_mock = MagicMock(name="DefaultAzureCredential")
     identity_mod.DefaultAzureCredential = credential_mock  # type: ignore[attr-defined]
@@ -83,21 +83,10 @@ def _install_azure_stub() -> tuple[MagicMock, MagicMock]:
     client_class_mock = MagicMock(return_value=client_mock)
     aca_mod.ContainerAppsAPIClient = client_class_mock  # type: ignore[attr-defined]
 
-    # Model stubs that store kwargs
-    class _Passthrough:
-        def __init__(self, **kwargs: Any) -> None:
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-
-    models_mod.JobExecutionTemplate = _Passthrough  # type: ignore[attr-defined]
-    models_mod.JobExecutionContainer = _Passthrough  # type: ignore[attr-defined]
-    models_mod.EnvironmentVar = _Passthrough  # type: ignore[attr-defined]
-
     sys.modules["azure"] = azure_mod
     sys.modules["azure.identity"] = identity_mod
     sys.modules["azure.mgmt"] = mgmt_mod
     sys.modules["azure.mgmt.appcontainers"] = aca_mod
-    sys.modules["azure.mgmt.appcontainers.models"] = models_mod
 
     return client_mock, client_mock.jobs
 
@@ -125,6 +114,11 @@ def jobs_mock(client_mock: MagicMock) -> MagicMock:
 
 
 @pytest.fixture
+def jobs_executions_mock(client_mock: MagicMock) -> MagicMock:
+    return client_mock.jobs_executions
+
+
+@pytest.fixture
 def fake_result_store() -> MagicMock:
     store = MagicMock()
     store.get = MagicMock(return_value=asyncio.coroutine(lambda *a: None)())
@@ -136,12 +130,25 @@ class MemoryResultStore:
 
     def __init__(self) -> None:
         self._data: dict[str, str] = {}
+        self._queues: dict[str, list[str]] = {}
 
     async def get(self, key: str) -> str | None:
         return self._data.get(key)
 
     async def set(self, key: str, value: str, ttl: int = 0) -> None:
         self._data[key] = value
+
+    async def push_task(self, queue: str, payload: str) -> None:
+        self._queues.setdefault(queue, []).append(payload)
+
+    async def pop_task(self, queue: str) -> str | None:
+        items = self._queues.get(queue, [])
+        return items.pop(0) if items else None
+
+    async def remove_task(self, queue: str, payload: str) -> None:
+        items = self._queues.get(queue, [])
+        with contextlib.suppress(ValueError):
+            items.remove(payload)
 
     async def aclose(self) -> None:
         pass
@@ -160,40 +167,40 @@ class TestProtocolCompliance:
         )
 
 
-class TestEnvOverrides:
-    """Verify only non-sensitive params are passed per-execution (S1)."""
+class TestDispatchPayload:
+    """Verify only non-sensitive params are serialized for Redis dispatch (S1)."""
 
-    def test_env_overrides_contain_only_task_params(self) -> None:
-        from gitlab_copilot_agent.aca_executor import _build_env_overrides
+    def test_payload_contains_only_task_params(self) -> None:
+        from gitlab_copilot_agent.aca_executor import _build_dispatch_payload
 
         task = _make_task()
-        overrides = _build_env_overrides(task)
-        names = {e["name"] for e in overrides}
+        payload = json.loads(_build_dispatch_payload(task))
+        keys = set(payload.keys())
 
-        # Must include task params
-        assert "TASK_TYPE" in names
-        assert "TASK_ID" in names
-        assert "REPO_URL" in names
-        assert "BRANCH" in names
-        assert "SYSTEM_PROMPT" in names
-        assert "USER_PROMPT" in names
-        assert "TASK_PAYLOAD" in names
+        expected_keys = {
+            "task_type",
+            "task_id",
+            "repo_url",
+            "branch",
+            "system_prompt",
+            "user_prompt",
+        }
+        assert keys == expected_keys
 
         # Must NOT include secrets (S1 compliance)
-        secret_names = {"GITLAB_TOKEN", "GITHUB_TOKEN", "COPILOT_PROVIDER_API_KEY", "REDIS_URL"}
-        assert names.isdisjoint(secret_names), (
-            f"Secrets leaked in env overrides: {names & secret_names}"
-        )
+        secret_keys = {"gitlab_token", "github_token", "copilot_provider_api_key", "redis_url"}
+        assert keys.isdisjoint(secret_keys), f"Secrets in dispatch: {keys & secret_keys}"
 
-    def test_env_overrides_values_match_task(self) -> None:
-        from gitlab_copilot_agent.aca_executor import _build_env_overrides
+    def test_payload_values_match_task(self) -> None:
+        from gitlab_copilot_agent.aca_executor import _build_dispatch_payload
 
         task = _make_task()
-        overrides = {e["name"]: e["value"] for e in _build_env_overrides(task)}
-        assert overrides["TASK_TYPE"] == TASK_TYPE
-        assert overrides["TASK_ID"] == TASK_ID
-        assert overrides["REPO_URL"] == REPO_URL
-        assert overrides["BRANCH"] == BRANCH
+        payload = json.loads(_build_dispatch_payload(task))
+        assert payload["task_type"] == TASK_TYPE
+        assert payload["task_id"] == TASK_ID
+        assert payload["repo_url"] == REPO_URL
+        assert payload["branch"] == BRANCH
+        assert payload["user_prompt"] == USER_PROMPT
 
 
 class TestCachedResult:
@@ -213,26 +220,32 @@ class TestCachedResult:
 
 class TestJobExecution:
     @patch("gitlab_copilot_agent.aca_executor._JOB_POLL_INTERVAL", 0.01)
-    async def test_starts_execution_and_polls_result(self, jobs_mock: MagicMock) -> None:
+    async def test_starts_execution_and_polls_result(
+        self, jobs_mock: MagicMock, jobs_executions_mock: MagicMock
+    ) -> None:
         from gitlab_copilot_agent.aca_executor import ContainerAppsTaskExecutor
 
         poller = MagicMock()
-        poller.result.return_value = MagicMock(name=EXECUTION_NAME)
+        exec_result = MagicMock()
+        exec_result.name = EXECUTION_NAME
+        poller.result.return_value = exec_result
         jobs_mock.begin_start.return_value = poller
 
         # Transition: Running → Succeeded (gives time for result to appear)
         running = MagicMock()
-        running.properties.status = "Running"
+        running.name = EXECUTION_NAME
+        running.status = "Running"
         succeeded = MagicMock()
-        succeeded.properties.status = "Succeeded"
+        succeeded.name = EXECUTION_NAME
+        succeeded.status = "Succeeded"
         call_count = 0
 
-        def _status_side_effect(**kwargs: Any) -> Any:
+        def _list_side_effect(**kwargs: Any) -> list[Any]:
             nonlocal call_count
             call_count += 1
-            return running if call_count <= 1 else succeeded
+            return [running] if call_count <= 1 else [succeeded]
 
-        jobs_mock.get_execution.side_effect = _status_side_effect
+        jobs_executions_mock.list.side_effect = _list_side_effect
 
         store = MemoryResultStore()
         review_json = json.dumps({"result_type": "review", "summary": "LGTM"})
@@ -250,16 +263,81 @@ class TestJobExecution:
         assert isinstance(result, ReviewResult)
         assert result.summary == "LGTM"
 
-    async def test_coding_result_includes_patch(self, jobs_mock: MagicMock) -> None:
+    @patch("gitlab_copilot_agent.aca_executor._JOB_POLL_INTERVAL", 0.01)
+    async def test_dispatches_params_via_redis_not_template(
+        self, jobs_mock: MagicMock, jobs_executions_mock: MagicMock
+    ) -> None:
+        """Verify task params go to Redis and begin_start has no template."""
         from gitlab_copilot_agent.aca_executor import ContainerAppsTaskExecutor
 
         poller = MagicMock()
-        poller.result.return_value = MagicMock(name=EXECUTION_NAME)
+        exec_result = MagicMock()
+        exec_result.name = EXECUTION_NAME
+        poller.result.return_value = exec_result
         jobs_mock.begin_start.return_value = poller
 
         execution = MagicMock()
-        execution.properties.status = "Succeeded"
-        jobs_mock.get_execution.return_value = execution
+        execution.name = EXECUTION_NAME
+        execution.status = "Succeeded"
+        jobs_executions_mock.list.return_value = [execution]
+
+        store = MemoryResultStore()
+        review_json = json.dumps({"result_type": "review", "summary": "ok"})
+
+        # Set result after dispatch but before poll completes
+        async def _set_result_later() -> None:
+            await asyncio.sleep(0.01)
+            await store.set(TASK_ID, review_json)
+
+        executor = ContainerAppsTaskExecutor(settings=_make_settings(), result_store=store)
+
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(_set_result_later())
+            await executor.execute(_make_task())
+
+        # begin_start called WITHOUT template kwarg
+        _, kwargs = jobs_mock.begin_start.call_args
+        assert "template" not in kwargs
+
+    @patch("gitlab_copilot_agent.aca_executor._JOB_POLL_INTERVAL", 0.01)
+    async def test_cleans_up_queue_on_start_failure(self, jobs_mock: MagicMock) -> None:
+        """If begin_start fails, only the failed task's payload is removed."""
+        from gitlab_copilot_agent.aca_executor import (
+            _DISPATCH_QUEUE,
+            ContainerAppsTaskExecutor,
+        )
+
+        jobs_mock.begin_start.side_effect = RuntimeError("ACA API error")
+
+        store = MemoryResultStore()
+        # Pre-seed an unrelated payload to prove remove_task is targeted
+        await store.push_task(_DISPATCH_QUEUE, '{"other": "task"}')
+
+        executor = ContainerAppsTaskExecutor(settings=_make_settings(), result_store=store)
+
+        with pytest.raises(RuntimeError, match="ACA API error"):
+            await executor.execute(_make_task())
+
+        # The pre-existing payload must survive — only the failed one is removed
+        surviving = await store.pop_task(_DISPATCH_QUEUE)
+        assert surviving == '{"other": "task"}'
+        assert await store.pop_task(_DISPATCH_QUEUE) is None
+
+    async def test_coding_result_includes_patch(
+        self, jobs_mock: MagicMock, jobs_executions_mock: MagicMock
+    ) -> None:
+        from gitlab_copilot_agent.aca_executor import ContainerAppsTaskExecutor
+
+        poller = MagicMock()
+        exec_result = MagicMock()
+        exec_result.name = EXECUTION_NAME
+        poller.result.return_value = exec_result
+        jobs_mock.begin_start.return_value = poller
+
+        execution = MagicMock()
+        execution.name = EXECUTION_NAME
+        execution.status = "Succeeded"
+        jobs_executions_mock.list.return_value = [execution]
 
         store = MemoryResultStore()
         coding_json = json.dumps(
@@ -281,16 +359,21 @@ class TestJobExecution:
 
 
 class TestFailureHandling:
-    async def test_raises_on_failed_execution(self, jobs_mock: MagicMock) -> None:
+    async def test_raises_on_failed_execution(
+        self, jobs_mock: MagicMock, jobs_executions_mock: MagicMock
+    ) -> None:
         from gitlab_copilot_agent.aca_executor import ContainerAppsTaskExecutor
 
         poller = MagicMock()
-        poller.result.return_value = MagicMock(name=EXECUTION_NAME)
+        exec_result = MagicMock()
+        exec_result.name = EXECUTION_NAME
+        poller.result.return_value = exec_result
         jobs_mock.begin_start.return_value = poller
 
         execution = MagicMock()
-        execution.properties.status = "Failed"
-        jobs_mock.get_execution.return_value = execution
+        execution.name = EXECUTION_NAME
+        execution.status = "Failed"
+        jobs_executions_mock.list.return_value = [execution]
 
         store = MemoryResultStore()
         executor = ContainerAppsTaskExecutor(settings=_make_settings(), result_store=store)
@@ -302,17 +385,20 @@ class TestFailureHandling:
 class TestTimeout:
     @patch("gitlab_copilot_agent.aca_executor._JOB_POLL_INTERVAL", 0.01)
     async def test_raises_timeout_when_execution_does_not_complete(
-        self, jobs_mock: MagicMock
+        self, jobs_mock: MagicMock, jobs_executions_mock: MagicMock
     ) -> None:
         from gitlab_copilot_agent.aca_executor import ContainerAppsTaskExecutor
 
         poller = MagicMock()
-        poller.result.return_value = MagicMock(name=EXECUTION_NAME)
+        exec_result = MagicMock()
+        exec_result.name = EXECUTION_NAME
+        poller.result.return_value = exec_result
         jobs_mock.begin_start.return_value = poller
 
         execution = MagicMock()
-        execution.properties.status = "Running"
-        jobs_mock.get_execution.return_value = execution
+        execution.name = EXECUTION_NAME
+        execution.status = "Running"
+        jobs_executions_mock.list.return_value = [execution]
 
         store = MemoryResultStore()
         executor = ContainerAppsTaskExecutor(settings=_make_settings(), result_store=store)

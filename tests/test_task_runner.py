@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -14,7 +14,9 @@ from gitlab_copilot_agent.task_runner import (
     _build_coding_result,
     _coding_response_validator,
     _get_required_env,
+    _load_dispatch_params,
     _parse_task_payload,
+    _store_result,
     _validate_repo_url,
     run_task,
 )
@@ -78,6 +80,7 @@ class TestRunTask:
         fp = Path("/tmp/fake")
         expected = json.dumps({"result_type": "review", "summary": "done"})
         with (
+            patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)),
             patch(f"{_M}.git_clone", AsyncMock(return_value=fp)),
             patch(f"{_M}.run_copilot_session", AsyncMock(return_value="done")),
             patch(f"{_M}._store_result", AsyncMock()) as store,
@@ -89,15 +92,42 @@ class TestRunTask:
 
     async def test_missing_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(ENV_TASK_TYPE, raising=False)
-        assert await run_task() == 1
+        with patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)):
+            assert await run_task() == 1
+
+    async def test_redis_dispatch_path(self, env_vars: None) -> None:
+        """When Redis dispatch returns params, env vars are not needed."""
+        dispatch_params = {
+            "task_type": "review",
+            "task_id": TASK_ID,
+            "repo_url": EXAMPLE_CLONE_URL,
+            "branch": "feat/x",
+            "system_prompt": "Review code.",
+            "user_prompt": "Review this",
+        }
+        expected = json.dumps({"result_type": "review", "summary": "done"})
+        fp = Path("/tmp/fake")
+        with (
+            patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=dispatch_params)),
+            patch(f"{_M}.git_clone", AsyncMock(return_value=fp)),
+            patch(f"{_M}.run_copilot_session", AsyncMock(return_value="done")),
+            patch(f"{_M}._store_result", AsyncMock()) as store,
+            patch(f"{_M}.shutil.rmtree"),
+        ):
+            assert await run_task() == 0
+            store.assert_awaited_once_with(TASK_ID, expected)
 
     async def test_bad_type(self, task_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_TASK_TYPE, "bad")
-        assert await run_task() == 1
+        with patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)):
+            assert await run_task() == 1
 
     async def test_url_mismatch(self, task_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_REPO_URL, BAD_HOST)
-        with pytest.raises(RuntimeError, match="does not match"):
+        with (
+            patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)),
+            pytest.raises(RuntimeError, match="does not match"),
+        ):
             await run_task()
 
     async def test_coding(self, task_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -106,6 +136,7 @@ class TestRunTask:
             {"result_type": "coding", "summary": "x", "patch": "p", "base_sha": "abc"}
         )
         with (
+            patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)),
             patch(f"{_M}.git_clone", AsyncMock(return_value=Path("/tmp/r"))),
             patch(f"{_M}.run_copilot_session", AsyncMock(return_value="x")) as ms,
             patch(f"{_M}._build_coding_result", AsyncMock(return_value=coding_json)),
@@ -191,3 +222,87 @@ class TestBuildCodingResult:
             await _build_coding_result(Path("/repo"), TRAVERSAL_OUTPUT, AsyncMock())
         # Only src/ok.py staged; ../../etc/passwd skipped
         git_mock.assert_awaited_once_with(Path("/repo"), "add", "--", "src/ok.py")
+
+
+_REDIS_MOD = "gitlab_copilot_agent.redis_state"
+
+
+class TestStoreResult:
+    """Tests for _store_result function."""
+
+    async def test_skips_when_no_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns immediately when no Redis env vars are set."""
+        monkeypatch.delenv("REDIS_URL", raising=False)
+        monkeypatch.delenv("REDIS_HOST", raising=False)
+        await _store_result("task-1", '{"result": "ok"}')  # Should not raise
+
+    async def test_stores_via_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Stores result in Redis when REDIS_URL is set."""
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+        mock_store = MagicMock()
+        mock_store.set = AsyncMock()
+        mock_store.aclose = AsyncMock()
+        with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
+            await _store_result("task-1", '{"result": "ok"}')
+        mock_store.set.assert_awaited_once_with("task-1", '{"result": "ok"}', ttl=3600)
+        mock_store.aclose.assert_awaited_once()
+
+    async def test_closes_store_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Store is closed even if set() raises."""
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+        mock_store = MagicMock()
+        mock_store.set = AsyncMock(side_effect=RuntimeError("boom"))
+        mock_store.aclose = AsyncMock()
+        with (
+            patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store),
+            pytest.raises(RuntimeError, match="boom"),
+        ):
+            await _store_result("task-1", '{"result": "ok"}')
+        mock_store.aclose.assert_awaited_once()
+
+
+class TestLoadDispatchParams:
+    """Tests for _load_dispatch_params function."""
+
+    async def test_returns_none_when_no_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns None when no Redis env vars are set."""
+        monkeypatch.delenv("REDIS_URL", raising=False)
+        monkeypatch.delenv("REDIS_HOST", raising=False)
+        assert await _load_dispatch_params() is None
+
+    async def test_returns_params_from_queue(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Loads and returns dispatch params from Redis queue."""
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+        dispatch = {
+            "task_type": "review",
+            "task_id": "t-1",
+            "repo_url": "u",
+            "branch": "b",
+            "user_prompt": "p",
+        }
+        mock_store = MagicMock()
+        mock_store.pop_task = AsyncMock(return_value=json.dumps(dispatch))
+        mock_store.aclose = AsyncMock()
+        with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
+            result = await _load_dispatch_params()
+        assert result == dispatch
+        mock_store.aclose.assert_awaited_once()
+
+    async def test_returns_none_on_empty_queue(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns None when queue is empty."""
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+        mock_store = MagicMock()
+        mock_store.pop_task = AsyncMock(return_value=None)
+        mock_store.aclose = AsyncMock()
+        with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
+            assert await _load_dispatch_params() is None
+
+    async def test_returns_none_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns None and logs warning when pop_task raises."""
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+        mock_store = MagicMock()
+        mock_store.pop_task = AsyncMock(side_effect=RuntimeError("boom"))
+        mock_store.aclose = AsyncMock()
+        with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
+            assert await _load_dispatch_params() is None
+        mock_store.aclose.assert_awaited_once()

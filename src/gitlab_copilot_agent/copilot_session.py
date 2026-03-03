@@ -15,7 +15,7 @@ from copilot.types import (
     SessionConfig,
 )
 
-from gitlab_copilot_agent.config import Settings
+from gitlab_copilot_agent.config import Settings, TaskRunnerSettings
 from gitlab_copilot_agent.metrics import (
     copilot_session_duration,
 )
@@ -43,7 +43,7 @@ def build_sdk_env(github_token: str | None) -> dict[str, str]:
 
 
 async def run_copilot_session(
-    settings: Settings,
+    settings: Settings | TaskRunnerSettings,
     repo_path: str,
     system_prompt: str,
     user_prompt: str,
