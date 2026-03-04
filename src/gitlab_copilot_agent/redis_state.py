@@ -18,7 +18,9 @@ from gitlab_copilot_agent.concurrency import (
     MemoryDedup,
     MemoryLock,
     MemoryResultStore,
+    MemoryTaskQueue,
     ResultStore,
+    TaskQueue,
 )
 
 if TYPE_CHECKING:
@@ -253,10 +255,50 @@ def create_result_store(
     redis_host: str | None = None,
     redis_port: int = 6380,
     azure_client_id: str | None = None,
+    *,
+    dispatch_backend: str = "redis",
+    azure_storage_account_url: str | None = None,
+    task_blob_container: str = "task-data",
 ) -> ResultStore:
-    """Factory: create a ResultStore for the given backend."""
+    """Factory: create a ResultStore for the given backend.
+
+    When *dispatch_backend* is ``azure_storage``, returns a
+    ``BlobResultStore`` regardless of the *backend* value.
+    """
+    if dispatch_backend == "azure_storage" and azure_storage_account_url:
+        from gitlab_copilot_agent.azure_storage import create_blob_result_store
+
+        return create_blob_result_store(azure_storage_account_url, task_blob_container)
     if backend == "redis":
         return RedisResultStore(
             _create_redis_client(redis_url, redis_host, redis_port, azure_client_id)
         )
     return MemoryResultStore()
+
+
+def create_task_queue(
+    dispatch_backend: str,
+    azure_storage_queue_url: str | None = None,
+    azure_storage_account_url: str | None = None,
+    task_queue_name: str = "task-queue",
+    task_blob_container: str = "task-data",
+) -> TaskQueue:
+    """Factory: create a TaskQueue for the given dispatch backend."""
+    if dispatch_backend == "azure_storage":
+        if not azure_storage_queue_url or not azure_storage_account_url:
+            msg = (
+                "azure_storage dispatch requires "
+                "AZURE_STORAGE_QUEUE_URL and AZURE_STORAGE_ACCOUNT_URL"
+            )
+            raise ValueError(msg)
+        from gitlab_copilot_agent.azure_storage import (
+            create_task_queue as _create_azure_queue,
+        )
+
+        return _create_azure_queue(
+            azure_storage_queue_url,
+            azure_storage_account_url,
+            task_queue_name,
+            task_blob_container,
+        )
+    return MemoryTaskQueue()
