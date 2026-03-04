@@ -34,10 +34,14 @@ PROJECT_ID = 42
 # Example clone URL used across multiple tests
 EXAMPLE_CLONE_URL = "https://gitlab.example.com/group/project.git"
 
-MR_IID = 7
+# Azurite connection string for tests (no real storage needed)
+AZURITE_CONNECTION_STRING = (
+    "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=dGVzdA==;"
+    "BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;"
+    "QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;"
+)
 
-# Example clone URL used across multiple tests
-EXAMPLE_CLONE_URL = "https://gitlab.example.com/group/project.git"
+MR_IID = 7
 
 DIFF_REFS = MRDiffRef(base_sha="aaa", start_sha="bbb", head_sha="ccc")
 
@@ -91,6 +95,7 @@ def make_settings(**overrides: Any) -> Settings:
         "gitlab_token": GITLAB_TOKEN,
         "gitlab_webhook_secret": WEBHOOK_SECRET,
         "github_token": GITHUB_TOKEN,
+        "azure_storage_connection_string": AZURITE_CONNECTION_STRING,
     }
     return Settings(**(defaults | overrides))
 
@@ -127,6 +132,7 @@ def env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITLAB_TOKEN", GITLAB_TOKEN)
     monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", WEBHOOK_SECRET)
     monkeypatch.setenv("GITHUB_TOKEN", GITHUB_TOKEN)
+    monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", AZURITE_CONNECTION_STRING)
 
 
 @pytest.fixture

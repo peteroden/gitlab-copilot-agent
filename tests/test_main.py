@@ -23,24 +23,21 @@ def test_create_executor_local() -> None:
 
 
 def test_create_executor_k8s_requires_settings() -> None:
-    with pytest.raises(ValueError, match="redis_url"):
+    with pytest.raises(ValueError, match="Settings required"):
         _create_executor("kubernetes")
 
 
-def test_create_executor_k8s_returns_executor(
-    env_vars: None, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
-    monkeypatch.setenv("STATE_BACKEND", "redis")
-    monkeypatch.setenv("TASK_EXECUTOR", "kubernetes")
+def test_create_executor_k8s_returns_executor() -> None:
     settings = make_settings(
-        redis_url="redis://localhost:6379/0",
-        state_backend="redis",
         task_executor="kubernetes",
         k8s_secret_name="test-secret",
         k8s_configmap_name="test-configmap",
     )
-    executor = _create_executor("kubernetes", settings)
+    with (
+        patch("gitlab_copilot_agent.main.create_result_store"),
+        patch("gitlab_copilot_agent.main.create_task_queue"),
+    ):
+        executor = _create_executor("kubernetes", settings)
     assert isinstance(executor, TaskExecutor)
 
 

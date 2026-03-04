@@ -21,7 +21,6 @@ REPO_URL = "https://gitlab.example.com/group/project.git"
 BRANCH = "feature/x"
 SYSTEM_PROMPT = "You are a reviewer."
 USER_PROMPT = "Review this code."
-REDIS_URL = "redis://localhost:6379/0"
 K8S_NAMESPACE = "ci"
 K8S_JOB_IMAGE = "registry.example.com/agent:latest"
 K8S_JOB_CPU = "500m"
@@ -38,8 +37,6 @@ POD_LOGS = "ERROR: something went wrong"
 
 def _make_settings(**overrides: Any) -> Any:
     defaults: dict[str, Any] = {
-        "redis_url": REDIS_URL,
-        "state_backend": "redis",
         "task_executor": "kubernetes",
         "k8s_namespace": K8S_NAMESPACE,
         "k8s_job_image": K8S_JOB_IMAGE,
@@ -329,7 +326,7 @@ class TestJobCreation:
             "GITLAB_URL",
             "GITLAB_TOKEN",
             "GITHUB_TOKEN",
-            "REDIS_URL",
+            "AZURE_STORAGE_CONNECTION_STRING",
             "COPILOT_MODEL",
         )
         for expected in expected_vars:
