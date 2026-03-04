@@ -146,13 +146,14 @@ def test_aca_executor_requires_azure_settings() -> None:
 
 
 def test_aca_executor_requires_redis() -> None:
-    """task_executor=container_apps requires Redis for result passback."""
+    """task_executor=container_apps with dispatch_backend=redis requires Redis."""
     with pytest.raises(ValidationError, match="REDIS_URL or REDIS_HOST is required"):
         make_settings(
             task_executor="container_apps",
             aca_subscription_id=ACA_SUBSCRIPTION_ID,
             aca_resource_group=ACA_RESOURCE_GROUP,
             aca_job_name=ACA_JOB_NAME,
+            dispatch_backend="redis",
         )
 
 
@@ -183,6 +184,45 @@ def test_aca_executor_accepts_redis_host() -> None:
     assert settings.redis_configured is True
     assert settings.redis_host == "test-redis.redis.cache.windows.net"
     assert settings.redis_port == 6380
+
+
+# -- Azure Storage dispatch backend config tests --
+
+STORAGE_ACCOUNT_URL = "https://sttest.blob.core.windows.net"
+STORAGE_QUEUE_URL = "https://sttest.queue.core.windows.net"
+
+
+def test_azure_storage_backend_requires_urls() -> None:
+    """dispatch_backend=azure_storage fails without storage URLs."""
+    with pytest.raises(ValidationError, match="AZURE_STORAGE_ACCOUNT_URL"):
+        make_settings(dispatch_backend="azure_storage")
+
+
+def test_azure_storage_backend_accepts_valid_config() -> None:
+    """dispatch_backend=azure_storage succeeds with required URLs."""
+    settings = make_settings(
+        dispatch_backend="azure_storage",
+        azure_storage_account_url=STORAGE_ACCOUNT_URL,
+        azure_storage_queue_url=STORAGE_QUEUE_URL,
+    )
+    assert settings.dispatch_backend == "azure_storage"
+    assert settings.task_queue_name == "task-queue"
+    assert settings.task_blob_container == "task-data"
+
+
+def test_aca_azure_storage_does_not_require_redis() -> None:
+    """task_executor=container_apps with dispatch_backend=azure_storage skips Redis check."""
+    settings = make_settings(
+        task_executor="container_apps",
+        aca_subscription_id=ACA_SUBSCRIPTION_ID,
+        aca_resource_group=ACA_RESOURCE_GROUP,
+        aca_job_name=ACA_JOB_NAME,
+        dispatch_backend="azure_storage",
+        azure_storage_account_url=STORAGE_ACCOUNT_URL,
+        azure_storage_queue_url=STORAGE_QUEUE_URL,
+    )
+    assert settings.dispatch_backend == "azure_storage"
+    assert not settings.redis_configured
 
 
 class TestPrintConfigErrors:
