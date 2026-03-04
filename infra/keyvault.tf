@@ -8,7 +8,7 @@ resource "random_string" "kv_suffix" {
 
 resource "azurerm_key_vault" "main" {
   # Key Vault names: 3-24 chars, globally unique. Truncate base to fit suffix.
-  name                = "kv-${substr(replace(var.resource_group_name, "rg-", ""), 0, 16)}-${random_string.kv_suffix.result}"
+  name                = "kv-${trimsuffix(substr(replace(var.resource_group_name, "rg-", ""), 0, 16), "-")}-${random_string.kv_suffix.result}"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   tenant_id           = data.azurerm_client_config.current.tenant_id

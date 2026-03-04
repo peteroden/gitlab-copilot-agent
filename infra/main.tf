@@ -26,7 +26,8 @@ terraform {
 
 provider "azurerm" {
   features {}
-  subscription_id = var.subscription_id
+  subscription_id     = var.subscription_id
+  storage_use_azuread = true # Azure Policy enforces shared_access_key_enabled=false
 }
 
 resource "azurerm_resource_group" "main" {
