@@ -23,16 +23,13 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-http~=1.39",
     "opentelemetry-instrumentation-fastapi~=0.60b1",
     "opentelemetry-instrumentation-httpx~=0.60b1",
-    "redis[hiredis]>=7.2.0",
 ]
 
 [project.optional-dependencies]
 kubernetes = ["kubernetes>=28.1.0"]
 azure = [
-    "azure-mgmt-appcontainers>=3.0.0",
     "azure-identity>=1.17.0",
     "aiohttp>=3.9.0",
-    "redis-entraid>=1.1.0",
     "azure-storage-queue>=12.12.0",
     "azure-storage-blob>=12.24.0",
 ]
@@ -61,7 +58,7 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["azure.*", "redis_entraid.*"]
+module = ["azure.*"]
 ignore_missing_imports = true
 
 [tool.ruff]
@@ -76,8 +73,6 @@ packages = ["src/gitlab_copilot_agent"]
 
 [dependency-groups]
 dev = [
-    "fakeredis>=2.34.0",
-    "lupa>=2.6",
     "mypy>=1.14.1",
     "pytest-asyncio>=0.25.3",
     "pytest-cov>=7.0.0",

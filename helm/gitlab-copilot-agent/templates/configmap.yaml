@@ -9,7 +9,7 @@ data:
   PORT: {{ .Values.controller.port | quote }}
   LOG_LEVEL: {{ .Values.controller.logLevel | quote }}
   TASK_EXECUTOR: {{ .Values.controller.taskExecutor | quote }}
-  STATE_BACKEND: {{ .Values.controller.stateBackend | quote }}
+  DISPATCH_BACKEND: {{ .Values.controller.dispatchBackend | default "azure_storage" | quote }}
   COPILOT_MODEL: {{ .Values.controller.copilotModel | quote }}
   K8S_NAMESPACE: {{ .Release.Namespace | quote }}
   K8S_JOB_IMAGE: {{ include "app.jobImage" . | quote }}
@@ -19,6 +19,9 @@ data:
   K8S_SECRET_NAME: {{ include "app.fullname" . | quote }}
   K8S_CONFIGMAP_NAME: {{ include "app.fullname" . | quote }}
   K8S_JOB_INSTANCE_LABEL: {{ include "app.fullname" . | quote }}
+  {{- if .Values.azurite.enabled }}
+  AZURE_STORAGE_CONNECTION_STRING: {{ printf "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;QueueEndpoint=http://%s-azurite:10001/devstoreaccount1;BlobEndpoint=http://%s-azurite:10000/devstoreaccount1" (include "app.fullname" .) (include "app.fullname" .) | quote }}
+  {{- end }}
   {{- with .Values.hostAliases }}
   K8S_JOB_HOST_ALIASES: {{ . | toJson | quote }}
   {{- end }}

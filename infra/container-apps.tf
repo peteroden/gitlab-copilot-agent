@@ -132,8 +132,16 @@ resource "azurerm_container_app" "controller" {
         value = "container_apps"
       }
       env {
-        name  = "STATE_BACKEND"
-        value = "redis"
+        name  = "DISPATCH_BACKEND"
+        value = "azure_storage"
+      }
+      env {
+        name  = "AZURE_STORAGE_ACCOUNT_URL"
+        value = azurerm_storage_account.tasks.primary_blob_endpoint
+      }
+      env {
+        name  = "AZURE_STORAGE_QUEUE_URL"
+        value = azurerm_storage_account.tasks.primary_queue_endpoint
       }
       env {
         name  = "COPILOT_MODEL"
@@ -150,14 +158,6 @@ resource "azurerm_container_app" "controller" {
       env {
         name  = "ACA_JOB_NAME"
         value = "job-task-runner"
-      }
-      env {
-        name  = "REDIS_HOST"
-        value = azurerm_redis_cache.main.hostname
-      }
-      env {
-        name  = "REDIS_PORT"
-        value = tostring(azurerm_redis_cache.main.ssl_port)
       }
       env {
         name  = "AZURE_CLIENT_ID"
@@ -235,9 +235,26 @@ resource "azurerm_container_app_job" "task_runner" {
   resource_group_name          = azurerm_resource_group.main.name
   replica_timeout_in_seconds   = var.job_timeout
 
-  manual_trigger_config {
+  event_trigger_config {
     parallelism              = 1
     replica_completion_count = 1
+
+    scale {
+      min_executions              = 0
+      max_executions              = 10
+      polling_interval_in_seconds = 10
+
+      rules {
+        name     = "queue-trigger"
+        type     = "azure-queue"
+        identity = azurerm_user_assigned_identity.job.id
+        metadata = {
+          queueName   = "task-queue"
+          queueLength = "1"
+          accountName = azurerm_storage_account.tasks.name
+        }
+      }
+    }
   }
 
   identity {
@@ -267,12 +284,16 @@ resource "azurerm_container_app_job" "task_runner" {
         value = var.copilot_model
       }
       env {
-        name  = "REDIS_HOST"
-        value = azurerm_redis_cache.main.hostname
+        name  = "DISPATCH_BACKEND"
+        value = "azure_storage"
       }
       env {
-        name  = "REDIS_PORT"
-        value = tostring(azurerm_redis_cache.main.ssl_port)
+        name  = "AZURE_STORAGE_ACCOUNT_URL"
+        value = azurerm_storage_account.tasks.primary_blob_endpoint
+      }
+      env {
+        name  = "AZURE_STORAGE_QUEUE_URL"
+        value = azurerm_storage_account.tasks.primary_queue_endpoint
       }
       env {
         name  = "AZURE_CLIENT_ID"
@@ -312,9 +333,28 @@ resource "azurerm_container_app_job" "task_runner" {
   tags = var.tags
 }
 
-# Controller: permission to start job executions via ARM API
-resource "azurerm_role_assignment" "controller_job_start" {
-  scope                = azurerm_container_app_job.task_runner.id
-  role_definition_name = "Contributor"
+# Controller: Storage Queue and Blob data access
+resource "azurerm_role_assignment" "controller_queue_sender" {
+  scope                = azurerm_storage_account.tasks.id
+  role_definition_name = "Storage Queue Data Contributor"
   principal_id         = azurerm_user_assigned_identity.controller.principal_id
+}
+
+resource "azurerm_role_assignment" "controller_blob_contributor" {
+  scope                = azurerm_storage_account.tasks.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_user_assigned_identity.controller.principal_id
+}
+
+# Job: Storage Queue and Blob data access
+resource "azurerm_role_assignment" "job_queue_processor" {
+  scope                = azurerm_storage_account.tasks.id
+  role_definition_name = "Storage Queue Data Contributor"
+  principal_id         = azurerm_user_assigned_identity.job.principal_id
+}
+
+resource "azurerm_role_assignment" "job_blob_contributor" {
+  scope                = azurerm_storage_account.tasks.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_user_assigned_identity.job.principal_id
 }

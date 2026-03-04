@@ -4,7 +4,7 @@ controller:
   port: 8000
   logLevel: info
   taskExecutor: kubernetes
-  stateBackend: redis
+  dispatchBackend: azure_storage
   copilotModel: gpt-4
   copilotProviderType: ""
   copilotProviderBaseUrl: ""
@@ -12,15 +12,23 @@ controller:
   resources:
     limits: { cpu: 500m, memory: 512Mi }
     requests: { cpu: 100m, memory: 256Mi }
-redis:
+azurite:
   enabled: true
-  image: { repository: redis, tag: "7-alpine" }
-  port: 6379
-  password: ""
+  image: { repository: mcr.microsoft.com/azure-storage/azurite, tag: latest }
   resources:
     limits: { cpu: 250m, memory: 256Mi }
-    requests: { cpu: 50m, memory: 64Mi }
-  storage: 1Gi
+    requests: { cpu: 50m, memory: 128Mi }
+  persistence:
+    enabled: true
+    size: 1Gi
+keda:
+  enabled: true
+  pollingInterval: 10
+  maxReplicaCount: 10
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+  ttlSecondsAfterFinished: 300
+  queueName: task-queue
 telemetry:
   # Set to enable OpenTelemetry export (e.g. "http://otel-collector:4317")
   otlpEndpoint: ""

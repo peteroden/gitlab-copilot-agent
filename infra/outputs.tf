@@ -18,9 +18,9 @@ output "controller_fqdn" {
   value       = azurerm_container_app.controller.latest_revision_fqdn
 }
 
-output "redis_hostname" {
-  description = "Azure Cache for Redis hostname"
-  value       = azurerm_redis_cache.main.hostname
+output "storage_account_name" {
+  description = "Azure Storage Account name for task dispatch"
+  value       = azurerm_storage_account.tasks.name
 }
 
 output "key_vault_uri" {

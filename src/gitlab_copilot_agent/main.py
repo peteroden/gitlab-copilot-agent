@@ -55,54 +55,46 @@ def _cleanup_stale_repos(clone_dir: str | None = None) -> None:
 def _create_executor(backend: str, settings: Settings | None = None) -> TaskExecutor:
     """Factory: create a TaskExecutor for the given backend."""
     if backend == "kubernetes":
-        if settings is None or not settings.redis_configured:
-            msg = "Settings with redis_url or redis_host required for kubernetes executor"
+        if settings is None:
+            msg = "Settings required for kubernetes executor"
             raise ValueError(msg)
         from gitlab_copilot_agent.k8s_executor import KubernetesTaskExecutor
 
         store = create_result_store(
-            "redis",
-            redis_url=settings.redis_url,
-            redis_host=settings.redis_host,
-            redis_port=settings.redis_port,
-            azure_client_id=settings.azure_client_id,
+            azure_storage_account_url=settings.azure_storage_account_url,
+            azure_storage_connection_string=settings.azure_storage_connection_string,
+            task_blob_container=settings.task_blob_container,
         )
-        return KubernetesTaskExecutor(settings=settings, result_store=store)
+        task_queue = create_task_queue(
+            azure_storage_queue_url=settings.azure_storage_queue_url,
+            azure_storage_account_url=settings.azure_storage_account_url,
+            azure_storage_connection_string=settings.azure_storage_connection_string,
+            task_queue_name=settings.task_queue_name,
+            task_blob_container=settings.task_blob_container,
+        )
+        return KubernetesTaskExecutor(settings=settings, result_store=store, task_queue=task_queue)
     if backend == "container_apps":
         if settings is None:
             msg = "Settings required for container_apps executor"
             raise ValueError(msg)
         from gitlab_copilot_agent.aca_executor import ContainerAppsTaskExecutor
 
-        task_queue = None
-        if settings.dispatch_backend == "azure_storage":
-            task_queue = create_task_queue(
-                settings.dispatch_backend,
-                azure_storage_queue_url=settings.azure_storage_queue_url,
-                azure_storage_account_url=settings.azure_storage_account_url,
-                task_queue_name=settings.task_queue_name,
-                task_blob_container=settings.task_blob_container,
-            )
-            store = create_result_store(
-                settings.state_backend,
-                dispatch_backend="azure_storage",
-                azure_storage_account_url=settings.azure_storage_account_url,
-                task_blob_container=settings.task_blob_container,
-            )
-        else:
-            if not settings.redis_configured:
-                msg = "Redis required when DISPATCH_BACKEND=redis and TASK_EXECUTOR=container_apps"
-                raise ValueError(msg)
-            store = create_result_store(
-                "redis",
-                redis_url=settings.redis_url,
-                redis_host=settings.redis_host,
-                redis_port=settings.redis_port,
-                azure_client_id=settings.azure_client_id,
-            )
+        task_queue = create_task_queue(
+            azure_storage_queue_url=settings.azure_storage_queue_url,
+            azure_storage_account_url=settings.azure_storage_account_url,
+            azure_storage_connection_string=settings.azure_storage_connection_string,
+            task_queue_name=settings.task_queue_name,
+            task_blob_container=settings.task_blob_container,
+        )
+        store = create_result_store(
+            azure_storage_account_url=settings.azure_storage_account_url,
+            azure_storage_connection_string=settings.azure_storage_connection_string,
+            task_blob_container=settings.task_blob_container,
+        )
         return ContainerAppsTaskExecutor(
             settings=settings, result_store=store, task_queue=task_queue
         )
+    return LocalTaskExecutor()
     return LocalTaskExecutor()
 
 
@@ -156,21 +148,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.allowed_project_ids = allowed_project_ids
 
     # Shared lock manager for both webhook and Jira flows
-    repo_locks = create_lock(
-        settings.state_backend,
-        redis_url=settings.redis_url,
-        redis_host=settings.redis_host,
-        redis_port=settings.redis_port,
-        azure_client_id=settings.azure_client_id,
-    )
+    repo_locks = create_lock()
     app.state.repo_locks = repo_locks
-    dedup_store = create_dedup(
-        settings.state_backend,
-        redis_url=settings.redis_url,
-        redis_host=settings.redis_host,
-        redis_port=settings.redis_port,
-        azure_client_id=settings.azure_client_id,
-    )
+    dedup_store = create_dedup()
     app.state.dedup_store = dedup_store
     app.state.review_tracker = ReviewedMRTracker()
 

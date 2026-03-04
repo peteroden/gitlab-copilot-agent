@@ -1,4 +1,4 @@
-"""ContainerAppsTaskExecutor — dispatches tasks as Azure Container Apps Job executions."""
+"""ContainerAppsTaskExecutor — dispatches tasks via Azure Storage Queue (KEDA-triggered)."""
 
 from __future__ import annotations
 
@@ -12,27 +12,19 @@ import structlog
 from gitlab_copilot_agent.task_executor import CodingResult, ReviewResult, TaskResult
 
 if TYPE_CHECKING:
-    from azure.mgmt.appcontainers import ContainerAppsAPIClient
-
     from gitlab_copilot_agent.concurrency import ResultStore, TaskQueue
     from gitlab_copilot_agent.config import Settings
     from gitlab_copilot_agent.task_executor import TaskParams
 
 log = structlog.get_logger()
 
-_JOB_POLL_INTERVAL = 5  # seconds; ACA API is slower than k8s, use longer interval
-_EXECUTION_LOCK_TTL = 900  # sentinel TTL to prevent duplicate executions
+_JOB_POLL_INTERVAL = 5  # seconds between result blob checks
+_EXECUTION_LOCK_TTL = 900  # sentinel TTL to prevent duplicate enqueues
 _EXECUTION_LOCK_PREFIX = "aca_exec:"
-_DISPATCH_KEY_PREFIX = "dispatch:"
-_DISPATCH_TTL = 600  # 10 min — enough for job startup + param read
 
 
 def _build_dispatch_payload(task: TaskParams) -> str:
-    """Serialize task params for Redis dispatch queue.
-
-    Only non-sensitive params are stored (S1: secrets live on the Job template
-    as Key Vault references and are never passed through Redis).
-    """
+    """Serialize task params for the queue (Claim Check blob payload)."""
     return json.dumps(
         {
             "task_type": task.task_type,
@@ -61,18 +53,18 @@ def _parse_result(raw: str, task_type: str) -> TaskResult:
 
 
 class ContainerAppsTaskExecutor:
-    """Dispatches tasks as Azure Container Apps Job executions.
+    """Dispatches tasks via Azure Storage Queue; KEDA triggers job executions.
 
-    Task params are dispatched via a Redis queue. The job is started with no
-    per-execution template override (ACA replaces rather than merges), so the
-    base template's command, env vars, and Key Vault secret refs are preserved.
+    The controller enqueues a task (Claim Check: params blob + queue message)
+    and polls the result blob.  KEDA watches the queue and creates ACA Job
+    executions automatically — no ARM API calls needed.
     """
 
     def __init__(
         self,
         settings: Settings,
         result_store: ResultStore,
-        task_queue: TaskQueue | None = None,
+        task_queue: TaskQueue,
     ) -> None:
         self._settings = settings
         self._store = result_store
@@ -83,27 +75,6 @@ class ContainerAppsTaskExecutor:
         if cached is not None:
             return _parse_result(cached, task.task_type)
 
-        if self._task_queue is not None:
-            return await self._execute_via_queue(task)
-
-        # Redis keyed dispatch path (legacy)
-        lock_key = f"{_EXECUTION_LOCK_PREFIX}{task.task_id}"
-        existing = await self._store.get(lock_key)
-        if existing is not None:
-            log.info("aca_execution_already_started", task_id=task.task_id)
-            return await self._wait_for_result(existing, task)
-
-        execution_name = await asyncio.to_thread(self._start_execution, task)
-        dispatch_key = f"{_DISPATCH_KEY_PREFIX}{execution_name}"
-        payload = _build_dispatch_payload(task)
-        await self._store.set(dispatch_key, payload, ttl=_DISPATCH_TTL)
-        await self._store.set(lock_key, execution_name, ttl=_EXECUTION_LOCK_TTL)
-        return await self._wait_for_result(execution_name, task)
-
-    async def _execute_via_queue(self, task: TaskParams) -> TaskResult:
-        """Azure Storage Queue path: enqueue + trigger + poll result."""
-        assert self._task_queue is not None  # guarded by caller  # noqa: S101
-
         # Idempotency: if another call already enqueued this task, just poll
         lock_key = f"{_EXECUTION_LOCK_PREFIX}{task.task_id}"
         existing_lock = await self._store.get(lock_key)
@@ -111,7 +82,7 @@ class ContainerAppsTaskExecutor:
             try:
                 expiry = int(existing_lock.split(":", 1)[1])
                 if time.time() < expiry:
-                    log.info("aca_execution_already_started", task_id=task.task_id)
+                    log.info("aca_execution_already_enqueued", task_id=task.task_id)
                     return await self._poll_blob_result(task)
             except (ValueError, IndexError):
                 pass  # malformed lock, proceed to re-enqueue
@@ -121,17 +92,11 @@ class ContainerAppsTaskExecutor:
         lock_val = f"enqueued:{int(time.time()) + _EXECUTION_LOCK_TTL}"
         await self._store.set(lock_key, lock_val)
 
-        try:
-            await asyncio.to_thread(self._start_execution, task)
-        except Exception:
-            # Message remains queued — will be picked up on retry or by KEDA
-            log.error("aca_start_failed_after_enqueue", task_id=task.task_id, exc_info=True)
-            raise
-
+        # KEDA watches the queue and triggers job execution automatically
         return await self._poll_blob_result(task)
 
     async def _poll_blob_result(self, task: TaskParams) -> TaskResult:
-        """Poll ResultStore for result (no ARM status polling needed)."""
+        """Poll ResultStore for result blob (KEDA handles job lifecycle)."""
         deadline = asyncio.get_event_loop().time() + self._settings.aca_job_timeout
         while asyncio.get_event_loop().time() < deadline:
             cached = await self._store.get(task.task_id)
@@ -139,88 +104,4 @@ class ContainerAppsTaskExecutor:
                 return _parse_result(cached, task.task_type)
             await asyncio.sleep(_JOB_POLL_INTERVAL)
         msg = f"Task {task.task_id} timed out after {self._settings.aca_job_timeout}s"
-        raise TimeoutError(msg)
-
-    def _create_client(self) -> ContainerAppsAPIClient:
-        """Create a fresh Azure Container Apps management client."""
-        from azure.identity import DefaultAzureCredential
-        from azure.mgmt.appcontainers import ContainerAppsAPIClient as _Client
-
-        credential = DefaultAzureCredential()
-        return _Client(
-            credential=credential,
-            subscription_id=self._settings.aca_subscription_id,
-        )
-
-    def _start_execution(self, task: TaskParams) -> str:
-        """Start a Container Apps Job execution (synchronous, called via to_thread).
-
-        No per-execution template is passed — the base job template (with KV
-        secret refs, command, and base env vars) is used as-is. Task params
-        are dispatched via Redis instead.
-        """
-        client = self._create_client()
-
-        bound_log = log.bind(
-            task_id=task.task_id,
-            task_type=task.task_type,
-            job_name=self._settings.aca_job_name,
-        )
-        bound_log.info("aca_job_starting")
-
-        poller = client.jobs.begin_start(
-            resource_group_name=self._settings.aca_resource_group,
-            job_name=self._settings.aca_job_name,
-        )
-        result = poller.result()
-        execution_name = str(result.name or "unknown")
-        bound_log.info("aca_job_started", execution_name=execution_name)
-        return execution_name
-
-    def _get_execution_status(self, execution_name: str) -> str:
-        """Read execution status (synchronous, called via to_thread)."""
-        client = self._create_client()
-        for execution in client.jobs_executions.list(
-            resource_group_name=self._settings.aca_resource_group,
-            job_name=self._settings.aca_job_name,
-        ):
-            if execution.name == execution_name:
-                return str(execution.status or "Unknown")
-        return "Unknown"
-
-    async def _wait_for_result(self, execution_name: str, task: TaskParams) -> TaskResult:
-        """Poll execution status and read result from Redis."""
-        deadline = asyncio.get_event_loop().time() + self._settings.aca_job_timeout
-
-        while asyncio.get_event_loop().time() < deadline:
-            cached = await self._store.get(task.task_id)
-            if cached is not None:
-                return _parse_result(cached, task.task_type)
-
-            status = await asyncio.to_thread(self._get_execution_status, execution_name)
-
-            if status == "Succeeded":
-                cached = await self._store.get(task.task_id)
-                if cached is not None:
-                    return _parse_result(cached, task.task_type)
-                log.warning(
-                    "aca_job_succeeded_no_result",
-                    execution_name=execution_name,
-                    task_id=task.task_id,
-                )
-                return _parse_result("", task.task_type)
-
-            if status == "Failed":
-                msg = (
-                    f"Container Apps Job execution {execution_name} failed. "
-                    f"Check Azure Portal logs for details."
-                )
-                raise RuntimeError(msg)
-
-            await asyncio.sleep(_JOB_POLL_INTERVAL)
-
-        msg = (
-            f"Container Apps Job execution {execution_name} timed out "
-            f"after {self._settings.aca_job_timeout}s"
-        )
         raise TimeoutError(msg)

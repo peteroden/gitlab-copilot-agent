@@ -150,7 +150,7 @@ resource "azurerm_user_assigned_identity" "controller" {
   resource_group_name = azurerm_resource_group.main.name
 }
 
-# S4: Job identity — Key Vault read (task secrets only), Redis data access
+# S4: Job identity — Key Vault read (task secrets only)
 resource "azurerm_user_assigned_identity" "job" {
   name                = "id-job-${var.resource_group_name}"
   location            = azurerm_resource_group.main.location
@@ -169,22 +169,4 @@ resource "azurerm_role_assignment" "job_kv" {
   scope                = azurerm_key_vault.main.id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_user_assigned_identity.job.principal_id
-}
-
-# Controller: Redis data access via Entra ID (data access policy, not RBAC)
-resource "azurerm_redis_cache_access_policy_assignment" "controller_redis" {
-  name               = "controller-data-contributor"
-  redis_cache_id     = azurerm_redis_cache.main.id
-  access_policy_name = "Data Contributor"
-  object_id          = azurerm_user_assigned_identity.controller.principal_id
-  object_id_alias    = azurerm_user_assigned_identity.controller.name
-}
-
-# Job: Redis data access via Entra ID (data access policy, not RBAC)
-resource "azurerm_redis_cache_access_policy_assignment" "job_redis" {
-  name               = "job-data-contributor"
-  redis_cache_id     = azurerm_redis_cache.main.id
-  access_policy_name = "Data Contributor"
-  object_id          = azurerm_user_assigned_identity.job.principal_id
-  object_id_alias    = azurerm_user_assigned_identity.job.name
 }

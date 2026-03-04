@@ -126,7 +126,8 @@ class BlobResultStore:
         blob = self._blob.get_blob_client(f"{_RESULTS_PREFIX}{key}.json")
         try:
             download = await blob.download_blob()
-            return (await download.readall()).decode()
+            content: bytes = await download.readall()
+            return content.decode()
         except Exception:
             return None
 
@@ -141,34 +142,57 @@ class BlobResultStore:
 
 
 def create_task_queue(
-    queue_url: str,
-    account_url: str,
+    queue_url: str | None,
+    account_url: str | None,
     queue_name: str,
     container_name: str,
+    connection_string: str | None = None,
 ) -> TaskQueue:
-    """Create an AzureStorageTaskQueue with DefaultAzureCredential."""
-    from azure.identity.aio import DefaultAzureCredential
+    """Create an AzureStorageTaskQueue with connection string or DefaultAzureCredential."""
     from azure.storage.blob.aio import ContainerClient
     from azure.storage.queue.aio import QueueClient
 
-    credential = DefaultAzureCredential()
-    queue_client = QueueClient(queue_url, queue_name=queue_name, credential=credential)
-    blob_client = ContainerClient(
-        account_url, container_name=container_name, credential=credential
-    )
+    credential = None
+    if connection_string:
+        queue_client = QueueClient.from_connection_string(connection_string, queue_name=queue_name)
+        blob_client = ContainerClient.from_connection_string(
+            connection_string, container_name=container_name
+        )
+    else:
+        from azure.identity.aio import DefaultAzureCredential
+
+        if not queue_url or not account_url:
+            msg = "queue_url and account_url required when no connection_string"
+            raise ValueError(msg)
+        credential = DefaultAzureCredential()
+        queue_client = QueueClient(queue_url, queue_name=queue_name, credential=credential)
+        blob_client = ContainerClient(
+            account_url, container_name=container_name, credential=credential
+        )
     return AzureStorageTaskQueue(queue_client, blob_client, credential)
 
 
 def create_blob_result_store(
-    account_url: str,
+    account_url: str | None,
     container_name: str,
+    connection_string: str | None = None,
 ) -> ResultStore:
-    """Create a BlobResultStore with DefaultAzureCredential."""
-    from azure.identity.aio import DefaultAzureCredential
+    """Create a BlobResultStore with connection string or DefaultAzureCredential."""
     from azure.storage.blob.aio import ContainerClient
 
-    credential = DefaultAzureCredential()
-    blob_client = ContainerClient(
-        account_url, container_name=container_name, credential=credential
-    )
+    credential = None
+    if connection_string:
+        blob_client = ContainerClient.from_connection_string(
+            connection_string, container_name=container_name
+        )
+    else:
+        from azure.identity.aio import DefaultAzureCredential
+
+        if not account_url:
+            msg = "account_url required when no connection_string"
+            raise ValueError(msg)
+        credential = DefaultAzureCredential()
+        blob_client = ContainerClient(
+            account_url, container_name=container_name, credential=credential
+        )
     return BlobResultStore(blob_client, credential)
