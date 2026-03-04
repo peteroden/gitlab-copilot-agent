@@ -202,20 +202,6 @@ class TestBlobResultStore:
 
         assert result is None
 
-    @pytest.mark.parametrize(
-        "method,args",
-        [
-            ("push_task", ("q", "data")),
-            ("pop_task", ("q",)),
-            ("remove_task", ("q", "data")),
-        ],
-    )
-    async def test_queue_methods_raise(self, method: str, args: tuple[str, ...]) -> None:
-        _, blob_client = _make_clients()
-        store = BlobResultStore(blob_client)
-        with pytest.raises(NotImplementedError, match=method):
-            await getattr(store, method)(*args)
-
     async def test_aclose_closes_client_and_credential(self) -> None:
         _, blob_client = _make_clients()
         credential = AsyncMock()

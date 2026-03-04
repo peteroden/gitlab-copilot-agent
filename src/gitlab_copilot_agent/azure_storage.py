@@ -134,18 +134,6 @@ class BlobResultStore:
         blob = self._blob.get_blob_client(f"{_RESULTS_PREFIX}{key}.json")
         await blob.upload_blob(value, overwrite=True)
 
-    async def push_task(self, queue: str, payload: str) -> None:
-        msg = "BlobResultStore does not support push_task — use TaskQueue"
-        raise NotImplementedError(msg)
-
-    async def pop_task(self, queue: str) -> str | None:
-        msg = "BlobResultStore does not support pop_task — use TaskQueue"
-        raise NotImplementedError(msg)
-
-    async def remove_task(self, queue: str, payload: str) -> None:
-        msg = "BlobResultStore does not support remove_task — use TaskQueue"
-        raise NotImplementedError(msg)
-
     async def aclose(self) -> None:
         await self._blob.close()
         if self._credential is not None:

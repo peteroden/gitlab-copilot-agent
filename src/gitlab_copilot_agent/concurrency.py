@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -43,9 +42,6 @@ class ResultStore(Protocol):
 
     async def get(self, key: str) -> str | None: ...
     async def set(self, key: str, value: str, ttl: int = 3600) -> None: ...
-    async def push_task(self, queue: str, payload: str) -> None: ...
-    async def pop_task(self, queue: str) -> str | None: ...
-    async def remove_task(self, queue: str, payload: str) -> None: ...
 
     async def aclose(self) -> None: ...
 
@@ -89,7 +85,6 @@ class MemoryResultStore:
 
     def __init__(self) -> None:
         self._data: dict[str, str] = {}
-        self._queues: dict[str, list[str]] = {}
 
     async def get(self, key: str) -> str | None:
         return self._data.get(key)
@@ -97,21 +92,8 @@ class MemoryResultStore:
     async def set(self, key: str, value: str, ttl: int = 3600) -> None:
         self._data[key] = value
 
-    async def push_task(self, queue: str, payload: str) -> None:
-        self._queues.setdefault(queue, []).append(payload)
-
-    async def pop_task(self, queue: str) -> str | None:
-        items = self._queues.get(queue, [])
-        return items.pop(0) if items else None
-
-    async def remove_task(self, queue: str, payload: str) -> None:
-        items = self._queues.get(queue, [])
-        with contextlib.suppress(ValueError):
-            items.remove(payload)
-
     async def aclose(self) -> None:
         self._data.clear()
-        self._queues.clear()
 
 
 class MemoryTaskQueue:

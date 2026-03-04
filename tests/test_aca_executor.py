@@ -136,15 +136,6 @@ class MemoryResultStore:
     async def set(self, key: str, value: str, ttl: int = 0) -> None:
         self._data[key] = value
 
-    async def push_task(self, queue: str, payload: str) -> None:
-        pass  # unused in keyed dispatch, kept for protocol compliance
-
-    async def pop_task(self, queue: str) -> str | None:
-        return None
-
-    async def remove_task(self, queue: str, payload: str) -> None:
-        pass
-
     async def aclose(self) -> None:
         pass
 

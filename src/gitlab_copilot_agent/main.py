@@ -26,7 +26,12 @@ from gitlab_copilot_agent.gitlab_poller import GitLabPoller
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_poller import JiraPoller
 from gitlab_copilot_agent.project_mapping import ProjectMap
-from gitlab_copilot_agent.redis_state import create_dedup, create_lock, create_result_store
+from gitlab_copilot_agent.redis_state import (
+    create_dedup,
+    create_lock,
+    create_result_store,
+    create_task_queue,
+)
 from gitlab_copilot_agent.task_executor import LocalTaskExecutor, TaskExecutor
 from gitlab_copilot_agent.telemetry import (
     configure_logging,
@@ -64,19 +69,40 @@ def _create_executor(backend: str, settings: Settings | None = None) -> TaskExec
         )
         return KubernetesTaskExecutor(settings=settings, result_store=store)
     if backend == "container_apps":
-        if settings is None or not settings.redis_configured:
-            msg = "Settings with redis_url or redis_host required for container_apps executor"
+        if settings is None:
+            msg = "Settings required for container_apps executor"
             raise ValueError(msg)
         from gitlab_copilot_agent.aca_executor import ContainerAppsTaskExecutor
 
-        store = create_result_store(
-            "redis",
-            redis_url=settings.redis_url,
-            redis_host=settings.redis_host,
-            redis_port=settings.redis_port,
-            azure_client_id=settings.azure_client_id,
+        task_queue = None
+        if settings.dispatch_backend == "azure_storage":
+            task_queue = create_task_queue(
+                settings.dispatch_backend,
+                azure_storage_queue_url=settings.azure_storage_queue_url,
+                azure_storage_account_url=settings.azure_storage_account_url,
+                task_queue_name=settings.task_queue_name,
+                task_blob_container=settings.task_blob_container,
+            )
+            store = create_result_store(
+                settings.state_backend,
+                dispatch_backend="azure_storage",
+                azure_storage_account_url=settings.azure_storage_account_url,
+                task_blob_container=settings.task_blob_container,
+            )
+        else:
+            if not settings.redis_configured:
+                msg = "Redis required when DISPATCH_BACKEND=redis and TASK_EXECUTOR=container_apps"
+                raise ValueError(msg)
+            store = create_result_store(
+                "redis",
+                redis_url=settings.redis_url,
+                redis_host=settings.redis_host,
+                redis_port=settings.redis_port,
+                azure_client_id=settings.azure_client_id,
+            )
+        return ContainerAppsTaskExecutor(
+            settings=settings, result_store=store, task_queue=task_queue
         )
-        return ContainerAppsTaskExecutor(settings=settings, result_store=store)
     return LocalTaskExecutor()
 
 

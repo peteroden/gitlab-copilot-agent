@@ -149,31 +149,6 @@ class RedisResultStore:
         except (RedisConnectionError, RedisTimeoutError, OSError):
             log.warning("redis_result_unreachable", op="set", key=key)
 
-    async def push_task(self, queue: str, payload: str) -> None:
-        """Push a task dispatch payload onto a Redis list (LPUSH).
-
-        Raises on failure — caller must not start a job without a queued payload.
-        """
-        await self._client.lpush(f"{_RESULT_PREFIX}{queue}", payload)  # type: ignore[misc]
-
-    async def pop_task(self, queue: str) -> str | None:
-        """Pop a task dispatch payload from a Redis list (RPOP — FIFO)."""
-        try:
-            val = await self._client.rpop(f"{_RESULT_PREFIX}{queue}")  # type: ignore[misc]
-        except (RedisConnectionError, RedisTimeoutError, OSError):
-            log.warning("redis_result_unreachable", op="pop_task", queue=queue)
-            return None
-        if val is None:
-            return None
-        return val.decode() if isinstance(val, bytes) else str(val)
-
-    async def remove_task(self, queue: str, payload: str) -> None:
-        """Remove a specific payload from a Redis list (LREM)."""
-        try:
-            await self._client.lrem(f"{_RESULT_PREFIX}{queue}", 1, payload)  # type: ignore[misc]
-        except (RedisConnectionError, RedisTimeoutError, OSError):
-            log.warning("redis_result_unreachable", op="remove_task", queue=queue)
-
     async def aclose(self) -> None:
         await self._client.aclose()
 

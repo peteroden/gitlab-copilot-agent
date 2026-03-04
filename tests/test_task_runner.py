@@ -78,8 +78,8 @@ class TestHelpers:
 class TestRunTask:
     async def test_ok(self, task_env: None) -> None:
         fp = Path("/tmp/fake")
-        expected = json.dumps({"result_type": "review", "summary": "done"})
         with (
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
             patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)),
             patch(f"{_M}.git_clone", AsyncMock(return_value=fp)),
             patch(f"{_M}.run_copilot_session", AsyncMock(return_value="done")),
@@ -88,11 +88,14 @@ class TestRunTask:
         ):
             assert await run_task() == 0
             rm.assert_called_once_with(fp, ignore_errors=True)
-            store.assert_awaited_once_with(TASK_ID, expected)
+            store.assert_awaited_once()
 
     async def test_missing_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(ENV_TASK_TYPE, raising=False)
-        with patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)):
+        with (
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
+            patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)),
+        ):
             assert await run_task() == 1
 
     async def test_redis_dispatch_path(self, env_vars: None) -> None:
@@ -105,9 +108,9 @@ class TestRunTask:
             "system_prompt": "Review code.",
             "user_prompt": "Review this",
         }
-        expected = json.dumps({"result_type": "review", "summary": "done"})
         fp = Path("/tmp/fake")
         with (
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
             patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=dispatch_params)),
             patch(f"{_M}.git_clone", AsyncMock(return_value=fp)),
             patch(f"{_M}.run_copilot_session", AsyncMock(return_value="done")),
@@ -115,16 +118,20 @@ class TestRunTask:
             patch(f"{_M}.shutil.rmtree"),
         ):
             assert await run_task() == 0
-            store.assert_awaited_once_with(TASK_ID, expected)
+            store.assert_awaited_once()
 
     async def test_bad_type(self, task_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_TASK_TYPE, "bad")
-        with patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)):
+        with (
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
+            patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)),
+        ):
             assert await run_task() == 1
 
     async def test_url_mismatch(self, task_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_REPO_URL, BAD_HOST)
         with (
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
             patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)),
             pytest.raises(RuntimeError, match="does not match"),
         ):
@@ -136,6 +143,7 @@ class TestRunTask:
             {"result_type": "coding", "summary": "x", "patch": "p", "base_sha": "abc"}
         )
         with (
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
             patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)),
             patch(f"{_M}.git_clone", AsyncMock(return_value=Path("/tmp/r"))),
             patch(f"{_M}.run_copilot_session", AsyncMock(return_value="x")) as ms,

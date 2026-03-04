@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import TYPE_CHECKING
 
 import structlog
@@ -13,7 +14,7 @@ from gitlab_copilot_agent.task_executor import CodingResult, ReviewResult, TaskR
 if TYPE_CHECKING:
     from azure.mgmt.appcontainers import ContainerAppsAPIClient
 
-    from gitlab_copilot_agent.concurrency import ResultStore
+    from gitlab_copilot_agent.concurrency import ResultStore, TaskQueue
     from gitlab_copilot_agent.config import Settings
     from gitlab_copilot_agent.task_executor import TaskParams
 
@@ -67,34 +68,78 @@ class ContainerAppsTaskExecutor:
     base template's command, env vars, and Key Vault secret refs are preserved.
     """
 
-    def __init__(self, settings: Settings, result_store: ResultStore) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        result_store: ResultStore,
+        task_queue: TaskQueue | None = None,
+    ) -> None:
         self._settings = settings
         self._store = result_store
+        self._task_queue = task_queue
 
     async def execute(self, task: TaskParams) -> TaskResult:
         cached = await self._store.get(task.task_id)
         if cached is not None:
             return _parse_result(cached, task.task_type)
 
-        # Idempotency: check if another worker already started this task.
-        # Unlike k8s Jobs (deterministic names + 409 conflict), ACA Jobs
-        # always create new executions, so we use a Redis sentinel.
+        if self._task_queue is not None:
+            return await self._execute_via_queue(task)
+
+        # Redis keyed dispatch path (legacy)
         lock_key = f"{_EXECUTION_LOCK_PREFIX}{task.task_id}"
         existing = await self._store.get(lock_key)
         if existing is not None:
             log.info("aca_execution_already_started", task_id=task.task_id)
             return await self._wait_for_result(existing, task)
 
-        # Start execution first to get the execution name, then write
-        # dispatch params keyed by that name. The job reads its own
-        # CONTAINER_APP_JOB_EXECUTION_NAME env var to find its payload.
         execution_name = await asyncio.to_thread(self._start_execution, task)
         dispatch_key = f"{_DISPATCH_KEY_PREFIX}{execution_name}"
         payload = _build_dispatch_payload(task)
         await self._store.set(dispatch_key, payload, ttl=_DISPATCH_TTL)
-
         await self._store.set(lock_key, execution_name, ttl=_EXECUTION_LOCK_TTL)
         return await self._wait_for_result(execution_name, task)
+
+    async def _execute_via_queue(self, task: TaskParams) -> TaskResult:
+        """Azure Storage Queue path: enqueue + trigger + poll result."""
+        assert self._task_queue is not None  # guarded by caller  # noqa: S101
+
+        # Idempotency: if another call already enqueued this task, just poll
+        lock_key = f"{_EXECUTION_LOCK_PREFIX}{task.task_id}"
+        existing_lock = await self._store.get(lock_key)
+        if existing_lock is not None and existing_lock.startswith("enqueued:"):
+            try:
+                expiry = int(existing_lock.split(":", 1)[1])
+                if time.time() < expiry:
+                    log.info("aca_execution_already_started", task_id=task.task_id)
+                    return await self._poll_blob_result(task)
+            except (ValueError, IndexError):
+                pass  # malformed lock, proceed to re-enqueue
+
+        payload = _build_dispatch_payload(task)
+        await self._task_queue.enqueue(task.task_id, payload)
+        lock_val = f"enqueued:{int(time.time()) + _EXECUTION_LOCK_TTL}"
+        await self._store.set(lock_key, lock_val)
+
+        try:
+            await asyncio.to_thread(self._start_execution, task)
+        except Exception:
+            # Message remains queued — will be picked up on retry or by KEDA
+            log.error("aca_start_failed_after_enqueue", task_id=task.task_id, exc_info=True)
+            raise
+
+        return await self._poll_blob_result(task)
+
+    async def _poll_blob_result(self, task: TaskParams) -> TaskResult:
+        """Poll ResultStore for result (no ARM status polling needed)."""
+        deadline = asyncio.get_event_loop().time() + self._settings.aca_job_timeout
+        while asyncio.get_event_loop().time() < deadline:
+            cached = await self._store.get(task.task_id)
+            if cached is not None:
+                return _parse_result(cached, task.task_type)
+            await asyncio.sleep(_JOB_POLL_INTERVAL)
+        msg = f"Task {task.task_id} timed out after {self._settings.aca_job_timeout}s"
+        raise TimeoutError(msg)
 
     def _create_client(self) -> ContainerAppsAPIClient:
         """Create a fresh Azure Container Apps management client."""
