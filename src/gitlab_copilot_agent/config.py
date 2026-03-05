@@ -92,6 +92,9 @@ class Settings(BaseSettings):
         default=None,
         description="Base directory for repo clones. Defaults to system temp.",
     )
+    shutdown_timeout: int = Field(
+        default=30, gt=0, description="Graceful shutdown timeout in seconds"
+    )
 
     # Task execution
     task_executor: Literal["local", "kubernetes", "container_apps"] = Field(
