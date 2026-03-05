@@ -1,0 +1,72 @@
+{{- if .Values.keda.enabled }}
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "app.fullname" . }}-azurite-auth
+spec:
+  secretTargetRef:
+    - parameter: connection
+      name: {{ include "app.fullname" . }}
+      key: AZURE_STORAGE_CONNECTION_STRING
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledJob
+metadata:
+  name: {{ include "app.fullname" . }}-task-runner
+  labels: {{- include "app.labels" . | nindent 4 }}
+spec:
+  jobTargetRef:
+    parallelism: 1
+    completions: 1
+    backoffLimit: 1
+    ttlSecondsAfterFinished: {{ .Values.keda.ttlSecondsAfterFinished | default 300 }}
+    template:
+      metadata:
+        labels: {{- include "app.selectorLabels" . | nindent 10 }}
+          app.kubernetes.io/component: job
+      spec:
+        serviceAccountName: {{ include "app.serviceAccountName" . }}
+        containers:
+          - name: task
+            image: "{{ .Values.jobRunner.image | default (printf "%s:%s" .Values.image.repository (.Values.image.tag | default "latest")) }}"
+            command: [".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]
+            envFrom:
+              - secretRef:
+                  name: {{ include "app.fullname" . }}
+              - configMapRef:
+                  name: {{ include "app.fullname" . }}
+            env:
+              - name: HOME
+                value: /tmp
+            resources:
+              limits:
+                cpu: {{ .Values.jobRunner.cpuLimit }}
+                memory: {{ .Values.jobRunner.memoryLimit }}
+            volumeMounts: [{ name: tmp, mountPath: /tmp }]
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 1000
+              readOnlyRootFilesystem: true
+              capabilities: { drop: ["ALL"] }
+        volumes:
+          - name: tmp
+            emptyDir: {}
+        restartPolicy: Never
+        {{- with .Values.hostAliases }}
+        hostAliases: {{- toYaml . | nindent 8 }}
+        {{- end }}
+  pollingInterval: {{ .Values.keda.pollingInterval | default 10 }}
+  successfulJobsHistoryLimit: {{ .Values.keda.successfulJobsHistoryLimit | default 5 }}
+  failedJobsHistoryLimit: {{ .Values.keda.failedJobsHistoryLimit | default 3 }}
+  maxReplicaCount: {{ .Values.keda.maxReplicaCount | default 10 }}
+  triggers:
+    - type: azure-queue
+      metadata:
+        queueName: {{ .Values.keda.queueName | default "task-queue" }}
+        queueLength: "1"
+        accountName: devstoreaccount1
+        cloud: Private
+        endpointSuffix: "{{ include "app.fullname" . }}-azurite.{{ .Release.Namespace }}.svc.cluster.local:10001"
+      authenticationRef:
+        name: {{ include "app.fullname" . }}-azurite-auth
+{{- end }}

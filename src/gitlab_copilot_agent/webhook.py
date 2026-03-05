@@ -33,23 +33,33 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
     mr = payload.object_attributes
     project_id = payload.project.id
     head_sha = mr.last_commit.id
+    bound = log.bind(project_id=project_id, mr_iid=mr.iid, head_sha=head_sha)
+    bound.info("background_review_starting")
     try:
         await handle_review(settings, payload, executor)
         review_tracker.mark(project_id, mr.iid, head_sha)
+        bound.info("background_review_completed")
     except Exception:
         webhook_errors_total.add(1, {"handler": "review"})
-        await log.aexception("background_review_failed")
+        bound.exception("background_review_failed")
 
 
 async def _process_copilot_comment(request: Request, payload: NoteWebhookPayload) -> None:
     settings = request.app.state.settings
     executor = request.app.state.executor
     repo_locks = request.app.state.repo_locks
+    bound = log.bind(
+        project_id=payload.project.id,
+        mr_iid=payload.merge_request.iid if payload.merge_request else None,
+        note_body=payload.object_attributes.note[:80],
+    )
+    bound.info("background_copilot_comment_starting")
     try:
         await handle_copilot_comment(settings, payload, executor, repo_locks)
+        bound.info("background_copilot_comment_completed")
     except Exception:
         webhook_errors_total.add(1, {"handler": "copilot_comment"})
-        await log.aexception("background_copilot_comment_failed")
+        bound.exception("background_copilot_comment_failed")
 
 
 @router.post("/webhook", status_code=200)

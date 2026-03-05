@@ -7,9 +7,11 @@ from gitlab_copilot_agent.concurrency import (
     DistributedLock,
     MemoryDedup,
     MemoryLock,
+    MemoryTaskQueue,
     ProcessedIssueTracker,
     RepoLockManager,
     ReviewedMRTracker,
+    TaskQueue,
 )
 from tests.conftest import EXAMPLE_CLONE_URL, PROJECT_ID
 
@@ -237,3 +239,48 @@ async def test_memory_dedup_evicts_when_full() -> None:
     assert not await store.is_seen("k-1")
     assert await store.is_seen("k-3")
     assert await store.is_seen("k-99")
+
+
+# --- MemoryTaskQueue tests ---
+
+TASK_ID_1 = "task-abc-123"
+TASK_ID_2 = "task-def-456"
+TASK_PAYLOAD = '{"repo_url": "https://gitlab.example.com/g/r.git"}'
+
+
+async def test_memory_task_queue_enqueue_dequeue_roundtrip() -> None:
+    queue = MemoryTaskQueue()
+    await queue.enqueue(TASK_ID_1, TASK_PAYLOAD)
+    msg = await queue.dequeue()
+    assert msg is not None
+    assert msg.task_id == TASK_ID_1
+    assert msg.payload == TASK_PAYLOAD
+    assert msg.dequeue_count == 1
+
+
+async def test_memory_task_queue_dequeue_empty_returns_none() -> None:
+    queue = MemoryTaskQueue()
+    assert await queue.dequeue() is None
+
+
+async def test_memory_task_queue_fifo_ordering() -> None:
+    queue = MemoryTaskQueue()
+    await queue.enqueue(TASK_ID_1, "first")
+    await queue.enqueue(TASK_ID_2, "second")
+    msg1 = await queue.dequeue()
+    msg2 = await queue.dequeue()
+    assert msg1 is not None and msg1.task_id == TASK_ID_1
+    assert msg2 is not None and msg2.task_id == TASK_ID_2
+
+
+async def test_memory_task_queue_complete_is_noop() -> None:
+    queue = MemoryTaskQueue()
+    await queue.enqueue(TASK_ID_1, TASK_PAYLOAD)
+    msg = await queue.dequeue()
+    assert msg is not None
+    await queue.complete(msg)  # should not raise
+    assert await queue.dequeue() is None  # message was consumed
+
+
+async def test_memory_task_queue_satisfies_protocol() -> None:
+    assert isinstance(MemoryTaskQueue(), TaskQueue)

@@ -133,25 +133,29 @@ class Settings(BaseSettings):
         default=600, description="Container Apps Job execution timeout in seconds"
     )
 
-    # State backend
-    state_backend: Literal["memory", "redis"] = Field(
-        default="memory", description="State backend: 'memory' or 'redis'"
+    # Dispatch backend (determines queue + result store)
+    dispatch_backend: Literal["azure_storage"] = Field(
+        default="azure_storage",
+        description="Dispatch backend: 'azure_storage' (Queue + Blob via Claim Check)",
     )
-    redis_url: str | None = Field(
-        default=None, description="Redis connection string (local/non-Azure environments)"
+    azure_storage_account_url: str | None = Field(
+        default=None,
+        description="Azure Blob Storage endpoint, e.g. https://<acct>.blob.core.windows.net",
     )
-    redis_host: str | None = Field(
-        default=None, description="Redis hostname for Entra ID auth (Azure environments)"
+    azure_storage_queue_url: str | None = Field(
+        default=None,
+        description="Azure Queue Storage endpoint, e.g. https://<acct>.queue.core.windows.net",
     )
-    redis_port: int = Field(default=6380, description="Redis TLS port (used with redis_host)")
-    azure_client_id: str | None = Field(
-        default=None, description="Managed identity client ID for DefaultAzureCredential"
+    azure_storage_connection_string: str | None = Field(
+        default=None,
+        description="Azure Storage connection string (for Azurite/K8s); overrides URL-based auth",
     )
-
-    @property
-    def redis_configured(self) -> bool:
-        """True when Redis connectivity is configured (either URL or Entra host)."""
-        return bool(self.redis_url or self.redis_host)
+    task_queue_name: str = Field(
+        default="task-queue", description="Azure Storage Queue name for task dispatch"
+    )
+    task_blob_container: str = Field(
+        default="task-data", description="Azure Blob container for params and results"
+    )
 
     # Git clone retry
     git_clone_max_retries: int = Field(
@@ -241,8 +245,6 @@ class Settings(BaseSettings):
                 "  • COPILOT_PROVIDER_TYPE + COPILOT_PROVIDER_BASE_URL + "
                 "COPILOT_PROVIDER_API_KEY — BYOK (Azure OpenAI, OpenAI direct)"
             )
-        if self.state_backend == "redis" and not self.redis_configured:
-            raise ValueError("REDIS_URL or REDIS_HOST is required when STATE_BACKEND=redis")
         if self.gitlab_poll:
             entries = [e.strip() for e in (self.gitlab_projects or "").split(",") if e.strip()]
             if not entries:
@@ -279,10 +281,23 @@ class Settings(BaseSettings):
             ]
             if missing:
                 raise ValueError(f"Container Apps executor requires: {', '.join(missing)}")
-            if not self.redis_configured:
+        return self
+
+    @model_validator(mode="after")
+    def _check_azure_storage(self) -> "Settings":
+        if self.dispatch_backend == "azure_storage" and not self.azure_storage_connection_string:
+            missing = [
+                name
+                for name, val in [
+                    ("AZURE_STORAGE_ACCOUNT_URL", self.azure_storage_account_url),
+                    ("AZURE_STORAGE_QUEUE_URL", self.azure_storage_queue_url),
+                ]
+                if not val
+            ]
+            if missing:
                 raise ValueError(
-                    "REDIS_URL or REDIS_HOST is required when TASK_EXECUTOR=container_apps "
-                    "(used for result passback from job executions)"
+                    f"dispatch_backend='azure_storage' requires: {', '.join(missing)} "
+                    f"(or set AZURE_STORAGE_CONNECTION_STRING)"
                 )
         return self
 
@@ -324,19 +339,21 @@ class TaskRunnerSettings(BaseSettings):
     clone_dir: str | None = Field(default=None, description="Base directory for repo clones")
     log_level: str = Field(default="info", description="Log level")
 
-    # Redis (for result storage)
-    state_backend: Literal["memory", "redis"] = Field(
-        default="memory", description="State backend"
+    # Azure Storage (for queue-based dispatch)
+    dispatch_backend: Literal["azure_storage"] = Field(
+        default="azure_storage", description="Dispatch backend"
     )
-    redis_url: str | None = Field(default=None, description="Redis connection string")
-    redis_host: str | None = Field(default=None, description="Redis hostname for Entra ID auth")
-    redis_port: int = Field(default=6380, description="Redis TLS port")
-    azure_client_id: str | None = Field(default=None, description="Managed identity client ID")
-
-    @property
-    def redis_configured(self) -> bool:
-        """True when Redis connectivity is configured."""
-        return bool(self.redis_url or self.redis_host)
+    azure_storage_account_url: str | None = Field(
+        default=None, description="Azure Blob Storage endpoint"
+    )
+    azure_storage_queue_url: str | None = Field(
+        default=None, description="Azure Queue Storage endpoint"
+    )
+    azure_storage_connection_string: str | None = Field(
+        default=None, description="Azure Storage connection string (for Azurite/K8s)"
+    )
+    task_queue_name: str = Field(default="task-queue", description="Queue name")
+    task_blob_container: str = Field(default="task-data", description="Blob container name")
 
     @model_validator(mode="after")
     def _check_auth(self) -> "TaskRunnerSettings":

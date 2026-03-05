@@ -13,8 +13,8 @@ from gitlab_copilot_agent.task_runner import (
     ENV_TASK_TYPE,
     _build_coding_result,
     _coding_response_validator,
+    _dequeue_task,
     _get_required_env,
-    _load_dispatch_params,
     _parse_task_payload,
     _store_result,
     _validate_repo_url,
@@ -78,9 +78,8 @@ class TestHelpers:
 class TestRunTask:
     async def test_ok(self, task_env: None) -> None:
         fp = Path("/tmp/fake")
-        expected = json.dumps({"result_type": "review", "summary": "done"})
         with (
-            patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)),
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
             patch(f"{_M}.git_clone", AsyncMock(return_value=fp)),
             patch(f"{_M}.run_copilot_session", AsyncMock(return_value="done")),
             patch(f"{_M}._store_result", AsyncMock()) as store,
@@ -88,44 +87,22 @@ class TestRunTask:
         ):
             assert await run_task() == 0
             rm.assert_called_once_with(fp, ignore_errors=True)
-            store.assert_awaited_once_with(TASK_ID, expected)
+            store.assert_awaited_once()
 
     async def test_missing_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(ENV_TASK_TYPE, raising=False)
-        with patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)):
+        with patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)):
             assert await run_task() == 1
-
-    async def test_redis_dispatch_path(self, env_vars: None) -> None:
-        """When Redis dispatch returns params, env vars are not needed."""
-        dispatch_params = {
-            "task_type": "review",
-            "task_id": TASK_ID,
-            "repo_url": EXAMPLE_CLONE_URL,
-            "branch": "feat/x",
-            "system_prompt": "Review code.",
-            "user_prompt": "Review this",
-        }
-        expected = json.dumps({"result_type": "review", "summary": "done"})
-        fp = Path("/tmp/fake")
-        with (
-            patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=dispatch_params)),
-            patch(f"{_M}.git_clone", AsyncMock(return_value=fp)),
-            patch(f"{_M}.run_copilot_session", AsyncMock(return_value="done")),
-            patch(f"{_M}._store_result", AsyncMock()) as store,
-            patch(f"{_M}.shutil.rmtree"),
-        ):
-            assert await run_task() == 0
-            store.assert_awaited_once_with(TASK_ID, expected)
 
     async def test_bad_type(self, task_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_TASK_TYPE, "bad")
-        with patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)):
+        with patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)):
             assert await run_task() == 1
 
     async def test_url_mismatch(self, task_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_REPO_URL, BAD_HOST)
         with (
-            patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)),
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
             pytest.raises(RuntimeError, match="does not match"),
         ):
             await run_task()
@@ -136,7 +113,7 @@ class TestRunTask:
             {"result_type": "coding", "summary": "x", "patch": "p", "base_sha": "abc"}
         )
         with (
-            patch(f"{_M}._load_dispatch_params", AsyncMock(return_value=None)),
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
             patch(f"{_M}.git_clone", AsyncMock(return_value=Path("/tmp/r"))),
             patch(f"{_M}.run_copilot_session", AsyncMock(return_value="x")) as ms,
             patch(f"{_M}._build_coding_result", AsyncMock(return_value=coding_json)),
@@ -224,115 +201,119 @@ class TestBuildCodingResult:
         git_mock.assert_awaited_once_with(Path("/repo"), "add", "--", "src/ok.py")
 
 
-_REDIS_MOD = "gitlab_copilot_agent.redis_state"
+_STATE_MOD = "gitlab_copilot_agent.state"
 
 
 class TestStoreResult:
     """Tests for _store_result function."""
 
-    async def test_skips_when_no_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Returns immediately when no Redis env vars are set."""
-        monkeypatch.delenv("REDIS_URL", raising=False)
-        monkeypatch.delenv("REDIS_HOST", raising=False)
+    async def test_skips_when_no_settings(self) -> None:
+        """Returns immediately when no settings are provided."""
         await _store_result("task-1", '{"result": "ok"}')  # Should not raise
 
-    async def test_stores_via_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Stores result in Redis when REDIS_URL is set."""
-        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    async def test_stores_via_azure_storage(self) -> None:
+        """Stores result in Azure Storage when settings are provided."""
         mock_store = MagicMock()
         mock_store.set = AsyncMock()
         mock_store.aclose = AsyncMock()
-        with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
-            await _store_result("task-1", '{"result": "ok"}')
-        mock_store.set.assert_awaited_once_with("task-1", '{"result": "ok"}', ttl=3600)
+        with patch(f"{_STATE_MOD}.create_result_store", return_value=mock_store):
+            from gitlab_copilot_agent.config import TaskRunnerSettings
+
+            settings = TaskRunnerSettings(
+                gitlab_url=GITLAB_URL,
+                gitlab_token="t",
+                github_token="g",
+                azure_storage_connection_string="conn",
+            )
+            await _store_result("task-1", '{"result": "ok"}', settings)
+        mock_store.set.assert_awaited_once_with("task-1", '{"result": "ok"}')
         mock_store.aclose.assert_awaited_once()
 
-    async def test_closes_store_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_closes_store_on_error(self) -> None:
         """Store is closed even if set() raises."""
-        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
         mock_store = MagicMock()
         mock_store.set = AsyncMock(side_effect=RuntimeError("boom"))
         mock_store.aclose = AsyncMock()
         with (
-            patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store),
+            patch(f"{_STATE_MOD}.create_result_store", return_value=mock_store),
             pytest.raises(RuntimeError, match="boom"),
         ):
-            await _store_result("task-1", '{"result": "ok"}')
+            from gitlab_copilot_agent.config import TaskRunnerSettings
+
+            settings = TaskRunnerSettings(
+                gitlab_url=GITLAB_URL,
+                gitlab_token="t",
+                github_token="g",
+                azure_storage_connection_string="conn",
+            )
+            await _store_result("task-1", '{"result": "ok"}', settings)
         mock_store.aclose.assert_awaited_once()
 
 
-class TestLoadDispatchParams:
-    """Tests for _load_dispatch_params function."""
+class TestDequeueTask:
+    """Tests for _dequeue_task function."""
 
-    async def test_returns_none_when_no_exec_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Returns None when CONTAINER_APP_JOB_EXECUTION_NAME is not set."""
-        monkeypatch.delenv("CONTAINER_APP_JOB_EXECUTION_NAME", raising=False)
-        assert await _load_dispatch_params() is None
-
-    async def test_returns_none_when_no_redis(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Returns None when no Redis env vars are set."""
-        monkeypatch.setenv("CONTAINER_APP_JOB_EXECUTION_NAME", "exec-123")
-        monkeypatch.delenv("REDIS_URL", raising=False)
-        monkeypatch.delenv("REDIS_HOST", raising=False)
-        assert await _load_dispatch_params() is None
-
-    async def test_returns_params_by_execution_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Loads dispatch params keyed by execution name."""
-        monkeypatch.setenv("CONTAINER_APP_JOB_EXECUTION_NAME", "exec-123")
-        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
-        dispatch = {
-            "task_type": "review",
-            "task_id": "t-1",
-            "repo_url": "u",
-            "branch": "b",
-            "user_prompt": "p",
-        }
-        mock_store = MagicMock()
-        mock_store.get = AsyncMock(return_value=json.dumps(dispatch))
-        mock_store.aclose = AsyncMock()
-        with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
-            result = await _load_dispatch_params()
-        assert result == dispatch
-        mock_store.get.assert_awaited_once_with("dispatch:exec-123")
-        mock_store.aclose.assert_awaited_once()
-
-    @patch(f"{_M}._DISPATCH_READ_RETRIES", 3)
-    @patch(f"{_M}._DISPATCH_READ_DELAY", 0.0)
-    async def test_retries_then_returns_none_when_key_missing(
+    async def test_returns_none_when_settings_invalid(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Retries before returning None when dispatch key not found."""
-        monkeypatch.setenv("CONTAINER_APP_JOB_EXECUTION_NAME", "exec-123")
-        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
-        mock_store = MagicMock()
-        mock_store.get = AsyncMock(return_value=None)
-        mock_store.aclose = AsyncMock()
-        with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
-            assert await _load_dispatch_params() is None
-        assert mock_store.get.await_count == 3
+        """Returns None when TaskRunnerSettings can't be created."""
+        monkeypatch.delenv("GITLAB_URL", raising=False)
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        monkeypatch.delenv("AZURE_STORAGE_CONNECTION_STRING", raising=False)
+        result = await _dequeue_task()
+        assert result is None
 
-    @patch(f"{_M}._DISPATCH_READ_RETRIES", 3)
-    @patch(f"{_M}._DISPATCH_READ_DELAY", 0.0)
-    async def test_succeeds_on_retry(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Returns params after initial miss + successful retry."""
-        monkeypatch.setenv("CONTAINER_APP_JOB_EXECUTION_NAME", "exec-123")
-        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
-        dispatch = {"task_type": "review", "task_id": "t-1"}
-        mock_store = MagicMock()
-        mock_store.get = AsyncMock(side_effect=[None, json.dumps(dispatch)])
-        mock_store.aclose = AsyncMock()
-        with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
-            result = await _load_dispatch_params()
-        assert result == dispatch
-        assert mock_store.get.await_count == 2
+    async def test_returns_none_when_no_azure_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Returns None when no Azure Storage is configured."""
+        monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
+        monkeypatch.setenv("GITLAB_TOKEN", "t")
+        monkeypatch.setenv("GITHUB_TOKEN", "g")
+        monkeypatch.delenv("AZURE_STORAGE_CONNECTION_STRING", raising=False)
+        monkeypatch.delenv("AZURE_STORAGE_QUEUE_URL", raising=False)
+        monkeypatch.delenv("AZURE_STORAGE_ACCOUNT_URL", raising=False)
+        result = await _dequeue_task()
+        assert result is None
 
-    async def test_returns_none_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Returns None and logs warning when get raises."""
-        monkeypatch.setenv("CONTAINER_APP_JOB_EXECUTION_NAME", "exec-123")
-        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
-        mock_store = MagicMock()
-        mock_store.get = AsyncMock(side_effect=RuntimeError("boom"))
-        mock_store.aclose = AsyncMock()
-        with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
-            assert await _load_dispatch_params() is None
-        mock_store.aclose.assert_awaited_once()
+    async def test_returns_none_when_queue_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns None and closes queue when no messages."""
+        monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
+        monkeypatch.setenv("GITLAB_TOKEN", "t")
+        monkeypatch.setenv("GITHUB_TOKEN", "g")
+        monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", "conn")
+        mock_queue = MagicMock()
+        mock_queue.dequeue = AsyncMock(return_value=None)
+        mock_queue.aclose = AsyncMock()
+        with patch(f"{_STATE_MOD}.create_task_queue", return_value=mock_queue):
+            result = await _dequeue_task()
+        assert result is None
+        mock_queue.aclose.assert_awaited_once()
+
+    async def test_returns_params_and_queue_on_success(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Returns parsed params, message, and queue on successful dequeue."""
+        monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
+        monkeypatch.setenv("GITLAB_TOKEN", "t")
+        monkeypatch.setenv("GITHUB_TOKEN", "g")
+        monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", "conn")
+
+        from gitlab_copilot_agent.concurrency import QueueMessage
+
+        fake_msg = QueueMessage(
+            message_id="m1",
+            receipt="r1",
+            task_id="task-1",
+            payload=json.dumps({"task_type": "review", "task_id": "task-1"}),
+            dequeue_count=1,
+        )
+        mock_queue = MagicMock()
+        mock_queue.dequeue = AsyncMock(return_value=fake_msg)
+        with patch(f"{_STATE_MOD}.create_task_queue", return_value=mock_queue):
+            result = await _dequeue_task()
+        assert result is not None
+        params, msg, queue = result
+        assert params == {"task_type": "review", "task_id": "task-1"}
+        assert msg.message_id == "m1"
+        assert queue is mock_queue

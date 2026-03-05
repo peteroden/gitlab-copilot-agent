@@ -1,0 +1,63 @@
+{{- if .Values.azurite.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "app.fullname" . }}-azurite
+  labels: {{- include "app.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "app.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: azurite
+  template:
+    metadata:
+      labels: {{- include "app.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: azurite
+    spec:
+      containers:
+        - name: azurite
+          image: "{{ .Values.azurite.image.repository }}:{{ .Values.azurite.image.tag }}"
+          ports:
+            - { containerPort: 10000, name: blob }
+            - { containerPort: 10001, name: queue }
+          args: ["azurite", "--blobHost", "0.0.0.0", "--queueHost", "0.0.0.0", "--skipApiVersionCheck", "--disableProductStyleUrl", "--location", "/data"]
+          env:
+            - name: AZURITE_ACCOUNTS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "app.fullname" . }}
+                  key: AZURITE_ACCOUNTS
+          resources: {{- toYaml .Values.azurite.resources | nindent 12 }}
+          volumeMounts: [{ name: data, mountPath: /data }]
+      volumes:
+        - name: data
+          {{- if .Values.azurite.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "app.fullname" . }}-azurite
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- if .Values.azurite.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "app.fullname" . }}-azurite
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.azurite.persistence.size }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "app.fullname" . }}-azurite
+spec:
+  ports:
+    - { port: 10000, name: blob }
+    - { port: 10001, name: queue }
+  selector: {{- include "app.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: azurite
+{{- end }}

@@ -11,6 +11,7 @@ from urllib.parse import ParseResult, urlparse
 import structlog
 
 from gitlab_copilot_agent.coding_engine import parse_agent_output
+from gitlab_copilot_agent.concurrency import QueueMessage, TaskQueue
 from gitlab_copilot_agent.config import TaskRunnerSettings
 from gitlab_copilot_agent.copilot_session import run_copilot_session
 from gitlab_copilot_agent.git_operations import (
@@ -25,14 +26,8 @@ from gitlab_copilot_agent.prompt_defaults import get_prompt
 log = structlog.get_logger()
 ENV_TASK_TYPE, ENV_TASK_ID, ENV_REPO_URL = "TASK_TYPE", "TASK_ID", "REPO_URL"
 ENV_BRANCH, ENV_TASK_PAYLOAD = "BRANCH", "TASK_PAYLOAD"
-ENV_REDIS_URL = "REDIS_URL"
-ENV_REDIS_HOST = "REDIS_HOST"
-ENV_REDIS_PORT = "REDIS_PORT"
-ENV_AZURE_CLIENT_ID = "AZURE_CLIENT_ID"
 VALID_TASK_TYPES: frozenset[str] = frozenset({"review", "coding", "echo"})
 _RESULT_TTL = 3600  # 1 hour
-_DISPATCH_READ_RETRIES = 5
-_DISPATCH_READ_DELAY = 2.0  # seconds between retries
 
 _RETRY_PROMPT = (
     "Your response did not include the required JSON output block. "
@@ -51,75 +46,59 @@ def _coding_response_validator(response: str) -> str | None:
     return _RETRY_PROMPT
 
 
-async def _store_result(task_id: str, result: str) -> None:
-    """Persist result to Redis-backed ResultStore if Redis is configured."""
-    redis_url = os.environ.get(ENV_REDIS_URL, "").strip()
-    redis_host = os.environ.get(ENV_REDIS_HOST, "").strip()
-    if not redis_url and not redis_host:
+async def _store_result(
+    task_id: str, result: str, settings: TaskRunnerSettings | None = None
+) -> None:
+    """Persist result to the configured ResultStore (Azure Storage Blob)."""
+    if settings is None:
         return
-    from gitlab_copilot_agent.redis_state import create_result_store
+    from gitlab_copilot_agent.state import create_result_store
 
     store = create_result_store(
-        "redis",
-        redis_url=redis_url or None,
-        redis_host=redis_host or None,
-        redis_port=int(os.environ.get(ENV_REDIS_PORT, "6380")),
-        azure_client_id=os.environ.get(ENV_AZURE_CLIENT_ID),
+        azure_storage_account_url=settings.azure_storage_account_url,
+        azure_storage_connection_string=settings.azure_storage_connection_string,
+        task_blob_container=settings.task_blob_container,
     )
     try:
-        await store.set(task_id, result, ttl=_RESULT_TTL)
+        await store.set(task_id, result)
     finally:
         await store.aclose()
 
 
-async def _load_dispatch_params() -> dict[str, str] | None:
-    """Load task params from Redis keyed by ACA execution name.
+async def _dequeue_task() -> tuple[dict[str, str], QueueMessage, TaskQueue] | None:
+    """Dequeue a task from Azure Storage Queue (if configured).
 
-    The controller stores dispatch params at ``dispatch:{execution_name}``
-    after starting the job. The job discovers its own execution name via
-    the ``CONTAINER_APP_JOB_EXECUTION_NAME`` env var (injected by ACA).
-
-    Retries with backoff because the controller writes the key after
-    begin_start() returns — the job may start before the write completes.
+    Creates TaskRunnerSettings internally; returns None if settings
+    can't be created or dispatch_backend isn't azure_storage.
     """
-    exec_name = os.environ.get("CONTAINER_APP_JOB_EXECUTION_NAME", "").strip()
-    if not exec_name:
-        return None
-    redis_url = os.environ.get(ENV_REDIS_URL, "").strip()
-    redis_host = os.environ.get(ENV_REDIS_HOST, "").strip()
-    if not redis_url and not redis_host:
-        return None
-    from gitlab_copilot_agent.redis_state import create_result_store
-
-    store = create_result_store(
-        "redis",
-        redis_url=redis_url or None,
-        redis_host=redis_host or None,
-        redis_port=int(os.environ.get(ENV_REDIS_PORT, "6380")),
-        azure_client_id=os.environ.get(ENV_AZURE_CLIENT_ID),
-    )
     try:
-        dispatch_key = f"dispatch:{exec_name}"
-        # Retry: controller writes key after begin_start(), job may beat it
-        for attempt in range(_DISPATCH_READ_RETRIES):
-            raw = await store.get(dispatch_key)
-            if raw is not None:
-                params: dict[str, str] = json.loads(raw)
-                await log.ainfo(
-                    "dispatch_params_loaded",
-                    task_id=params.get("task_id"),
-                    execution=exec_name,
-                )
-                return params
-            if attempt < _DISPATCH_READ_RETRIES - 1:
-                await asyncio.sleep(_DISPATCH_READ_DELAY)
-        await log.awarning("dispatch_key_not_found", key=dispatch_key)
-        return None
+        settings = TaskRunnerSettings()
     except Exception:
-        await log.awarning("dispatch_load_failed", exc_info=True)
+        await log.awarning("dequeue_settings_failed", exc_info=True)
         return None
-    finally:
-        await store.aclose()
+    if not settings.azure_storage_connection_string and (
+        not settings.azure_storage_queue_url or not settings.azure_storage_account_url
+    ):
+        await log.awarning("dequeue_no_azure_config")
+        return None
+
+    from gitlab_copilot_agent.state import create_task_queue
+
+    queue = create_task_queue(
+        azure_storage_queue_url=settings.azure_storage_queue_url,
+        azure_storage_account_url=settings.azure_storage_account_url,
+        azure_storage_connection_string=settings.azure_storage_connection_string,
+        task_queue_name=settings.task_queue_name,
+        task_blob_container=settings.task_blob_container,
+    )
+    msg = await queue.dequeue(visibility_timeout=600)
+    if msg is None:
+        await log.ainfo("dequeue_empty")
+        await queue.aclose()
+        return None
+
+    params: dict[str, str] = json.loads(msg.payload)
+    return params, msg, queue
 
 
 def _get_required_env(name: str) -> str:
@@ -210,15 +189,19 @@ async def _run_git_simple(repo_path: Path, *args: str) -> str:
     return stdout.decode().strip()
 
 
-async def run_task() -> int:
-    # Try Redis dispatch queue first (ACA executor), fall back to env vars (k8s)
-    params = await _load_dispatch_params()
-    if params is not None:
-        task_type = params["task_type"]
-        task_id = params["task_id"]
-        repo_url = params["repo_url"]
-        branch = params["branch"]
-        user_prompt = params["user_prompt"]
+async def run_task() -> int:  # noqa: C901 — dispatch routing requires branching
+    # Priority: Azure Storage Queue → env vars (legacy K8s)
+    queue_msg: QueueMessage | None = None
+    task_queue: TaskQueue | None = None
+
+    queue_result = await _dequeue_task()
+    if queue_result is not None:
+        params_dict, queue_msg, task_queue = queue_result
+        task_type = params_dict["task_type"]
+        task_id = params_dict["task_id"]
+        repo_url = params_dict["repo_url"]
+        branch = params_dict["branch"]
+        user_prompt = params_dict["user_prompt"]
         payload_raw = json.dumps({"prompt": user_prompt})
     else:
         try:
@@ -228,9 +211,10 @@ async def run_task() -> int:
             branch = _get_required_env(ENV_BRANCH)
             payload_raw = _get_required_env(ENV_TASK_PAYLOAD)
             user_prompt = _parse_task_payload(payload_raw).get("prompt", payload_raw)
-        except RuntimeError:
-            await log.aerror("missing_env_var", exc_info=True)
+        except RuntimeError as exc:
+            await log.aerror("missing_env_var", error=str(exc))
             return 1
+
     bound_log = log.bind(task_id=task_id, task_type=task_type)
     if task_type not in VALID_TASK_TYPES:
         await bound_log.aerror("invalid_task_type", valid=sorted(VALID_TASK_TYPES))
@@ -238,12 +222,19 @@ async def run_task() -> int:
     if task_type == "echo":
         try:
             result = json.dumps({"echo": user_prompt, "task_id": task_id})
-            await _store_result(task_id, result)
+            settings = TaskRunnerSettings() if queue_result is not None else None
+            await _store_result(task_id, result, settings)
+            if task_queue and queue_msg:
+                await task_queue.complete(queue_msg)
             await bound_log.ainfo("echo_complete")
             return 0
         except Exception:
             await bound_log.aerror("echo_failed", exc_info=True)
             return 1
+        finally:
+            if task_queue:
+                await task_queue.aclose()
+
     settings = TaskRunnerSettings()
     _validate_repo_url(repo_url, settings.gitlab_url)
     await bound_log.ainfo("task_start", repo=_sanitize_url(repo_url), branch=branch)
@@ -268,14 +259,20 @@ async def run_task() -> int:
             result = await _build_coding_result(repo_path, summary, bound_log)
         else:
             result = json.dumps({"result_type": "review", "summary": summary})
-        await _store_result(task_id, result)
+        await _store_result(task_id, result, settings)
+        if task_queue and queue_msg:
+            await task_queue.complete(queue_msg)
         print(json.dumps({"task_id": task_id, "result": result}), flush=True)  # noqa: T201
         await bound_log.ainfo("task_complete")
         return 0
-    except Exception:
-        await bound_log.aerror("task_failed", exc_info=True)
+    except Exception as exc:
+        import traceback
+
+        await bound_log.aerror("task_failed", error=str(exc), traceback=traceback.format_exc())
         return 1
     finally:
+        if task_queue:
+            await task_queue.aclose()
         shutil.rmtree(repo_path, ignore_errors=True)
 
 

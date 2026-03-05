@@ -91,12 +91,10 @@ def test_emit_to_otel_logs_emits_when_configured(monkeypatch: pytest.MonkeyPatch
         assert result is event_dict  # Not dropped — stdout still active
 
 
-def test_emit_to_otel_logs_drops_event_when_collector_reachable(
+def test_emit_to_otel_logs_does_not_drop_event_when_collector_reachable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Once OTLP collector is confirmed, suppress stdout to avoid duplicate logs."""
-    import structlog
-
+    """Logs should always pass through to stdout even when OTLP is active."""
     import gitlab_copilot_agent.telemetry as tel_mod
 
     monkeypatch.setattr(tel_mod, "_otel_logging_configured", True)
@@ -105,9 +103,9 @@ def test_emit_to_otel_logs_drops_event_when_collector_reachable(
         mock_logger = mock_logging.getLogger.return_value
         mock_logging.INFO = 20
         event_dict: dict[str, object] = {"event": "clone_done", "level": "info", "branch": "main"}
-        with pytest.raises(structlog.DropEvent):
-            emit_to_otel_logs(None, "info", event_dict)
-        mock_logger.log.assert_called_once()  # Still emitted to OTLP
+        result = emit_to_otel_logs(None, "info", event_dict)
+        mock_logger.log.assert_called_once()  # Emitted to OTLP
+        assert result is event_dict  # Also passed through to stdout
 
 
 def test_configure_logging_routes_through_structlog() -> None:

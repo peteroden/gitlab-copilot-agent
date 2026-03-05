@@ -326,8 +326,4 @@ def emit_to_otel_logs(logger: Any, method: str, event_dict: dict[str, Any]) -> d
     extra = {k: v for k, v in event_dict.items() if k not in _reserved}
     logging.getLogger(_SERVICE_NAME).log(level, msg, extra=extra)
 
-    # Once OTLP is confirmed working, suppress stdout to avoid duplicate logs.
-    # Stdout remains the fallback during startup and if OTLP never connects.
-    if _collector_reachable:
-        raise structlog.DropEvent
     return event_dict

@@ -281,7 +281,7 @@ class ResultStore(Protocol):
 | `BlobResultStore` | `ResultStore` | Azure Blob Storage | `azure_storage.py` |
 | `TableStorageDedup` | `DeduplicationStore` | Azure Table Storage | `azure_storage.py` |
 | `MemoryTaskQueue` | `TaskQueue` | In-memory (for tests) | `dispatch.py` |
-| `RedisResultStore` | `ResultStore` | Redis (simplified — queue methods removed) | `redis_state.py` |
+| `MemoryResultStore` / `BlobResultStore` | `ResultStore` | In-memory or Azure Blob Storage | `state.py` / `azure_storage.py` |
 | `MemoryResultStore` | `ResultStore` | In-memory (simplified) | `concurrency.py` |
 
 Swapping backends requires only a new class implementing the same protocol.

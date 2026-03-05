@@ -27,14 +27,6 @@ resource "azurerm_subnet" "infra" {
   }
 }
 
-# Redis private endpoint subnet
-resource "azurerm_subnet" "redis" {
-  name                 = "snet-redis"
-  resource_group_name  = azurerm_resource_group.main.name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [var.redis_subnet_prefix]
-}
-
 # Key Vault private endpoint subnet
 resource "azurerm_subnet" "keyvault" {
   name                 = "snet-keyvault"
@@ -61,19 +53,6 @@ resource "azurerm_network_security_group" "infra" {
     destination_port_range     = "443"
     source_address_prefix      = "*"
     destination_address_prefix = "Internet"
-  }
-
-  # Allow outbound to Redis (TLS port) via private endpoint in redis subnet
-  security_rule {
-    name                       = "AllowRedisOutbound"
-    priority                   = 110
-    direction                  = "Outbound"
-    access                     = "Allow"
-    protocol                   = "Tcp"
-    source_port_range          = "*"
-    destination_port_range     = "6380"
-    source_address_prefix      = var.infra_subnet_prefix
-    destination_address_prefix = var.redis_subnet_prefix
   }
 
   # Allow outbound to Key Vault via private endpoint

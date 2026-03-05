@@ -24,8 +24,7 @@ async with repo_locks.acquire(git_http_url):
 ```
 
 **Implementations**:
-- `MemoryLock` (`concurrency.py`): In-process asyncio locks with LRU eviction
-- `RedisLock` (`redis_state.py`): Distributed lock using Redis SET NX + TTL
+- `MemoryLock` (`concurrency.py`): In-process asyncio locks with LRU eviction (created via `state.create_lock()`)
 
 ---
 
@@ -162,8 +161,7 @@ await dedup.mark_seen(key, ttl_seconds=86400)
 ```
 
 **Implementations**:
-- `MemoryDedup` (`concurrency.py`): In-process set with size-based eviction
-- `RedisDedup` (`redis_state.py`): Redis SET key with TTL
+- `MemoryDedup` (`concurrency.py`): In-process set with size-based eviction (created via `state.create_dedup()`)
 
 ---
 
@@ -423,18 +421,13 @@ Poll 2: watermark=None (in-memory) → set to now() → skip historical MRs
 
 ## State Backend Selection
 
-**Config**: `STATE_BACKEND` env var (`"memory"` or `"redis"`)
+**Factory Functions** (`state.py`):
+- `state.create_lock() -> DistributedLock`
+- `state.create_dedup() -> DeduplicationStore`
+- `state.create_result_store(*, azure_storage_account_url, azure_storage_connection_string, task_blob_container) -> ResultStore`
+- `state.create_task_queue(*, azure_storage_queue_url, azure_storage_account_url, azure_storage_connection_string, task_queue_name, task_blob_container) -> TaskQueue`
 
-**Factory Functions**:
-- `redis_state.create_lock(backend, redis_url, *, redis_host, redis_port, azure_client_id) -> DistributedLock`
-- `redis_state.create_dedup(backend, redis_url, *, redis_host, redis_port, azure_client_id) -> DeduplicationStore`
-
-When `redis_host` is provided, the factories use Microsoft Entra ID authentication (via `redis-entraid` + `DefaultAzureCredential`) instead of the connection string URL. This eliminates password management for Azure deployments.
-
-**When to Use Redis**:
-- Multi-pod deployments (horizontal scaling)
-- K8s executor (Job results stored in Redis)
-- Long-running service (persist dedup across restarts)
+Lock and dedup use in-memory implementations (single-controller deployment). Result store and task queue delegate to Azure Storage when configured, otherwise fall back to in-memory.
 
 **When to Use Memory**:
 - Single-pod deployments

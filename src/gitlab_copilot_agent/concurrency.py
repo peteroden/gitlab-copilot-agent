@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 import structlog
@@ -42,9 +42,40 @@ class ResultStore(Protocol):
 
     async def get(self, key: str) -> str | None: ...
     async def set(self, key: str, value: str, ttl: int = 3600) -> None: ...
-    async def push_task(self, queue: str, payload: str) -> None: ...
-    async def pop_task(self, queue: str) -> str | None: ...
-    async def remove_task(self, queue: str, payload: str) -> None: ...
+
+    async def aclose(self) -> None: ...
+
+
+# --- Task Queue abstraction (ADR-0005) ---
+
+
+@dataclass(frozen=True)
+class QueueMessage:
+    """Handle for a dequeued message. message_id and receipt are opaque."""
+
+    message_id: str
+    receipt: str
+    task_id: str
+    payload: str
+    dequeue_count: int
+
+
+@runtime_checkable
+class TaskQueue(Protocol):
+    """Enqueue tasks for async workers; dequeue on the worker side.
+
+    Implementations handle the Claim Check pattern transparently.
+    """
+
+    async def enqueue(self, task_id: str, payload: str) -> None: ...
+
+    async def dequeue(self, visibility_timeout: int = 300) -> QueueMessage | None:
+        """Retrieve the next message, or None if empty."""
+        ...
+
+    async def complete(self, message: QueueMessage) -> None:
+        """Acknowledge processing. Deletes the queue message."""
+        ...
 
     async def aclose(self) -> None: ...
 
@@ -54,7 +85,6 @@ class MemoryResultStore:
 
     def __init__(self) -> None:
         self._data: dict[str, str] = {}
-        self._queues: dict[str, list[str]] = {}
 
     async def get(self, key: str) -> str | None:
         return self._data.get(key)
@@ -62,21 +92,36 @@ class MemoryResultStore:
     async def set(self, key: str, value: str, ttl: int = 3600) -> None:
         self._data[key] = value
 
-    async def push_task(self, queue: str, payload: str) -> None:
-        self._queues.setdefault(queue, []).append(payload)
-
-    async def pop_task(self, queue: str) -> str | None:
-        items = self._queues.get(queue, [])
-        return items.pop(0) if items else None
-
-    async def remove_task(self, queue: str, payload: str) -> None:
-        items = self._queues.get(queue, [])
-        with contextlib.suppress(ValueError):
-            items.remove(payload)
-
     async def aclose(self) -> None:
         self._data.clear()
-        self._queues.clear()
+
+
+class MemoryTaskQueue:
+    """In-memory TaskQueue for local executor and testing."""
+
+    def __init__(self) -> None:
+        self._messages: list[QueueMessage] = []
+        self._counter: int = 0
+
+    async def enqueue(self, task_id: str, payload: str) -> None:
+        self._counter += 1
+        msg = QueueMessage(
+            message_id=str(self._counter),
+            receipt=str(self._counter),
+            task_id=task_id,
+            payload=payload,
+            dequeue_count=1,
+        )
+        self._messages.append(msg)
+
+    async def dequeue(self, visibility_timeout: int = 300) -> QueueMessage | None:
+        return self._messages.pop(0) if self._messages else None
+
+    async def complete(self, message: QueueMessage) -> None:
+        """No-op — message already consumed by dequeue."""
+
+    async def aclose(self) -> None:
+        self._messages.clear()
 
 
 class MemoryLock:

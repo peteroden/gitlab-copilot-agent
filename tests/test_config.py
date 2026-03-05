@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from gitlab_copilot_agent.config import Settings
 from tests.conftest import (
+    AZURITE_CONNECTION_STRING,
     GITHUB_TOKEN,
     GITLAB_TOKEN,
     GITLAB_URL,
@@ -22,6 +23,7 @@ def test_settings_loads_required_env_vars(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("GITLAB_TOKEN", GITLAB_TOKEN)
     monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", WEBHOOK_SECRET)
     monkeypatch.setenv("GITHUB_TOKEN", GITHUB_TOKEN)
+    monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", AZURITE_CONNECTION_STRING)
 
     settings = Settings()
 
@@ -136,24 +138,12 @@ def test_local_executor_does_not_require_k8s_names() -> None:
 ACA_SUBSCRIPTION_ID = "00000000-0000-0000-0000-000000000000"
 ACA_RESOURCE_GROUP = "rg-test"
 ACA_JOB_NAME = "copilot-job"
-ACA_REDIS_URL = "rediss://test-redis.redis.cache.windows.net:6380"
 
 
 def test_aca_executor_requires_azure_settings() -> None:
     """task_executor=container_apps fails without required Azure settings."""
     with pytest.raises(ValidationError, match="ACA_SUBSCRIPTION_ID"):
-        make_settings(task_executor="container_apps", redis_url=ACA_REDIS_URL)
-
-
-def test_aca_executor_requires_redis() -> None:
-    """task_executor=container_apps requires Redis for result passback."""
-    with pytest.raises(ValidationError, match="REDIS_URL or REDIS_HOST is required"):
-        make_settings(
-            task_executor="container_apps",
-            aca_subscription_id=ACA_SUBSCRIPTION_ID,
-            aca_resource_group=ACA_RESOURCE_GROUP,
-            aca_job_name=ACA_JOB_NAME,
-        )
+        make_settings(task_executor="container_apps")
 
 
 def test_aca_executor_accepts_valid_config() -> None:
@@ -163,26 +153,39 @@ def test_aca_executor_accepts_valid_config() -> None:
         aca_subscription_id=ACA_SUBSCRIPTION_ID,
         aca_resource_group=ACA_RESOURCE_GROUP,
         aca_job_name=ACA_JOB_NAME,
-        redis_url=ACA_REDIS_URL,
-        state_backend="redis",
     )
     assert settings.aca_subscription_id == ACA_SUBSCRIPTION_ID
     assert settings.aca_job_timeout == 600
 
 
-def test_aca_executor_accepts_redis_host() -> None:
-    """task_executor=container_apps succeeds with redis_host (Entra ID path)."""
+# -- Azure Storage dispatch backend config tests --
+
+STORAGE_ACCOUNT_URL = "https://sttest.blob.core.windows.net"
+STORAGE_QUEUE_URL = "https://sttest.queue.core.windows.net"
+
+
+def test_azure_storage_backend_requires_urls() -> None:
+    """dispatch_backend=azure_storage fails without storage URLs."""
+    with pytest.raises(ValidationError, match="AZURE_STORAGE_ACCOUNT_URL"):
+        make_settings(azure_storage_connection_string=None)
+
+
+def test_azure_storage_backend_accepts_valid_config() -> None:
+    """dispatch_backend=azure_storage succeeds with required URLs."""
     settings = make_settings(
-        task_executor="container_apps",
-        aca_subscription_id=ACA_SUBSCRIPTION_ID,
-        aca_resource_group=ACA_RESOURCE_GROUP,
-        aca_job_name=ACA_JOB_NAME,
-        redis_host="test-redis.redis.cache.windows.net",
-        state_backend="redis",
+        azure_storage_account_url=STORAGE_ACCOUNT_URL,
+        azure_storage_queue_url=STORAGE_QUEUE_URL,
     )
-    assert settings.redis_configured is True
-    assert settings.redis_host == "test-redis.redis.cache.windows.net"
-    assert settings.redis_port == 6380
+    assert settings.dispatch_backend == "azure_storage"
+    assert settings.task_queue_name == "task-queue"
+    assert settings.task_blob_container == "task-data"
+
+
+def test_azure_storage_backend_accepts_connection_string() -> None:
+    """dispatch_backend=azure_storage succeeds with connection string."""
+    settings = make_settings()
+    assert settings.dispatch_backend == "azure_storage"
+    assert settings.azure_storage_connection_string is not None
 
 
 class TestPrintConfigErrors:

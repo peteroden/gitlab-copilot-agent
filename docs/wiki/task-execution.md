@@ -67,46 +67,38 @@ class LocalTaskExecutor:
 
 ## KubernetesTaskExecutor
 
-**Purpose**: Dispatches tasks as ephemeral K8s Jobs (multi-pod, production).
+**Purpose**: Dispatches tasks via Azure Storage Queue (Claim Check pattern). KEDA ScaledJob triggers ephemeral Job pods when messages arrive.
 
 **Flow**:
-1. Check Redis for cached result (idempotency)
-2. Build Job name: `copilot-{task_type}-{hash(task_id)[:16]}` (max 63 chars)
-3. Create Job with `task_runner.py` as entrypoint
-4. Poll Job status + Redis for result
-5. Return result or raise exception
+1. Serialize task params to JSON payload
+2. Enqueue to Azure Storage Queue via `TaskQueue.enqueue()` (uploads params blob + queue message)
+3. Set idempotency lock (`enqueued:{expiry}`) to prevent duplicate enqueues
+4. Poll result blob in Azure Blob Storage via `BlobResultStore`
+5. Return deserialized result or raise exception on timeout
 
-**Job Spec**:
-- **Image**: `settings.k8s_job_image`
-- **Command**: `[".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]`
-- **Env Vars**: TASK_TYPE, TASK_ID, REPO_URL, BRANCH, TASK_PAYLOAD, GITLAB_TOKEN, GITHUB_TOKEN, REDIS_URL (or REDIS_HOST + REDIS_PORT + AZURE_CLIENT_ID for Entra ID auth), HOME=/tmp (Copilot CLI requires writable HOME)
-- **hostAliases**: Optional JSON-encoded array from `K8S_JOB_HOST_ALIASES` for custom DNS (air-gapped, k3d dev)
-- **Resources**: CPU/memory limits from settings
-- **SecurityContext**: `runAsNonRoot`, `readOnlyRootFilesystem`, `capabilities.drop: ["ALL"]`
-- **TTL**: `ttl_seconds_after_finished=300` (auto-delete after 5 minutes)
+**Dispatch** (Claim Check pattern):
+- **Params blob**: `params/{task_id}.json` uploaded to Azure Blob Storage
+- **Queue message**: `{"task_id": "...", "blob_name": "params/..."}` enqueued to Azure Storage Queue
+- **KEDA**: Watches queue, creates a K8s Job per message automatically
+- **No direct Job creation**: Controller never calls the K8s Job API — KEDA handles lifecycle
+
+**Result Storage**:
+- **Blob key**: `results/{task_id}.json` in Azure Blob Storage
+- **Written by**: `task_runner.py` (Job pod)
+- **Read by**: `KubernetesTaskExecutor._poll_result()`
 
 **Polling**:
 - Interval: 2 seconds
 - Timeout: `settings.k8s_job_timeout` (default: 600s)
-- Checks: Redis first (result cached), then Job status
-
-**Result Storage**:
-- **Redis Key**: `result:{task_id}`
-- **TTL**: 3600s (1 hour)
-- **Written By**: `task_runner.py` (Job pod)
-- **Read By**: `KubernetesTaskExecutor._wait_for_result()`
+- Checks result blob existence in Azure Blob Storage
 
 **Failure Handling**:
-- Job succeeded but no result in Redis: read annotation `results.copilot-agent/summary` (fallback)
-- Job failed: read pod logs, delete Job, raise RuntimeError with logs
-- Timeout: delete Job, raise TimeoutError
+- Timeout: raise TimeoutError
+- Task runner error: result blob contains error details
 
-**Idempotency & Stale Job Replacement**:
-- Check Redis before creating Job
-- If Job already exists (409 Conflict):
-  - **Completed** (succeeded/failed): delete stale Job and recreate with exponential backoff retry (up to 5 attempts, 0.1s doubling) to handle async K8s deletion
-  - **Running**: reuse the existing Job (continue to polling)
-- Prevents stale completed Jobs from previous runs returning empty results on retry
+**Idempotency**:
+- Lock key checked before enqueue — if task is already in-flight, skips to polling
+- Lock value format: `enqueued:{expiry_timestamp}`
 
 ---
 
@@ -114,22 +106,21 @@ class LocalTaskExecutor:
 
 **Module**: `src/gitlab_copilot_agent/aca_executor.py`
 
-**How it works**:
+**How it works** (identical to K8s — unified Claim Check dispatch):
 
 1. Controller receives task via webhook/poller
-2. Builds non-sensitive env overrides (task_id, repo_url, branch, prompts)
-3. Sets Redis sentinel key `aca_exec:{task_id}` to prevent duplicate executions
-4. Starts a Container Apps Job execution via `azure-mgmt-appcontainers` SDK
-5. Polls execution status until completion or timeout
-6. Reads result from Redis via `ResultStore`
+2. Serializes task params and enqueues to Azure Storage Queue via `TaskQueue.enqueue()`
+3. Sets idempotency lock (`enqueued:{expiry}`) to prevent duplicate enqueues
+4. KEDA event trigger on the Container Apps Job watches the queue and starts executions automatically
+5. Polls result blob in Azure Blob Storage via `BlobResultStore`
 
-**Security (S1)**: Secrets (GitLab token, GitHub token, Copilot API key, Redis URL) are configured on the Job template as Key Vault references — never passed per-execution. Only non-sensitive env vars are overridden at execution time.
+**Security (S1)**: Secrets (GitLab token, GitHub token, Copilot API key) are configured on the Job template as Key Vault references — never passed per-execution.
 
 **Identity (S4)**: Controller and Job use separate user-assigned managed identities with least-privilege RBAC:
-- Controller: ACR pull, Key Vault Secrets User, Job trigger
-- Job: ACR pull, Key Vault Secrets User
+- Controller: ACR pull, Key Vault Secrets User, Storage Queue/Blob access
+- Job: ACR pull, Key Vault Secrets User, Storage Queue/Blob access
 
-**Idempotency**: Redis sentinel key prevents duplicate job starts. Unlike K8s executor (which relies on deterministic names + 409 conflict), ACA uses a distributed lock pattern since Container Apps Job names are auto-generated.
+**Idempotency**: Lock key checked before enqueue. If task is already in-flight, skips to polling.
 
 **Configuration**:
 | Setting | Description | Default |
@@ -141,18 +132,20 @@ class LocalTaskExecutor:
 
 ---
 
-## task_runner.py (K8s Job Entrypoint)
+## task_runner.py (K8s / ACA Job Entrypoint)
 
-**Purpose**: Standalone script that runs inside K8s Job pod, executes Copilot session, stores result in Redis.
+**Purpose**: Standalone script that runs inside Job pods, dequeues task from Azure Storage Queue, executes Copilot session, stores result in Azure Blob Storage.
 
 **Flow**:
-1. Read env vars: TASK_TYPE, TASK_ID, REPO_URL, BRANCH, TASK_PAYLOAD, REDIS_URL or REDIS_HOST
-2. Validate TASK_TYPE ∈ {"review", "coding", "echo"}
-3. Validate REPO_URL authority matches GITLAB_URL (host + port)
-4. Clone repo via `git_clone()`
-5. Call `run_copilot_session()` with `get_prompt(settings, type)` system prompt
+1. Dequeue message from Azure Storage Queue (visibility timeout = 600s)
+2. Download params blob from Azure Blob Storage (Claim Check)
+3. Parse task params: TASK_TYPE, TASK_ID, REPO_URL, BRANCH, TASK_PAYLOAD
+4. Validate TASK_TYPE ∈ {"review", "coding", "echo"}
+5. Validate REPO_URL authority matches GITLAB_URL (host + port)
+6. Clone repo via `git_clone()`
+7. Call `run_copilot_session()` with `get_prompt(settings, type)` system prompt
    - **For coding tasks**: includes `validate_response` callback that checks for required JSON output; retries once in-session if missing
-6. **For coding tasks**: Parse structured output and stage files:
+8. **For coding tasks**: Parse structured output and stage files:
    - Parse agent response as `CodingAgentOutput` (Pydantic model with `summary` and `files_changed`)
    - Stage only explicitly listed files via `git add -- <file>` (not `git add -A`)
    - Skip files that don't exist on disk (logged as warnings)
@@ -161,18 +154,18 @@ class LocalTaskExecutor:
    - Validate patch size ≤ `MAX_PATCH_SIZE` (10 MB, from `git_operations.py`)
    - Validate patch for path traversal (`../`)
    - Build `CodingResult(summary, patch, base_sha)`
-7. **For review tasks**: Build `ReviewResult(summary)`
-8. Store result in Redis (`result:{task_id}`, TTL=3600s) as JSON
-9. Print JSON result to stdout (for debugging)
-10. Return exit code 0 (success) or 1 (error)
+9. **For review tasks**: Build `ReviewResult(summary)`
+10. Upload result as JSON blob to Azure Blob Storage (`results/{task_id}.json`)
+11. Complete (delete) the queue message via `TaskQueue.complete()`
+12. Return exit code 0 (success) or 1 (error)
 
 **Validation**: `_validate_repo_url()` ensures REPO_URL is from trusted GitLab instance (prevents SSRF).
 
 **Example**:
 ```python
 $ python -m gitlab_copilot_agent.task_runner
-# Reads TASK_TYPE=review, TASK_ID=review-feature-x, REPO_URL=https://gitlab.com/group/proj.git
-# Clones repo, runs review, stores result in Redis
+# Dequeues from Azure Storage Queue, downloads params blob
+# Clones repo, runs review, stores result blob, deletes queue message
 ```
 
 ---
@@ -492,11 +485,11 @@ _PYTHON_GITIGNORE_PATTERNS = [
 
 ### Coding Output
 
-**K8s Executor**: `CodingResult` with `summary`, `patch` (unified diff), and `base_sha` (commit SHA)
+**K8s/ACA Executor**: `CodingResult` with `summary`, `patch` (unified diff), and `base_sha` (commit SHA)
 
 **Local Executor**: `CodingResult` with `summary`, empty `patch` (files modified on disk directly)
 
-**Patch Format** (K8s only):
+**Patch Format** (K8s/ACA only):
 - Unified diff from `git diff --cached --binary`
 - Binary-safe (can include binary file changes)
 - Validated for size (≤ 10 MB) and path traversal (`../`)
@@ -509,20 +502,20 @@ _PYTHON_GITIGNORE_PATTERNS = [
 
 ---
 
-## Diff Passback (K8s Executor)
+## Diff Passback (K8s / ACA Executor)
 
-**Problem**: Coding tasks in K8s Jobs modify files inside ephemeral pod. When pod terminates, all changes are lost. The controller (which creates MR/commits) never sees modifications.
+**Problem**: Coding tasks in K8s/ACA Jobs modify files inside ephemeral pod. When pod terminates, all changes are lost. The controller (which creates MR/commits) never sees modifications.
 
-**Solution**: Job pod captures `git diff --cached --binary` after Copilot runs, stores `CodingResult{summary, patch, base_sha}` in Redis. Controller reads result, validates `base_sha` matches local HEAD, applies patch with `git apply --3way`, then commits/pushes.
+**Solution**: Job pod captures `git diff --cached --binary` after Copilot runs, stores `CodingResult{summary, patch, base_sha}` as a blob in Azure Blob Storage (`results/{task_id}.json`). Controller reads result blob, validates `base_sha` matches local HEAD, applies patch with `git apply --3way`, then commits/pushes.
 
 **Flow**:
-1. **Job pod**: Clone repo → Copilot session → `git add -A` → capture base_sha and diff → store `CodingResult` in Redis
-2. **Controller**: Read `CodingResult` from Redis → validate `base_sha == local HEAD` → `git apply --3way <patch>` → commit → push
+1. **Job pod**: Clone repo → Copilot session → `git add -- <files>` → capture base_sha and diff → store `CodingResult` blob in Azure Storage
+2. **Controller**: Poll result blob from Azure Storage → validate `base_sha == local HEAD` → `git apply --3way <patch>` → commit → push
 
 **Validation** (in `coding_workflow.py`):
 - `base_sha` mismatch: raises error (prevents applying patch to wrong commit)
 - Patch contains `../`: raises error (path traversal attack prevention)
-- Patch exceeds `MAX_PATCH_SIZE` (10 MB): raises error (prevents Redis OOM)
+- Patch exceeds `MAX_PATCH_SIZE` (10 MB): raises error
 
 **Helper Function**: `apply_coding_result(result: TaskResult, repo_path: Path)` in `coding_workflow.py`
 - Called by `CodingOrchestrator` and `MRCommentHandler` after execution
@@ -549,10 +542,11 @@ _PYTHON_GITIGNORE_PATTERNS = [
 | **Isolation** | None (same process) | Pod-level | Container-level |
 | **Resource Limits** | None (host limits) | CPU/memory via K8s | CPU/memory via Job config |
 | **Repo Clone** | Caller clones | Job clones (task_runner.py) | Job clones (task_runner.py) |
-| **Coding Result** | Files on disk, empty patch | Diff captured in pod, patch stored in Redis | Diff captured in container, patch stored in Redis |
+| **Dispatch** | In-process call | Azure Storage Queue (Claim Check) | Azure Storage Queue (Claim Check) |
+| **Result Storage** | Files on disk, empty patch | Azure Blob Storage (`results/{task_id}.json`) | Azure Blob Storage (`results/{task_id}.json`) |
+| **Job Trigger** | N/A | KEDA ScaledJob (queue-driven) | KEDA event trigger (queue-driven) |
 | **Timeout** | Per-call (default 300s) | Per-Job (default 600s) | Per-execution (default 600s) |
-| **Idempotency** | None | Redis result cache + K8s 409 | Redis sentinel key + result cache |
-| **Redis Auth** | URL (password) | URL (password via Secret) | Entra ID (managed identity) |
+| **Idempotency** | None | Lock key + enqueue dedup | Lock key + enqueue dedup |
 | **Secret Management** | Env vars | K8s Secrets | Key Vault references (S1) |
 | **Identity** | Service identity | Pod service account | User-assigned managed identity (S4) |
 | **Cleanup** | Caller responsible | Job auto-deleted (TTL 300s) | Execution auto-cleaned by Azure |
@@ -612,7 +606,6 @@ kubectl describe job copilot-review-abc123
 - **ImagePullBackOff**: Invalid `K8S_JOB_IMAGE`
 - **CrashLoopBackOff**: task_runner.py failed (check pod logs)
 - **Timeout**: Job exceeded `K8S_JOB_TIMEOUT` (increase timeout or investigate slow operations)
-- **Redis unavailable**: Result not stored (check Redis connectivity)
 
 ---
 
@@ -622,8 +615,8 @@ kubectl describe job copilot-review-abc123
 
 **Resources**: Adjust `K8S_JOB_CPU_LIMIT` and `K8S_JOB_MEMORY_LIMIT` based on profiling.
 
-**Parallelism**: No limit on concurrent Jobs (K8s handles scheduling).
+**Parallelism**: KEDA `maxReplicaCount` controls maximum concurrent Jobs.
 
-**Result Caching**: Redis TTL=3600s allows retrying failed operations without re-running agent.
+**Result Caching**: Results stored as blobs in Azure Storage (no TTL — clean up via CronJob or controller sweep).
 
 **SDK Session**: Default timeout 300s (5 minutes). Agent often completes in 30-60s for typical reviews.

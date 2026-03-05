@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from typing import TYPE_CHECKING
 
 import structlog
@@ -14,7 +15,7 @@ import structlog
 from gitlab_copilot_agent.task_executor import CodingResult, ReviewResult, TaskResult
 
 if TYPE_CHECKING:
-    from gitlab_copilot_agent.concurrency import ResultStore
+    from gitlab_copilot_agent.concurrency import ResultStore, TaskQueue
     from gitlab_copilot_agent.config import Settings
     from gitlab_copilot_agent.task_executor import TaskParams
 
@@ -74,7 +75,9 @@ def _build_env(task: TaskParams, settings: Settings) -> list[object]:
         ("COPILOT_MODEL", settings.copilot_model),
         ("COPILOT_PROVIDER_TYPE", settings.copilot_provider_type),
         ("COPILOT_PROVIDER_BASE_URL", settings.copilot_provider_base_url),
-        ("REDIS_URL", settings.redis_url),
+        ("AZURE_STORAGE_ACCOUNT_URL", settings.azure_storage_account_url),
+        ("AZURE_STORAGE_QUEUE_URL", settings.azure_storage_queue_url),
+        ("AZURE_STORAGE_CONNECTION_STRING", settings.azure_storage_connection_string),
     ]
     for name, value in _optional_config:
         if value:
@@ -114,17 +117,80 @@ def _build_env(task: TaskParams, settings: Settings) -> list[object]:
 
 
 class KubernetesTaskExecutor:
-    """Dispatches tasks as Kubernetes Jobs and retrieves results via ResultStore."""
+    """Dispatches tasks as Kubernetes Jobs and retrieves results via ResultStore.
 
-    def __init__(self, settings: Settings, result_store: ResultStore) -> None:
+    When a TaskQueue is provided, enqueues tasks via Azure Storage Queue
+    and lets KEDA create Jobs automatically. Falls back to imperative
+    Job creation when no queue is available.
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        result_store: ResultStore,
+        task_queue: TaskQueue | None = None,
+    ) -> None:
         self._settings = settings
         self._store = result_store
+        self._task_queue = task_queue
 
     async def execute(self, task: TaskParams) -> TaskResult:
         # Idempotency: return cached result if present
         cached = await self._store.get(task.task_id)
         if cached is not None:
             return _parse_result(cached, task.task_type)
+
+        if self._task_queue is not None:
+            return await self._execute_via_queue(task)
+
+        return await self._execute_via_k8s_api(task)
+
+    async def _execute_via_queue(self, task: TaskParams) -> TaskResult:
+        """KEDA path: enqueue task, poll for result blob."""
+        assert self._task_queue is not None  # noqa: S101
+        import json as _json
+
+        # Idempotency: skip enqueue if task is already in-flight
+        lock_key = f"aca_exec:{task.task_id}"
+        existing_lock = await self._store.get(lock_key)
+        if existing_lock is not None:
+            try:
+                expiry = int(existing_lock.split(":", 1)[1])
+                if time.time() < expiry:
+                    log.info("k8s_execution_already_enqueued", task_id=task.task_id)
+                    return await self._poll_result(task)
+            except (ValueError, IndexError):
+                pass
+
+        payload = _json.dumps(
+            {
+                "task_type": task.task_type,
+                "task_id": task.task_id,
+                "repo_url": task.repo_url,
+                "branch": task.branch,
+                "system_prompt": task.system_prompt,
+                "user_prompt": task.user_prompt,
+            }
+        )
+        await self._task_queue.enqueue(task.task_id, payload)
+        lock_val = f"enqueued:{int(time.time()) + self._settings.k8s_job_timeout}"
+        await self._store.set(lock_key, lock_val)
+
+        return await self._poll_result(task)
+
+    async def _poll_result(self, task: TaskParams) -> TaskResult:
+        """Poll result blob until available or timeout."""
+        deadline = asyncio.get_event_loop().time() + self._settings.k8s_job_timeout
+        while asyncio.get_event_loop().time() < deadline:
+            cached = await self._store.get(task.task_id)
+            if cached is not None:
+                return _parse_result(cached, task.task_type)
+            await asyncio.sleep(_JOB_POLL_INTERVAL)
+        msg = f"Task {task.task_id} timed out after {self._settings.k8s_job_timeout}s"
+        raise TimeoutError(msg)
+
+    async def _execute_via_k8s_api(self, task: TaskParams) -> TaskResult:
+        """Legacy path: create K8s Job imperatively."""
 
         job_name = _sanitize_job_name(task.task_type, task.task_id)
         try:
