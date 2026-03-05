@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from typing import TYPE_CHECKING
 
 import structlog
@@ -149,6 +150,18 @@ class KubernetesTaskExecutor:
         assert self._task_queue is not None  # noqa: S101
         import json as _json
 
+        # Idempotency: skip enqueue if task is already in-flight
+        lock_key = f"aca_exec:{task.task_id}"
+        existing_lock = await self._store.get(lock_key)
+        if existing_lock is not None:
+            try:
+                expiry = int(existing_lock.split(":", 1)[1])
+                if time.time() < expiry:
+                    log.info("k8s_execution_already_enqueued", task_id=task.task_id)
+                    return await self._poll_result(task)
+            except (ValueError, IndexError):
+                pass
+
         payload = _json.dumps(
             {
                 "task_type": task.task_type,
@@ -160,8 +173,13 @@ class KubernetesTaskExecutor:
             }
         )
         await self._task_queue.enqueue(task.task_id, payload)
+        lock_val = f"enqueued:{int(time.time()) + self._settings.k8s_job_timeout}"
+        await self._store.set(lock_key, lock_val)
 
-        # Poll result blob (KEDA creates the Job, task runner writes the result)
+        return await self._poll_result(task)
+
+    async def _poll_result(self, task: TaskParams) -> TaskResult:
+        """Poll result blob until available or timeout."""
         deadline = asyncio.get_event_loop().time() + self._settings.k8s_job_timeout
         while asyncio.get_event_loop().time() < deadline:
             cached = await self._store.get(task.task_id)

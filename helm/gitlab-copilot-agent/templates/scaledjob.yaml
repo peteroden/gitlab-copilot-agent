@@ -28,7 +28,7 @@ spec:
         serviceAccountName: {{ include "app.serviceAccountName" . }}
         containers:
           - name: task
-            image: "{{ .Values.jobRunner.image | default (printf "%s/%s:%s" .Values.image.repository .Values.image.tag "latest") }}"
+            image: "{{ .Values.jobRunner.image | default (printf "%s:%s" .Values.image.repository (.Values.image.tag | default "latest")) }}"
             command: [".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]
             envFrom:
               - secretRef:

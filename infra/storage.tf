@@ -1,6 +1,11 @@
 # Azure Storage Account for task dispatch (Queue + Blob, Claim Check pattern)
+locals {
+  storage_name_raw = "strg${replace(var.resource_group_name, "-", "")}"
+  storage_name     = substr(local.storage_name_raw, 0, min(24, length(local.storage_name_raw)))
+}
+
 resource "azurerm_storage_account" "tasks" {
-  name                       = "st${replace(var.resource_group_name, "-", "")}tasks"
+  name                       = local.storage_name
   location                   = azurerm_resource_group.main.location
   resource_group_name        = azurerm_resource_group.main.name
   account_tier               = "Standard"

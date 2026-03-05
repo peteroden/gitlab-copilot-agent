@@ -71,8 +71,10 @@ class ContainerAppsTaskExecutor:
         self._task_queue = task_queue
 
     async def execute(self, task: TaskParams) -> TaskResult:
+        bound = log.bind(task_id=task.task_id, task_type=task.task_type)
         cached = await self._store.get(task.task_id)
         if cached is not None:
+            bound.info("aca_result_cached")
             return _parse_result(cached, task.task_type)
 
         # Idempotency: if another call already enqueued this task, just poll
@@ -82,15 +84,17 @@ class ContainerAppsTaskExecutor:
             try:
                 expiry = int(existing_lock.split(":", 1)[1])
                 if time.time() < expiry:
-                    log.info("aca_execution_already_enqueued", task_id=task.task_id)
+                    bound.info("aca_execution_already_enqueued")
                     return await self._poll_blob_result(task)
             except (ValueError, IndexError):
                 pass  # malformed lock, proceed to re-enqueue
 
         payload = _build_dispatch_payload(task)
+        bound.info("aca_enqueue_starting")
         await self._task_queue.enqueue(task.task_id, payload)
         lock_val = f"enqueued:{int(time.time()) + _EXECUTION_LOCK_TTL}"
         await self._store.set(lock_key, lock_val)
+        bound.info("aca_enqueue_complete")
 
         # KEDA watches the queue and triggers job execution automatically
         return await self._poll_blob_result(task)

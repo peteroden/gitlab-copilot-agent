@@ -38,7 +38,7 @@ async def handle_review(
     ):
         bound_log = log.bind(project_id=project.id, mr_iid=mr.iid)
 
-        await bound_log.ainfo("review_started")
+        bound_log.info("review_started")
 
         gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
         repo_path: Path | None = None
@@ -75,7 +75,7 @@ async def handle_review(
             )
             parsed = parse_review(raw_result.summary)
 
-            await bound_log.ainfo(
+            bound_log.info(
                 "review_complete",
                 inline_comments=len(parsed.comments),
             )
@@ -85,10 +85,10 @@ async def handle_review(
             await post_review(
                 gl, project.id, mr.iid, mr_details.diff_refs, parsed, mr_details.changes
             )
-            await bound_log.ainfo("comments_posted")
+            bound_log.info("comments_posted")
             outcome = "success"
         except Exception:
-            await bound_log.aexception("review_failed")
+            bound_log.exception("review_failed")
             try:
                 await gl_client.post_mr_comment(
                     project.id,
@@ -96,7 +96,7 @@ async def handle_review(
                     "⚠️ Automated review failed. Check service logs for details.",
                 )
             except Exception:
-                await bound_log.aexception("failure_comment_post_failed")
+                bound_log.exception("failure_comment_post_failed")
             raise
         finally:
             if repo_path:
