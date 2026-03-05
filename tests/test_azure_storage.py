@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -209,3 +209,67 @@ class TestBlobResultStore:
         await store.aclose()
         blob_client.close.assert_awaited_once()
         credential.close.assert_awaited_once()
+
+
+# ── Factory function tests ──────────────────────────────────────────
+
+
+CONN_STR = "DefaultEndpointsProtocol=http;AccountName=test;AccountKey=dGVzdA==;QueueEndpoint=http://q;BlobEndpoint=http://b"
+QUEUE_URL = "https://myaccount.queue.core.windows.net"
+ACCOUNT_URL = "https://myaccount.blob.core.windows.net"
+
+
+class TestCreateTaskQueue:
+    """Tests for create_task_queue factory."""
+
+    def test_with_connection_string(self) -> None:
+        from gitlab_copilot_agent.azure_storage import create_task_queue
+
+        with (
+            patch("azure.storage.queue.aio.QueueClient.from_connection_string") as q_factory,
+            patch("azure.storage.blob.aio.ContainerClient.from_connection_string") as b_factory,
+        ):
+            result = create_task_queue(None, None, "q", "c", connection_string=CONN_STR)
+        assert isinstance(result, AzureStorageTaskQueue)
+        q_factory.assert_called_once_with(CONN_STR, queue_name="q")
+        b_factory.assert_called_once_with(CONN_STR, container_name="c")
+
+    def test_with_account_urls_uses_credential(self) -> None:
+        from gitlab_copilot_agent.azure_storage import create_task_queue
+
+        with patch("azure.identity.aio.DefaultAzureCredential") as cred_cls:
+            result = create_task_queue(QUEUE_URL, ACCOUNT_URL, "q", "c")
+        assert isinstance(result, AzureStorageTaskQueue)
+        cred_cls.assert_called_once()
+
+    def test_raises_without_urls_or_connection_string(self) -> None:
+        from gitlab_copilot_agent.azure_storage import create_task_queue
+
+        with pytest.raises(ValueError, match="queue_url and account_url required"):
+            create_task_queue(None, None, "q", "c")
+
+
+class TestCreateBlobResultStore:
+    """Tests for create_blob_result_store factory."""
+
+    def test_with_connection_string(self) -> None:
+        from gitlab_copilot_agent.azure_storage import create_blob_result_store
+
+        with patch("azure.storage.blob.aio.ContainerClient.from_connection_string") as b_factory:
+            result = create_blob_result_store(None, "c", connection_string=CONN_STR)
+        assert isinstance(result, BlobResultStore)
+        b_factory.assert_called_once_with(CONN_STR, container_name="c")
+
+    def test_with_account_url_uses_credential(self) -> None:
+        from gitlab_copilot_agent.azure_storage import create_blob_result_store
+
+        with patch("azure.identity.aio.DefaultAzureCredential") as cred_cls:
+            result = create_blob_result_store(ACCOUNT_URL, "c")
+        assert isinstance(result, BlobResultStore)
+        cred_cls.assert_called_once()
+
+    def test_raises_without_account_url_or_connection_string(self) -> None:
+        from gitlab_copilot_agent.azure_storage import create_blob_result_store
+
+        with pytest.raises(ValueError, match="account_url required"):
+            create_blob_result_store(None, "c")

@@ -21,6 +21,12 @@ spec:
             - { containerPort: 10000, name: blob }
             - { containerPort: 10001, name: queue }
           args: ["azurite", "--blobHost", "0.0.0.0", "--queueHost", "0.0.0.0", "--skipApiVersionCheck", "--disableProductStyleUrl", "--location", "/data"]
+          env:
+            - name: AZURITE_ACCOUNTS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "app.fullname" . }}
+                  key: AZURITE_ACCOUNTS
           resources: {{- toYaml .Values.azurite.resources | nindent 12 }}
           volumeMounts: [{ name: data, mountPath: /data }]
       volumes:

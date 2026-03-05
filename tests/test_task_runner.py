@@ -13,6 +13,7 @@ from gitlab_copilot_agent.task_runner import (
     ENV_TASK_TYPE,
     _build_coding_result,
     _coding_response_validator,
+    _dequeue_task,
     _get_required_env,
     _parse_task_payload,
     _store_result,
@@ -200,7 +201,7 @@ class TestBuildCodingResult:
         git_mock.assert_awaited_once_with(Path("/repo"), "add", "--", "src/ok.py")
 
 
-_REDIS_MOD = "gitlab_copilot_agent.redis_state"
+_STATE_MOD = "gitlab_copilot_agent.state"
 
 
 class TestStoreResult:
@@ -215,7 +216,7 @@ class TestStoreResult:
         mock_store = MagicMock()
         mock_store.set = AsyncMock()
         mock_store.aclose = AsyncMock()
-        with patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store):
+        with patch(f"{_STATE_MOD}.create_result_store", return_value=mock_store):
             from gitlab_copilot_agent.config import TaskRunnerSettings
 
             settings = TaskRunnerSettings(
@@ -234,7 +235,7 @@ class TestStoreResult:
         mock_store.set = AsyncMock(side_effect=RuntimeError("boom"))
         mock_store.aclose = AsyncMock()
         with (
-            patch(f"{_REDIS_MOD}.create_result_store", return_value=mock_store),
+            patch(f"{_STATE_MOD}.create_result_store", return_value=mock_store),
             pytest.raises(RuntimeError, match="boom"),
         ):
             from gitlab_copilot_agent.config import TaskRunnerSettings
@@ -247,3 +248,72 @@ class TestStoreResult:
             )
             await _store_result("task-1", '{"result": "ok"}', settings)
         mock_store.aclose.assert_awaited_once()
+
+
+class TestDequeueTask:
+    """Tests for _dequeue_task function."""
+
+    async def test_returns_none_when_settings_invalid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Returns None when TaskRunnerSettings can't be created."""
+        monkeypatch.delenv("GITLAB_URL", raising=False)
+        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        monkeypatch.delenv("AZURE_STORAGE_CONNECTION_STRING", raising=False)
+        result = await _dequeue_task()
+        assert result is None
+
+    async def test_returns_none_when_no_azure_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Returns None when no Azure Storage is configured."""
+        monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
+        monkeypatch.setenv("GITLAB_TOKEN", "t")
+        monkeypatch.setenv("GITHUB_TOKEN", "g")
+        monkeypatch.delenv("AZURE_STORAGE_CONNECTION_STRING", raising=False)
+        monkeypatch.delenv("AZURE_STORAGE_QUEUE_URL", raising=False)
+        monkeypatch.delenv("AZURE_STORAGE_ACCOUNT_URL", raising=False)
+        result = await _dequeue_task()
+        assert result is None
+
+    async def test_returns_none_when_queue_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Returns None and closes queue when no messages."""
+        monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
+        monkeypatch.setenv("GITLAB_TOKEN", "t")
+        monkeypatch.setenv("GITHUB_TOKEN", "g")
+        monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", "conn")
+        mock_queue = MagicMock()
+        mock_queue.dequeue = AsyncMock(return_value=None)
+        mock_queue.aclose = AsyncMock()
+        with patch(f"{_STATE_MOD}.create_task_queue", return_value=mock_queue):
+            result = await _dequeue_task()
+        assert result is None
+        mock_queue.aclose.assert_awaited_once()
+
+    async def test_returns_params_and_queue_on_success(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Returns parsed params, message, and queue on successful dequeue."""
+        monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
+        monkeypatch.setenv("GITLAB_TOKEN", "t")
+        monkeypatch.setenv("GITHUB_TOKEN", "g")
+        monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", "conn")
+
+        from gitlab_copilot_agent.concurrency import QueueMessage
+
+        fake_msg = QueueMessage(
+            message_id="m1",
+            receipt="r1",
+            task_id="task-1",
+            payload=json.dumps({"task_type": "review", "task_id": "task-1"}),
+            dequeue_count=1,
+        )
+        mock_queue = MagicMock()
+        mock_queue.dequeue = AsyncMock(return_value=fake_msg)
+        with patch(f"{_STATE_MOD}.create_task_queue", return_value=mock_queue):
+            result = await _dequeue_task()
+        assert result is not None
+        params, msg, queue = result
+        assert params == {"task_type": "review", "task_id": "task-1"}
+        assert msg.message_id == "m1"
+        assert queue is mock_queue

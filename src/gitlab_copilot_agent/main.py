@@ -26,7 +26,7 @@ from gitlab_copilot_agent.gitlab_poller import GitLabPoller
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_poller import JiraPoller
 from gitlab_copilot_agent.project_mapping import ProjectMap
-from gitlab_copilot_agent.redis_state import (
+from gitlab_copilot_agent.state import (
     create_dedup,
     create_lock,
     create_result_store,

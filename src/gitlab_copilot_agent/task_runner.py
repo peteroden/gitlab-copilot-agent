@@ -52,7 +52,7 @@ async def _store_result(
     """Persist result to the configured ResultStore (Azure Storage Blob)."""
     if settings is None:
         return
-    from gitlab_copilot_agent.redis_state import create_result_store
+    from gitlab_copilot_agent.state import create_result_store
 
     store = create_result_store(
         azure_storage_account_url=settings.azure_storage_account_url,
@@ -80,7 +80,7 @@ async def _dequeue_task() -> tuple[dict[str, str], QueueMessage, TaskQueue] | No
     ):
         return None
 
-    from gitlab_copilot_agent.redis_state import create_task_queue
+    from gitlab_copilot_agent.state import create_task_queue
 
     queue = create_task_queue(
         azure_storage_queue_url=settings.azure_storage_queue_url,
