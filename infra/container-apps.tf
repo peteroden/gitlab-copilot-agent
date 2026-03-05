@@ -245,9 +245,8 @@ resource "azurerm_container_app_job" "task_runner" {
       polling_interval_in_seconds = 10
 
       rules {
-        name     = "queue-trigger"
-        type     = "azure-queue"
-        identity = azurerm_user_assigned_identity.job.id
+        name             = "queue-trigger"
+        custom_rule_type = "azure-queue"
         metadata = {
           queueName   = "task-queue"
           queueLength = "1"

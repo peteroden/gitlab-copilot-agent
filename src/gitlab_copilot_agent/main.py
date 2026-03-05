@@ -95,7 +95,6 @@ def _create_executor(backend: str, settings: Settings | None = None) -> TaskExec
             settings=settings, result_store=store, task_queue=task_queue
         )
     return LocalTaskExecutor()
-    return LocalTaskExecutor()
 
 
 def _print_config_errors(exc: ValidationError) -> None:
