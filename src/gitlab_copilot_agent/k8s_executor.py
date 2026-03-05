@@ -101,6 +101,10 @@ def _parse_result(raw: str, task_type: str) -> TaskResult:
         if isinstance(data, dict) and "result_type" in data:
             if data["result_type"] == "coding":
                 return CodingResult.model_validate(data)
+            if data["result_type"] == "error":
+                summary = data.get("summary", "Task failed (unknown error)")
+                log.error("task_error_result", summary=summary)
+                return ReviewResult(summary=summary)
             return ReviewResult.model_validate(data)
     except (json.JSONDecodeError, ValueError):
         pass

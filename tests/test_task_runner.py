@@ -103,9 +103,13 @@ class TestRunTask:
         monkeypatch.setenv(ENV_REPO_URL, BAD_HOST)
         with (
             patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
-            pytest.raises(RuntimeError, match="does not match"),
+            patch(f"{_M}._store_result", AsyncMock()) as store,
         ):
-            await run_task()
+            assert await run_task() == 1
+            store.assert_awaited_once()
+            stored = json.loads(store.call_args[0][1])
+            assert stored["result_type"] == "error"
+            assert "does not match" in stored["summary"]
 
     async def test_coding(self, task_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(ENV_TASK_TYPE, "coding")
@@ -124,6 +128,25 @@ class TestRunTask:
             assert await run_task() == 0
             assert ms.call_args[1]["task_type"] == "coding"
             assert ms.call_args[1]["validate_response"] is not None
+
+    async def test_failure_writes_error_result(self, task_env: None) -> None:
+        copilot_error = "Copilot session timed out after 30s"
+        with (
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
+            patch(f"{_M}.git_clone", AsyncMock(return_value=Path("/tmp/r"))),
+            patch(
+                f"{_M}.run_copilot_session",
+                AsyncMock(side_effect=RuntimeError(copilot_error)),
+            ),
+            patch(f"{_M}._store_result", AsyncMock()) as store,
+            patch(f"{_M}.shutil.rmtree"),
+        ):
+            assert await run_task() == 1
+            store.assert_awaited_once()
+            stored = json.loads(store.call_args[0][1])
+            assert stored["result_type"] == "error"
+            assert stored["error"] is True
+            assert copilot_error in stored["summary"]
 
 
 VALID_AGENT_OUTPUT = (

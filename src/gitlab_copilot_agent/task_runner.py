@@ -238,12 +238,13 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
                 await task_queue.aclose()
 
     settings = TaskRunnerSettings()
-    _validate_repo_url(repo_url, settings.gitlab_url)
-    await bound_log.ainfo("task_start", repo=_sanitize_url(repo_url), branch=branch)
-    repo_path = await git_clone(
-        repo_url, branch, settings.gitlab_token, clone_dir=settings.clone_dir
-    )
+    repo_path: Path | None = None
     try:
+        _validate_repo_url(repo_url, settings.gitlab_url)
+        await bound_log.ainfo("task_start", repo=_sanitize_url(repo_url), branch=branch)
+        repo_path = await git_clone(
+            repo_url, branch, settings.gitlab_token, clone_dir=settings.clone_dir
+        )
         if task_type == "coding":
             from gitlab_copilot_agent.coding_engine import ensure_git_exclude
 
@@ -271,11 +272,21 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
         import traceback
 
         await bound_log.aerror("task_failed", error=str(exc), traceback=traceback.format_exc())
+        error_result = json.dumps(
+            {"result_type": "error", "error": True, "summary": f"Task failed: {exc}"}
+        )
+        try:
+            await _store_result(task_id, error_result, settings)
+            if task_queue and queue_msg:
+                await task_queue.complete(queue_msg)
+        except Exception:
+            await bound_log.awarning("error_result_write_failed", exc_info=True)
         return 1
     finally:
         if task_queue:
             await task_queue.aclose()
-        shutil.rmtree(repo_path, ignore_errors=True)
+        if repo_path is not None:
+            shutil.rmtree(repo_path, ignore_errors=True)
 
 
 def main() -> None:
