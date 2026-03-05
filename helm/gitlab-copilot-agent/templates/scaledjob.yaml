@@ -35,6 +35,9 @@ spec:
                   name: {{ include "app.fullname" . }}
               - configMapRef:
                   name: {{ include "app.fullname" . }}
+            env:
+              - name: HOME
+                value: /tmp
             resources:
               limits:
                 cpu: {{ .Values.jobRunner.cpuLimit }}
