@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
-import os
-import re
 import time
 from typing import TYPE_CHECKING
 
@@ -22,113 +19,20 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 _JOB_POLL_INTERVAL = 2  # seconds between status checks
-_TTL_AFTER_FINISHED = 300
-_ANNOTATION_KEY = "results.copilot-agent/summary"
-_STALE_JOB_RETRY_MAX = 5
-_STALE_JOB_RETRY_BASE_DELAY = 0.1  # seconds; doubles each attempt
-
-
-def _sanitize_job_name(task_type: str, task_id: str) -> str:
-    """Build a k8s-compliant Job name using a hash of the task_id."""
-    id_hash = hashlib.sha256(task_id.encode()).hexdigest()[:16]
-    task_type = re.sub(r"[^a-z0-9\-]", "-", task_type.lower()).strip("-")
-    return f"copilot-{task_type}-{id_hash}"[:63]
-
-
-def _parse_host_aliases(raw: str) -> list[object] | None:
-    """Parse JSON hostAliases string into k8s V1HostAlias objects."""
-    if not raw.strip():
-        return None
-    from kubernetes import client as k8s  # type: ignore[import-not-found,import-untyped,unused-ignore]  # noqa: I001
-
-    entries = json.loads(raw)
-    return [k8s.V1HostAlias(ip=e["ip"], hostnames=e["hostnames"]) for e in entries]
-
-
-def _build_env(task: TaskParams, settings: Settings) -> list[object]:
-    """Return env var objects for the Job container.
-
-    When settings.k8s_secret_name is set, sensitive credentials use secretKeyRef.
-    Otherwise, falls back to plaintext values.
-    """
-    from kubernetes import client as k8s  # type: ignore[import-not-found,import-untyped,unused-ignore]  # noqa: I001
-
-    env: list[object] = [
-        k8s.V1EnvVar(name="TASK_TYPE", value=task.task_type),
-        k8s.V1EnvVar(name="TASK_ID", value=task.task_id),
-        k8s.V1EnvVar(name="REPO_URL", value=task.repo_url),
-        k8s.V1EnvVar(name="BRANCH", value=task.branch),
-        k8s.V1EnvVar(name="SYSTEM_PROMPT", value=task.system_prompt),
-        k8s.V1EnvVar(name="USER_PROMPT", value=task.user_prompt),
-        k8s.V1EnvVar(name="TASK_PAYLOAD", value=json.dumps({"prompt": task.user_prompt})),
-        k8s.V1EnvVar(name="GITLAB_URL", value=settings.gitlab_url),
-        # Writable cache dirs for read-only root filesystem
-        k8s.V1EnvVar(name="UV_CACHE_DIR", value="/tmp/.uv-cache"),
-        k8s.V1EnvVar(name="XDG_CACHE_HOME", value="/tmp/.cache"),
-        k8s.V1EnvVar(name="HOME", value="/tmp"),
-        # src/ layout needs explicit PYTHONPATH when not using uv run
-        k8s.V1EnvVar(name="PYTHONPATH", value="/home/app/app/src"),
-    ]
-
-    # Non-sensitive optional config vars (always plaintext)
-    _optional_config: list[tuple[str, str | None]] = [
-        ("COPILOT_MODEL", settings.copilot_model),
-        ("COPILOT_PROVIDER_TYPE", settings.copilot_provider_type),
-        ("COPILOT_PROVIDER_BASE_URL", settings.copilot_provider_base_url),
-        ("AZURE_STORAGE_ACCOUNT_URL", settings.azure_storage_account_url),
-        ("AZURE_STORAGE_QUEUE_URL", settings.azure_storage_queue_url),
-        ("AZURE_STORAGE_CONNECTION_STRING", settings.azure_storage_connection_string),
-    ]
-    for name, value in _optional_config:
-        if value:
-            env.append(k8s.V1EnvVar(name=name, value=value))
-
-    # E2E test dependency
-    if os.environ.get("ALLOW_HTTP_CLONE"):
-        env.append(k8s.V1EnvVar(name="ALLOW_HTTP_CLONE", value=os.environ["ALLOW_HTTP_CLONE"]))
-
-    # Sensitive credentials — use Secret when k8s_secret_name is set.
-    # Required keys are always mounted; optional keys only when the setting is non-empty.
-    _secret_vars: list[tuple[str, str | None]] = [
-        ("GITLAB_TOKEN", settings.gitlab_token),  # always required
-        ("GITLAB_WEBHOOK_SECRET", settings.gitlab_webhook_secret),  # optional — skipped when None
-        ("GITHUB_TOKEN", settings.github_token),
-        ("COPILOT_PROVIDER_API_KEY", settings.copilot_provider_api_key),
-    ]
-    for name, value in _secret_vars:
-        if not value:
-            continue
-        if settings.k8s_secret_name:
-            env.append(
-                k8s.V1EnvVar(
-                    name=name,
-                    value_from=k8s.V1EnvVarSource(
-                        secret_key_ref=k8s.V1SecretKeySelector(
-                            name=settings.k8s_secret_name,
-                            key=name,
-                        )
-                    ),
-                )
-            )
-        else:
-            env.append(k8s.V1EnvVar(name=name, value=value))
-
-    return env
 
 
 class KubernetesTaskExecutor:
     """Dispatches tasks as Kubernetes Jobs and retrieves results via ResultStore.
 
-    When a TaskQueue is provided, enqueues tasks via Azure Storage Queue
-    and lets KEDA create Jobs automatically. Falls back to imperative
-    Job creation when no queue is available.
+    Enqueues tasks via Azure Storage Queue and lets KEDA create Jobs
+    automatically.
     """
 
     def __init__(
         self,
         settings: Settings,
         result_store: ResultStore,
-        task_queue: TaskQueue | None = None,
+        task_queue: TaskQueue,
     ) -> None:
         self._settings = settings
         self._store = result_store
@@ -140,14 +44,10 @@ class KubernetesTaskExecutor:
         if cached is not None:
             return _parse_result(cached, task.task_type)
 
-        if self._task_queue is not None:
-            return await self._execute_via_queue(task)
-
-        return await self._execute_via_k8s_api(task)
+        return await self._execute_via_queue(task)
 
     async def _execute_via_queue(self, task: TaskParams) -> TaskResult:
         """KEDA path: enqueue task, poll for result blob."""
-        assert self._task_queue is not None  # noqa: S101
         import json as _json
 
         # Idempotency: skip enqueue if task is already in-flight
@@ -187,201 +87,6 @@ class KubernetesTaskExecutor:
                 return _parse_result(cached, task.task_type)
             await asyncio.sleep(_JOB_POLL_INTERVAL)
         msg = f"Task {task.task_id} timed out after {self._settings.k8s_job_timeout}s"
-        raise TimeoutError(msg)
-
-    async def _execute_via_k8s_api(self, task: TaskParams) -> TaskResult:
-        """Legacy path: create K8s Job imperatively."""
-
-        job_name = _sanitize_job_name(task.task_type, task.task_id)
-        try:
-            await asyncio.to_thread(self._create_job, job_name, task)
-        except Exception as exc:  # noqa: BLE001
-            if getattr(exc, "status", None) != 409:
-                raise
-            # Stale completed job from a previous run — delete and recreate
-            status = await asyncio.to_thread(self._read_job_status, job_name)
-            if status in ("succeeded", "failed"):
-                log.info("stale_job_replaced", job_name=job_name, old_status=status)
-                await asyncio.to_thread(self._delete_job, job_name)
-                await self._create_job_with_retry(job_name, task)
-            else:
-                log.info("job_already_running", job_name=job_name)
-        return await self._wait_for_result(job_name, task)
-
-    async def _create_job_with_retry(self, job_name: str, task: TaskParams) -> None:
-        """Retry _create_job with exponential backoff while K8s finalizes deletion."""
-        delay = _STALE_JOB_RETRY_BASE_DELAY
-        for attempt in range(1, _STALE_JOB_RETRY_MAX + 1):
-            try:
-                await asyncio.to_thread(self._create_job, job_name, task)
-                return
-            except Exception as exc:  # noqa: BLE001
-                if getattr(exc, "status", None) != 409 or attempt == _STALE_JOB_RETRY_MAX:
-                    raise
-                log.info(
-                    "stale_job_retry",
-                    job_name=job_name,
-                    attempt=attempt,
-                    delay=delay,
-                )
-                await asyncio.sleep(delay)
-                delay *= 2
-
-    # -- k8s helpers (synchronous, called via to_thread) ------------------
-
-    def _load_config(self) -> None:
-        from kubernetes import config as k8s_config  # type: ignore[import-not-found,import-untyped,unused-ignore]  # noqa: I001
-
-        try:
-            k8s_config.load_incluster_config()
-        except Exception:  # noqa: BLE001 – fallback to kubeconfig
-            k8s_config.load_kube_config()
-
-    def _create_job(self, job_name: str, task: TaskParams) -> None:
-        from kubernetes import client as k8s
-
-        self._load_config()
-        ns = self._settings.k8s_namespace
-        env = _build_env(task, self._settings)
-
-        tmp_volume = k8s.V1Volume(name="tmp", empty_dir=k8s.V1EmptyDirVolumeSource())
-        tmp_mount = k8s.V1VolumeMount(name="tmp", mount_path="/tmp")
-
-        container = k8s.V1Container(
-            name="task",
-            image=self._settings.k8s_job_image,
-            command=[".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"],
-            env=env,
-            volume_mounts=[tmp_mount],
-            resources=k8s.V1ResourceRequirements(
-                limits={
-                    "cpu": self._settings.k8s_job_cpu_limit,
-                    "memory": self._settings.k8s_job_memory_limit,
-                },
-            ),
-            security_context=k8s.V1SecurityContext(
-                run_as_non_root=True,
-                run_as_user=1000,
-                read_only_root_filesystem=True,
-                capabilities=k8s.V1Capabilities(drop=["ALL"]),
-            ),
-        )
-
-        job = k8s.V1Job(
-            metadata=k8s.V1ObjectMeta(name=job_name, namespace=ns),
-            spec=k8s.V1JobSpec(
-                template=k8s.V1PodTemplateSpec(
-                    metadata=k8s.V1ObjectMeta(
-                        labels={
-                            "app.kubernetes.io/name": "gitlab-copilot-agent",
-                            "app.kubernetes.io/component": "job",
-                            **(
-                                {
-                                    "app.kubernetes.io/instance": (
-                                        self._settings.k8s_job_instance_label
-                                    ),
-                                }
-                                if self._settings.k8s_job_instance_label
-                                else {}
-                            ),
-                        }
-                    ),
-                    spec=k8s.V1PodSpec(
-                        containers=[container],
-                        volumes=[tmp_volume],
-                        restart_policy="Never",
-                        host_aliases=_parse_host_aliases(self._settings.k8s_job_host_aliases),
-                    ),
-                ),
-                backoff_limit=1,
-                ttl_seconds_after_finished=_TTL_AFTER_FINISHED,
-            ),
-        )
-        k8s.BatchV1Api().create_namespaced_job(namespace=ns, body=job)
-
-    def _read_job_status(self, job_name: str) -> str:
-        """Return 'succeeded', 'failed', or 'running'."""
-        from kubernetes import client as k8s
-
-        ns = self._settings.k8s_namespace
-        try:
-            job = k8s.BatchV1Api().read_namespaced_job(name=job_name, namespace=ns)
-        except Exception as exc:  # noqa: BLE001
-            if getattr(exc, "status", None) == 404:
-                return "failed"  # Job deleted by concurrent caller or TTL
-            raise
-        if job.status and job.status.succeeded:
-            return "succeeded"
-        if job.status and job.status.failed:
-            return "failed"
-        return "running"
-
-    def _read_job_annotation(self, job_name: str) -> str | None:
-        from kubernetes import client as k8s
-
-        ns = self._settings.k8s_namespace
-        job = k8s.BatchV1Api().read_namespaced_job(name=job_name, namespace=ns)
-        if job.metadata and job.metadata.annotations:
-            result: str | None = job.metadata.annotations.get(_ANNOTATION_KEY)
-            return result
-        return None
-
-    def _read_pod_logs(self, job_name: str) -> str:
-        from kubernetes import client as k8s
-
-        ns = self._settings.k8s_namespace
-        pods = k8s.CoreV1Api().list_namespaced_pod(
-            namespace=ns, label_selector=f"job-name={job_name}"
-        )
-        if not pods.items:
-            return "<no pods found>"
-        pod_name: str = pods.items[0].metadata.name
-        return k8s.CoreV1Api().read_namespaced_pod_log(name=pod_name, namespace=ns) or ""
-
-    def _delete_job(self, job_name: str) -> None:
-        from kubernetes import client as k8s
-
-        k8s.BatchV1Api().delete_namespaced_job(
-            name=job_name,
-            namespace=self._settings.k8s_namespace,
-            body=k8s.V1DeleteOptions(propagation_policy="Background"),
-        )
-
-    # -- async polling ----------------------------------------------------
-
-    async def _wait_for_result(self, job_name: str, task: TaskParams) -> TaskResult:
-        deadline = asyncio.get_event_loop().time() + self._settings.k8s_job_timeout
-
-        while asyncio.get_event_loop().time() < deadline:
-            cached = await self._store.get(task.task_id)
-            if cached is not None:
-                return _parse_result(cached, task.task_type)
-
-            status = await asyncio.to_thread(self._read_job_status, job_name)
-
-            if status == "succeeded":
-                cached = await self._store.get(task.task_id)
-                if cached is not None:
-                    return _parse_result(cached, task.task_type)
-                annotation = await asyncio.to_thread(self._read_job_annotation, job_name)
-                if annotation:
-                    return _parse_result(annotation, task.task_type)
-                return _parse_result("", task.task_type)
-
-            if status == "failed":
-                logs = await asyncio.to_thread(self._read_pod_logs, job_name)
-                try:
-                    await asyncio.to_thread(self._delete_job, job_name)
-                except Exception:  # noqa: BLE001
-                    log.warning("failed_job_cleanup_error", job_name=job_name, exc_info=True)
-                msg = f"Job {job_name} failed. Pod logs:\n{logs}"
-                raise RuntimeError(msg)
-
-            await asyncio.sleep(_JOB_POLL_INTERVAL)
-
-        # Timeout — clean up and raise
-        await asyncio.to_thread(self._delete_job, job_name)
-        msg = f"Job {job_name} timed out after {self._settings.k8s_job_timeout}s"
         raise TimeoutError(msg)
 
 

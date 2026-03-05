@@ -30,8 +30,6 @@ def test_create_executor_k8s_requires_settings() -> None:
 def test_create_executor_k8s_returns_executor() -> None:
     settings = make_settings(
         task_executor="kubernetes",
-        k8s_secret_name="test-secret",
-        k8s_configmap_name="test-configmap",
     )
     with (
         patch("gitlab_copilot_agent.main.create_result_store"),

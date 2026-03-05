@@ -1,9 +1,8 @@
 """Application configuration via environment variables."""
 
-import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -106,19 +105,6 @@ class Settings(BaseSettings):
     k8s_job_cpu_limit: str = Field(default="1", description="CPU limit for Job pods")
     k8s_job_memory_limit: str = Field(default="1Gi", description="Memory limit for Job pods")
     k8s_job_timeout: int = Field(default=600, description="Job timeout in seconds")
-    k8s_job_host_aliases: str = Field(
-        default="", description="JSON-encoded hostAliases for Job pods, e.g. [{ip, hostnames}]"
-    )
-    k8s_secret_name: str | None = Field(
-        default=None, description="K8s Secret name for Job pod credentials"
-    )
-    k8s_configmap_name: str | None = Field(
-        default=None, description="K8s ConfigMap name for Job pod config"
-    )
-    k8s_job_instance_label: str = Field(
-        default="", description="Helm release instance label for Job pod NetworkPolicy scoping"
-    )
-
     # Azure Container Apps executor settings (only used when task_executor="container_apps")
     aca_subscription_id: str = Field(
         default="", description="Azure subscription ID for Container Apps"
@@ -220,22 +206,6 @@ class Settings(BaseSettings):
             )
         return None
 
-    @field_validator("k8s_job_host_aliases")
-    @classmethod
-    def _validate_host_aliases(cls, v: str) -> str:
-        if not v.strip():
-            return v
-        try:
-            entries = json.loads(v)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"K8S_JOB_HOST_ALIASES is not valid JSON: {exc}") from exc
-        if not isinstance(entries, list):
-            raise ValueError("K8S_JOB_HOST_ALIASES must be a JSON array")
-        for i, entry in enumerate(entries):
-            if not isinstance(entry, dict) or "ip" not in entry or "hostnames" not in entry:
-                raise ValueError(f"K8S_JOB_HOST_ALIASES[{i}] must have 'ip' and 'hostnames' keys")
-        return v
-
     @model_validator(mode="after")
     def _check_auth(self) -> "Settings":
         if not self.github_token and not self.copilot_provider_type:
@@ -253,17 +223,6 @@ class Settings(BaseSettings):
             raise ValueError(
                 "GITLAB_WEBHOOK_SECRET is required when GITLAB_POLL is not enabled. "
                 "Set GITLAB_WEBHOOK_SECRET for webhook mode or GITLAB_POLL=true for polling mode."
-            )
-        return self
-
-    @model_validator(mode="after")
-    def _check_k8s_resources(self) -> "Settings":
-        if self.task_executor == "kubernetes" and not self.k8s_secret_name:
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "K8S_SECRET_NAME not set — Job pod credentials will use plaintext env vars. "
-                "Set K8S_SECRET_NAME for secure credential injection via K8s Secrets."
             )
         return self
 
