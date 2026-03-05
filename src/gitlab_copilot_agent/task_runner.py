@@ -265,8 +265,10 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
         print(json.dumps({"task_id": task_id, "result": result}), flush=True)  # noqa: T201
         await bound_log.ainfo("task_complete")
         return 0
-    except Exception:
-        await bound_log.aerror("task_failed", exc_info=True)
+    except Exception as exc:
+        import traceback
+
+        await bound_log.aerror("task_failed", error=str(exc), traceback=traceback.format_exc())
         return 1
     finally:
         if task_queue:
