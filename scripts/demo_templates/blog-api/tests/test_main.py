@@ -1,8 +1,7 @@
 """Basic tests for the Blog Post API."""
 
-from fastapi.testclient import TestClient
-
 from demo_app.main import app
+from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
