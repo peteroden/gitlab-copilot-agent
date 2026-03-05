@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import sys
-import types
+import json
+import time
 from typing import Any
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams
+from gitlab_copilot_agent.k8s_executor import _parse_result
+from gitlab_copilot_agent.task_executor import (
+    CodingResult,
+    ReviewResult,
+    TaskExecutor,
+    TaskParams,
+)
 from tests.conftest import make_settings
 
 # -- Test constants -------------------------------------------------------
@@ -26,10 +31,16 @@ K8S_JOB_IMAGE = "registry.example.com/agent:latest"
 K8S_JOB_CPU = "500m"
 K8S_JOB_MEM = "512Mi"
 K8S_JOB_TIMEOUT = 5  # short for tests
-EXPECTED_JOB_NAME = "copilot-review-72a7b9961a8635bf"
+K8S_JOB_TIMEOUT_SHORT = 1  # for timeout tests
 CACHED_RESULT = "cached review output"
-ANNOTATION_RESULT = "annotation fallback result"
-POD_LOGS = "ERROR: something went wrong"
+FRESH_RESULT = "fresh review output"
+LOCK_KEY = f"aca_exec:{TASK_ID}"
+FAST_POLL_INTERVAL = 0.05  # speed up polling in tests
+CODING_JSON_RESULT = json.dumps({"result_type": "coding", "summary": "coded it"})
+REVIEW_JSON_RESULT = json.dumps({"result_type": "review", "summary": "looks good"})
+PLAIN_TEXT_RESULT = "plain text output"
+INVALID_JSON = "{not-valid-json"
+MALFORMED_LOCK = "garbage"
 
 
 # -- Helpers / fixtures ---------------------------------------------------
@@ -43,8 +54,6 @@ def _make_settings(**overrides: Any) -> Any:
         "k8s_job_cpu_limit": K8S_JOB_CPU,
         "k8s_job_memory_limit": K8S_JOB_MEM,
         "k8s_job_timeout": K8S_JOB_TIMEOUT,
-        "k8s_secret_name": "gitlab-copilot-agent",
-        "k8s_configmap_name": "gitlab-copilot-agent",
     }
     return make_settings(**(defaults | overrides))
 
@@ -62,101 +71,6 @@ def _make_task(**overrides: Any) -> TaskParams:
     return TaskParams(**(defaults | overrides))
 
 
-def _install_k8s_stub() -> tuple[MagicMock, MagicMock, MagicMock]:
-    """Insert a fake ``kubernetes`` package into sys.modules and return mocks.
-
-    Returns (batch_v1_mock, core_v1_mock, config_mock).
-    """
-    k8s_mod = types.ModuleType("kubernetes")
-    client_mod = types.ModuleType("kubernetes.client")
-    config_mod = types.ModuleType("kubernetes.config")
-
-    batch_v1 = MagicMock(name="BatchV1Api")
-    core_v1 = MagicMock(name="CoreV1Api")
-    config_mock = MagicMock(name="k8s_config")
-
-    # client classes that return plain objects
-    client_mod.BatchV1Api = MagicMock(return_value=batch_v1)  # type: ignore[attr-defined]
-    client_mod.CoreV1Api = MagicMock(return_value=core_v1)  # type: ignore[attr-defined]
-    # Passthrough constructors — just return kwargs as SimpleNamespace for inspection
-    for cls_name in (
-        "V1Job",
-        "V1ObjectMeta",
-        "V1JobSpec",
-        "V1PodTemplateSpec",
-        "V1PodSpec",
-        "V1Container",
-        "V1EnvVar",
-        "V1EnvVarSource",
-        "V1SecretKeySelector",
-        "V1ResourceRequirements",
-        "V1SecurityContext",
-        "V1Capabilities",
-        "V1DeleteOptions",
-        "V1Volume",
-        "V1VolumeMount",
-        "V1EmptyDirVolumeSource",
-        "V1HostAlias",
-    ):
-        setattr(client_mod, cls_name, _passthrough_cls(cls_name))
-
-    class _ApiException(Exception):
-        def __init__(self, status: int = 0, reason: str = "") -> None:
-            self.status = status
-            self.reason = reason
-            super().__init__(f"({status}) {reason}")
-
-    client_mod.ApiException = _ApiException  # type: ignore[attr-defined]
-
-    config_mod.load_incluster_config = config_mock.load_incluster_config  # type: ignore[attr-defined]
-    config_mod.load_kube_config = config_mock.load_kube_config  # type: ignore[attr-defined]
-    config_mod.ConfigException = Exception  # type: ignore[attr-defined]
-
-    k8s_mod.client = client_mod  # type: ignore[attr-defined]
-    k8s_mod.config = config_mod  # type: ignore[attr-defined]
-
-    sys.modules["kubernetes"] = k8s_mod
-    sys.modules["kubernetes.client"] = client_mod
-    sys.modules["kubernetes.config"] = config_mod
-
-    return batch_v1, core_v1, config_mock
-
-
-def _passthrough_cls(name: str) -> type:
-    """Return a tiny class that stores kwargs as attributes for test inspection."""
-
-    def __init__(self: Any, **kwargs: Any) -> None:
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-
-    def __repr__(self: Any) -> str:
-        attrs = ", ".join(f"{k}={v!r}" for k, v in self.__dict__.items())
-        return f"{name}({attrs})"
-
-    return type(name, (), {"__init__": __init__, "__repr__": __repr__})
-
-
-@pytest.fixture(autouse=True)
-def _k8s_stubs() -> tuple[MagicMock, MagicMock, MagicMock]:
-    """Auto-install kubernetes stubs for every test; clean up after."""
-    stubs = _install_k8s_stub()
-    yield stubs
-    for mod in ("kubernetes", "kubernetes.client", "kubernetes.config"):
-        sys.modules.pop(mod, None)
-    # Force re-import of k8s_executor to avoid stale module refs
-    sys.modules.pop("gitlab_copilot_agent.k8s_executor", None)
-
-
-@pytest.fixture
-def batch_v1(_k8s_stubs: tuple[MagicMock, MagicMock, MagicMock]) -> MagicMock:
-    return _k8s_stubs[0]
-
-
-@pytest.fixture
-def core_v1(_k8s_stubs: tuple[MagicMock, MagicMock, MagicMock]) -> MagicMock:
-    return _k8s_stubs[1]
-
-
 @pytest.fixture
 def fake_result_store() -> Any:
     from gitlab_copilot_agent.concurrency import MemoryResultStore
@@ -168,13 +82,17 @@ def _make_executor(
     settings: Any | None = None,
     result_store: Any | None = None,
 ) -> Any:
+    from gitlab_copilot_agent.concurrency import MemoryResultStore, MemoryTaskQueue
     from gitlab_copilot_agent.k8s_executor import KubernetesTaskExecutor
 
     if result_store is None:
-        from gitlab_copilot_agent.concurrency import MemoryResultStore
-
         result_store = MemoryResultStore()
-    return KubernetesTaskExecutor(settings=settings or _make_settings(), result_store=result_store)
+    task_queue = MemoryTaskQueue()
+    return KubernetesTaskExecutor(
+        settings=settings or _make_settings(),
+        result_store=result_store,
+        task_queue=task_queue,
+    )
 
 
 # -- Tests ----------------------------------------------------------------
@@ -196,553 +114,148 @@ class TestIdempotency:
         assert result.summary == CACHED_RESULT
 
 
-class TestJobCreation:
-    async def test_creates_job_with_correct_spec(
-        self,
-        batch_v1: MagicMock,
+class TestExecuteViaQueue:
+    """Fresh enqueue path — no cached result, no lock."""
+
+    async def test_enqueues_and_returns_result(
+        self, fake_result_store: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Make job succeed immediately
-        status_mock = MagicMock()
-        status_mock.succeeded = 1
-        status_mock.failed = None
-        job_mock = MagicMock()
-        job_mock.status = status_mock
-        job_mock.metadata = MagicMock()
-        job_mock.metadata.annotations = {}
-        batch_v1.read_namespaced_job.return_value = job_mock
+        import gitlab_copilot_agent.k8s_executor as mod
 
-        executor = _make_executor()
-        await executor.execute(_make_task())
-
-        # Verify Job was created
-        batch_v1.create_namespaced_job.assert_called_once()
-        call_kwargs = batch_v1.create_namespaced_job.call_args
-        assert call_kwargs.kwargs["namespace"] == K8S_NAMESPACE
-
-        job_body = call_kwargs.kwargs["body"]
-        assert job_body.metadata.name == EXPECTED_JOB_NAME
-        assert job_body.spec.backoff_limit == 1
-        assert job_body.spec.ttl_seconds_after_finished == 300
-
-        container = job_body.spec.template.spec.containers[0]
-        assert container.image == K8S_JOB_IMAGE
-        expected_cmd = [".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]
-        assert container.command == expected_cmd
-        assert container.resources.limits["cpu"] == K8S_JOB_CPU
-        assert container.resources.limits["memory"] == K8S_JOB_MEM
-        assert container.security_context.run_as_non_root is True
-        assert container.security_context.read_only_root_filesystem is True
-        assert container.security_context.capabilities.drop == ["ALL"]
-
-        # #141: emptyDir volume at /tmp for writable scratch space
-        pod_spec = job_body.spec.template.spec
-        assert any(v.name == "tmp" for v in pod_spec.volumes)
-        assert any(m.name == "tmp" and m.mount_path == "/tmp" for m in container.volume_mounts)
-
-        # #155: Job pod labels for NetworkPolicy selectors
-        labels = job_body.spec.template.metadata.labels
-        assert labels["app.kubernetes.io/name"] == "gitlab-copilot-agent"
-        assert labels["app.kubernetes.io/component"] == "job"
-        assert "app.kubernetes.io/instance" not in labels  # no instance label by default
-
-        # #148: no hostAliases by default
-        assert pod_spec.host_aliases is None
-
-    async def test_host_aliases_added_to_job_pod(
-        self,
-        batch_v1: MagicMock,
-    ) -> None:
-        """#148: Job pods inherit hostAliases from controller config."""
-        status_mock = MagicMock()
-        status_mock.succeeded = 1
-        status_mock.failed = None
-        job_mock = MagicMock()
-        job_mock.status = status_mock
-        job_mock.metadata = MagicMock()
-        job_mock.metadata.annotations = {}
-        batch_v1.read_namespaced_job.return_value = job_mock
-
-        aliases_json = '[{"ip":"10.0.0.1","hostnames":["host.local"]}]'
-        executor = _make_executor(settings=_make_settings(k8s_job_host_aliases=aliases_json))
-        await executor.execute(_make_task())
-
-        pod_spec = batch_v1.create_namespaced_job.call_args.kwargs["body"].spec.template.spec
-        assert len(pod_spec.host_aliases) == 1
-        assert pod_spec.host_aliases[0].ip == "10.0.0.1"
-        assert pod_spec.host_aliases[0].hostnames == ["host.local"]
-
-    async def test_instance_label_added_when_configured(
-        self,
-        batch_v1: MagicMock,
-    ) -> None:
-        """#155: Job pods include instance label for NetworkPolicy scoping."""
-        status_mock = MagicMock()
-        status_mock.succeeded = 1
-        status_mock.failed = None
-        job_mock = MagicMock()
-        job_mock.status = status_mock
-        job_mock.metadata = MagicMock()
-        job_mock.metadata.annotations = {}
-        batch_v1.read_namespaced_job.return_value = job_mock
-
-        executor = _make_executor(
-            settings=_make_settings(k8s_job_instance_label="my-release-gitlab-copilot-agent"),
-        )
-        await executor.execute(_make_task())
-
-        job_body = batch_v1.create_namespaced_job.call_args.kwargs["body"]
-        labels = job_body.spec.template.metadata.labels
-        assert labels["app.kubernetes.io/instance"] == "my-release-gitlab-copilot-agent"
-
-    async def test_env_vars_include_task_and_auth(
-        self,
-        batch_v1: MagicMock,
-    ) -> None:
-        """Env vars use secretKeyRef when k8s_secret_name is set."""
-        status_mock = MagicMock()
-        status_mock.succeeded = 1
-        status_mock.failed = None
-        job_mock = MagicMock()
-        job_mock.status = status_mock
-        job_mock.metadata = MagicMock()
-        job_mock.metadata.annotations = {}
-        batch_v1.read_namespaced_job.return_value = job_mock
-
-        executor = _make_executor()
-        await executor.execute(_make_task())
-
-        job_body = batch_v1.create_namespaced_job.call_args
-        container = job_body.kwargs["body"].spec.template.spec.containers[0]
-        env_names = {e.name for e in container.env}
-
-        expected_vars = (
-            "TASK_TYPE",
-            "TASK_ID",
-            "REPO_URL",
-            "BRANCH",
-            "SYSTEM_PROMPT",
-            "USER_PROMPT",
-            "TASK_PAYLOAD",
-            "GITLAB_URL",
-            "GITLAB_TOKEN",
-            "GITHUB_TOKEN",
-            "AZURE_STORAGE_CONNECTION_STRING",
-            "COPILOT_MODEL",
-        )
-        for expected in expected_vars:
-            assert expected in env_names, f"Missing env var: {expected}"
-
-        # Verify sensitive vars use secretKeyRef
-        gitlab_token_env = next(e for e in container.env if e.name == "GITLAB_TOKEN")
-        assert hasattr(gitlab_token_env, "value_from"), "GITLAB_TOKEN should use value_from"
-        assert gitlab_token_env.value_from.secret_key_ref.name == "gitlab-copilot-agent"
-        assert gitlab_token_env.value_from.secret_key_ref.key == "GITLAB_TOKEN"
-
-        github_token_env = next(e for e in container.env if e.name == "GITHUB_TOKEN")
-        assert hasattr(github_token_env, "value_from"), "GITHUB_TOKEN should use value_from"
-        assert github_token_env.value_from.secret_key_ref.name == "gitlab-copilot-agent"
-        assert github_token_env.value_from.secret_key_ref.key == "GITHUB_TOKEN"
-
-        # Verify GITLAB_WEBHOOK_SECRET IS forwarded (required by task_runner Settings)
-        assert "GITLAB_WEBHOOK_SECRET" in env_names
-        webhook_env = next(e for e in container.env if e.name == "GITLAB_WEBHOOK_SECRET")
-        assert hasattr(webhook_env, "value_from"), "GITLAB_WEBHOOK_SECRET should use value_from"
-
-        # Verify JIRA vars are NOT forwarded
-        assert "JIRA_URL" not in env_names
-        assert "JIRA_EMAIL" not in env_names
-        assert "JIRA_API_TOKEN" not in env_names
-
-    async def test_byok_env_vars_propagated(
-        self,
-        batch_v1: MagicMock,
-    ) -> None:
-        """#143: BYOK provider env vars forwarded to Job pods."""
-        status_mock = MagicMock()
-        status_mock.succeeded = 1
-        status_mock.failed = None
-        job_mock = MagicMock()
-        job_mock.status = status_mock
-        job_mock.metadata = MagicMock()
-        job_mock.metadata.annotations = {}
-        batch_v1.read_namespaced_job.return_value = job_mock
-
-        settings = _make_settings(
-            copilot_provider_type="openai",
-            copilot_provider_base_url="http://llm:9998/v1",
-            copilot_provider_api_key="test-key",
-            copilot_model="gpt-4o",
-            github_token=None,
-        )
-        executor = _make_executor(settings=settings)
-        await executor.execute(_make_task(settings=settings))
-
-        job_body = batch_v1.create_namespaced_job.call_args.kwargs["body"]
-        container = job_body.spec.template.spec.containers[0]
-        env_map = {e.name: getattr(e, "value", None) for e in container.env}
-        assert env_map["COPILOT_PROVIDER_TYPE"] == "openai"
-        assert env_map["COPILOT_PROVIDER_BASE_URL"] == "http://llm:9998/v1"
-        assert env_map["COPILOT_MODEL"] == "gpt-4o"
-
-        # API key should use secretKeyRef
-        api_key_env = next(e for e in container.env if e.name == "COPILOT_PROVIDER_API_KEY")
-        assert hasattr(api_key_env, "value_from")
-        assert api_key_env.value_from.secret_key_ref.name == "gitlab-copilot-agent"
-        assert api_key_env.value_from.secret_key_ref.key == "COPILOT_PROVIDER_API_KEY"
-
-    async def test_plaintext_fallback_when_no_secret_name(
-        self,
-        batch_v1: MagicMock,
-    ) -> None:
-        """When k8s_secret_name is None, env vars use plaintext values."""
-        status_mock = MagicMock()
-        status_mock.succeeded = 1
-        status_mock.failed = None
-        job_mock = MagicMock()
-        job_mock.status = status_mock
-        job_mock.metadata = MagicMock()
-        job_mock.metadata.annotations = {}
-        batch_v1.read_namespaced_job.return_value = job_mock
-
-        settings = _make_settings(
-            k8s_secret_name=None,
-            k8s_configmap_name=None,
-            task_executor="local",
-        )
-        executor = _make_executor(settings=settings)
-        await executor.execute(_make_task(settings=settings))
-
-        job_body = batch_v1.create_namespaced_job.call_args.kwargs["body"]
-        container = job_body.spec.template.spec.containers[0]
-
-        # Verify credentials are plaintext
-        gitlab_token_env = next(e for e in container.env if e.name == "GITLAB_TOKEN")
-        assert hasattr(gitlab_token_env, "value"), "GITLAB_TOKEN should use value field"
-        assert gitlab_token_env.value == settings.gitlab_token
-
-        github_token_env = next(e for e in container.env if e.name == "GITHUB_TOKEN")
-        assert hasattr(github_token_env, "value"), "GITHUB_TOKEN should use value field"
-        assert github_token_env.value == settings.github_token
-
-    async def test_allow_http_clone_forwarded(
-        self,
-        batch_v1: MagicMock,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """#153: ALLOW_HTTP_CLONE is forwarded from os.environ for E2E tests."""
-        monkeypatch.setenv("ALLOW_HTTP_CLONE", "1")
-
-        status_mock = MagicMock()
-        status_mock.succeeded = 1
-        status_mock.failed = None
-        job_mock = MagicMock()
-        job_mock.status = status_mock
-        job_mock.metadata = MagicMock()
-        job_mock.metadata.annotations = {}
-        batch_v1.read_namespaced_job.return_value = job_mock
-
-        executor = _make_executor()
-        await executor.execute(_make_task())
-
-        job_body = batch_v1.create_namespaced_job.call_args.kwargs["body"]
-        container = job_body.spec.template.spec.containers[0]
-        env_map = {e.name: getattr(e, "value", None) for e in container.env}
-        assert env_map["ALLOW_HTTP_CLONE"] == "1"
-
-
-class TestCompletion:
-    async def test_returns_result_from_redis(
-        self,
-        batch_v1: MagicMock,
-        fake_result_store: Any,
-    ) -> None:
-        call_count = 0
-
-        def _status_side_effect(*_a: Any, **_kw: Any) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            job = MagicMock()
-            if call_count >= 2:
-                job.status.succeeded = 1
-                job.status.failed = None
-            else:
-                job.status.succeeded = None
-                job.status.failed = None
-            job.metadata.annotations = {}
-            return job
-
-        batch_v1.read_namespaced_job.side_effect = _status_side_effect
-
-        # Simulate result appearing in store after first poll
-        async def _set_result_later() -> None:
-            await asyncio.sleep(0.05)
-            await fake_result_store.set(TASK_ID, CACHED_RESULT)
+        monkeypatch.setattr(mod, "_JOB_POLL_INTERVAL", FAST_POLL_INTERVAL)
 
         executor = _make_executor(result_store=fake_result_store)
-        asyncio.create_task(_set_result_later())
+
+        async def _write_result_later() -> None:
+            await asyncio.sleep(0.1)
+            await fake_result_store.set(TASK_ID, FRESH_RESULT)
+
+        asyncio.create_task(_write_result_later())
         result = await executor.execute(_make_task())
 
-        assert result.summary == CACHED_RESULT
+        assert result.summary == FRESH_RESULT
+        assert isinstance(result, ReviewResult)
 
-    async def test_falls_back_to_annotation(
-        self,
-        batch_v1: MagicMock,
+
+class TestExecuteViaQueueIdempotency:
+    """Lock-skip path: task already enqueued, result arrives via poll."""
+
+    async def test_skips_enqueue_when_lock_active(
+        self, fake_result_store: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        job_mock = MagicMock()
-        job_mock.status.succeeded = 1
-        job_mock.status.failed = None
-        job_mock.metadata.annotations = {"results.copilot-agent/summary": ANNOTATION_RESULT}
-        batch_v1.read_namespaced_job.return_value = job_mock
+        import gitlab_copilot_agent.k8s_executor as mod
 
-        executor = _make_executor()
+        monkeypatch.setattr(mod, "_JOB_POLL_INTERVAL", FAST_POLL_INTERVAL)
+
+        future_ts = int(time.time()) + K8S_JOB_TIMEOUT
+        await fake_result_store.set(LOCK_KEY, f"enqueued:{future_ts}")
+
+        async def _write_result_later() -> None:
+            await asyncio.sleep(0.1)
+            await fake_result_store.set(TASK_ID, FRESH_RESULT)
+
+        executor = _make_executor(result_store=fake_result_store)
+        asyncio.create_task(_write_result_later())
         result = await executor.execute(_make_task())
 
-        assert result.summary == ANNOTATION_RESULT
+        assert result.summary == FRESH_RESULT
+        assert isinstance(result, ReviewResult)
 
 
-class TestFailureHandling:
-    async def test_raises_on_job_failure(
-        self,
-        batch_v1: MagicMock,
-        core_v1: MagicMock,
+class TestExecuteViaQueueExpiredLock:
+    """Lock exists but expired — executor should re-enqueue."""
+
+    async def test_re_enqueues_when_lock_expired(
+        self, fake_result_store: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        job_mock = MagicMock()
-        job_mock.status.succeeded = None
-        job_mock.status.failed = 1
-        batch_v1.read_namespaced_job.return_value = job_mock
+        import gitlab_copilot_agent.k8s_executor as mod
 
-        pod_mock = MagicMock()
-        pod_mock.metadata.name = "copilot-review-abc12345-xyz"
-        core_v1.list_namespaced_pod.return_value = MagicMock(items=[pod_mock])
-        core_v1.read_namespaced_pod_log.return_value = POD_LOGS
+        monkeypatch.setattr(mod, "_JOB_POLL_INTERVAL", FAST_POLL_INTERVAL)
 
-        executor = _make_executor()
-        with pytest.raises(RuntimeError, match="failed"):
-            await executor.execute(_make_task())
+        expired_ts = int(time.time()) - 10
+        await fake_result_store.set(LOCK_KEY, f"enqueued:{expired_ts}")
 
-    async def test_failure_includes_pod_logs(
-        self,
-        batch_v1: MagicMock,
-        core_v1: MagicMock,
+        async def _write_result_later() -> None:
+            await asyncio.sleep(0.1)
+            await fake_result_store.set(TASK_ID, FRESH_RESULT)
+
+        executor = _make_executor(result_store=fake_result_store)
+        asyncio.create_task(_write_result_later())
+        result = await executor.execute(_make_task())
+
+        assert result.summary == FRESH_RESULT
+
+
+class TestExecuteViaQueueMalformedLock:
+    """Lock value is malformed — executor falls through to enqueue."""
+
+    async def test_enqueues_when_lock_malformed(
+        self, fake_result_store: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        job_mock = MagicMock()
-        job_mock.status.succeeded = None
-        job_mock.status.failed = 1
-        batch_v1.read_namespaced_job.return_value = job_mock
+        import gitlab_copilot_agent.k8s_executor as mod
 
-        pod_mock = MagicMock()
-        pod_mock.metadata.name = "copilot-review-abc12345-pod"
-        core_v1.list_namespaced_pod.return_value = MagicMock(items=[pod_mock])
-        core_v1.read_namespaced_pod_log.return_value = POD_LOGS
+        monkeypatch.setattr(mod, "_JOB_POLL_INTERVAL", FAST_POLL_INTERVAL)
 
-        executor = _make_executor()
-        with pytest.raises(RuntimeError, match=POD_LOGS):
+        await fake_result_store.set(LOCK_KEY, MALFORMED_LOCK)
+
+        async def _write_result_later() -> None:
+            await asyncio.sleep(0.1)
+            await fake_result_store.set(TASK_ID, FRESH_RESULT)
+
+        executor = _make_executor(result_store=fake_result_store)
+        asyncio.create_task(_write_result_later())
+        result = await executor.execute(_make_task())
+
+        assert result.summary == FRESH_RESULT
+
+
+class TestPollTimeout:
+    """_poll_result raises TimeoutError when no result appears."""
+
+    async def test_raises_timeout_error(
+        self, fake_result_store: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import gitlab_copilot_agent.k8s_executor as mod
+
+        monkeypatch.setattr(mod, "_JOB_POLL_INTERVAL", FAST_POLL_INTERVAL)
+
+        settings = _make_settings(k8s_job_timeout=K8S_JOB_TIMEOUT_SHORT)
+        executor = _make_executor(settings=settings, result_store=fake_result_store)
+
+        with pytest.raises(TimeoutError, match=TASK_ID):
             await executor.execute(_make_task())
 
 
-class TestTimeout:
-    async def test_deletes_job_on_timeout(
-        self,
-        batch_v1: MagicMock,
-    ) -> None:
-        # Job stays running forever
-        job_mock = MagicMock()
-        job_mock.status.succeeded = None
-        job_mock.status.failed = None
-        batch_v1.read_namespaced_job.return_value = job_mock
+class TestParseResult:
+    """Unit tests for _parse_result function."""
 
-        settings = _make_settings(k8s_job_timeout=1)
-        executor = _make_executor(settings=settings)
+    def test_json_coding_result(self) -> None:
+        result = _parse_result(CODING_JSON_RESULT, "review")
+        assert isinstance(result, CodingResult)
+        assert result.summary == "coded it"
 
-        with (
-            patch("gitlab_copilot_agent.k8s_executor._JOB_POLL_INTERVAL", 0.1),
-            pytest.raises(TimeoutError, match="timed out"),
-        ):
-            await executor.execute(_make_task(settings=settings))
+    def test_json_review_result(self) -> None:
+        result = _parse_result(REVIEW_JSON_RESULT, "coding")
+        assert isinstance(result, ReviewResult)
+        assert result.summary == "looks good"
 
-        batch_v1.delete_namespaced_job.assert_called_once()
+    def test_plain_text_coding_fallback(self) -> None:
+        result = _parse_result(PLAIN_TEXT_RESULT, "coding")
+        assert isinstance(result, CodingResult)
+        assert result.summary == PLAIN_TEXT_RESULT
 
+    def test_plain_text_review_fallback(self) -> None:
+        result = _parse_result(PLAIN_TEXT_RESULT, "review")
+        assert isinstance(result, ReviewResult)
+        assert result.summary == PLAIN_TEXT_RESULT
 
-class TestAlreadyExists:
-    async def test_409_stale_succeeded_job_replaced(
-        self,
-        batch_v1: MagicMock,
-        fake_result_store: Any,
-    ) -> None:
-        """409 on create with a completed job deletes it and creates a fresh one."""
-        api_exc = sys.modules["kubernetes.client"].ApiException(status=409, reason="AlreadyExists")
-        call_count = 0
+    def test_invalid_json_falls_back_to_plain(self) -> None:
+        result = _parse_result(INVALID_JSON, "review")
+        assert isinstance(result, ReviewResult)
+        assert result.summary == INVALID_JSON
 
-        def create_side_effect(*_a: object, **_kw: object) -> None:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise api_exc
-            # Second call: simulate fresh job writing result to store
-            fake_result_store._data[TASK_ID] = CACHED_RESULT
-
-        batch_v1.create_namespaced_job.side_effect = create_side_effect
-
-        stale_job = MagicMock()
-        stale_job.status.succeeded = 1
-        stale_job.status.failed = None
-        batch_v1.read_namespaced_job.return_value = stale_job
-
-        executor = _make_executor(result_store=fake_result_store)
-        result = await executor.execute(_make_task())
-
-        assert result.summary == CACHED_RESULT
-        assert call_count == 2
-        batch_v1.delete_namespaced_job.assert_called_once()
-
-    async def test_409_running_job_reused(
-        self,
-        batch_v1: MagicMock,
-        fake_result_store: Any,
-    ) -> None:
-        """409 on create with a still-running job reuses it."""
-        batch_v1.create_namespaced_job.side_effect = sys.modules["kubernetes.client"].ApiException(
-            status=409, reason="AlreadyExists"
-        )
-
-        call_count = 0
-
-        def read_job_side_effect(*_a: object, **_kw: object) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            job = MagicMock()
-            if call_count == 1:
-                # First read (in execute): still running
-                job.status.succeeded = None
-                job.status.failed = None
-            else:
-                # Second read (in _wait_for_result): succeeded
-                job.status.succeeded = 1
-                job.status.failed = None
-                # Simulate result appearing in store
-                fake_result_store._data[TASK_ID] = CACHED_RESULT
-            return job
-
-        batch_v1.read_namespaced_job.side_effect = read_job_side_effect
-
-        executor = _make_executor(result_store=fake_result_store)
-        result = await executor.execute(_make_task())
-
-        assert result.summary == CACHED_RESULT
-        batch_v1.delete_namespaced_job.assert_not_called()
-
-    async def test_409_stale_job_retry_on_slow_deletion(
-        self,
-        batch_v1: MagicMock,
-        fake_result_store: Any,
-    ) -> None:
-        """409 persists after delete while K8s finalizes; retry with backoff succeeds."""
-        api_exc = sys.modules["kubernetes.client"].ApiException(status=409, reason="AlreadyExists")
-        create_call = 0
-
-        def create_side_effect(*_a: object, **_kw: object) -> None:
-            nonlocal create_call
-            create_call += 1
-            if create_call <= 3:
-                # Calls 1 (initial), 2 (first retry), 3 (second retry): still 409
-                raise api_exc
-            # Call 4: K8s finalized deletion, create succeeds
-            fake_result_store._data[TASK_ID] = CACHED_RESULT
-
-        batch_v1.create_namespaced_job.side_effect = create_side_effect
-
-        stale_job = MagicMock()
-        stale_job.status.succeeded = 1
-        stale_job.status.failed = None
-        batch_v1.read_namespaced_job.return_value = stale_job
-
-        executor = _make_executor(result_store=fake_result_store)
-        result = await executor.execute(_make_task())
-
-        assert result.summary == CACHED_RESULT
-        assert create_call == 4  # 1 initial + 3 retries (2 fail, 1 succeeds)
-        batch_v1.delete_namespaced_job.assert_called_once()
-
-    async def test_409_stale_job_retry_exhausted(
-        self,
-        batch_v1: MagicMock,
-        fake_result_store: Any,
-    ) -> None:
-        """All retries exhausted raises the 409."""
-        api_exc = sys.modules["kubernetes.client"].ApiException(status=409, reason="AlreadyExists")
-        batch_v1.create_namespaced_job.side_effect = api_exc
-
-        stale_job = MagicMock()
-        stale_job.status.succeeded = 1
-        stale_job.status.failed = None
-        batch_v1.read_namespaced_job.return_value = stale_job
-
-        executor = _make_executor(result_store=fake_result_store)
-        with pytest.raises(Exception, match="AlreadyExists"):
-            await executor.execute(_make_task())
-
-
-class TestFailedJobCleanup:
-    async def test_failed_job_is_deleted(
-        self,
-        batch_v1: MagicMock,
-        core_v1: MagicMock,
-    ) -> None:
-        """Failed Job is explicitly deleted after reading pod logs."""
-        job_mock = MagicMock()
-        job_mock.status.succeeded = None
-        job_mock.status.failed = 1
-        batch_v1.read_namespaced_job.return_value = job_mock
-
-        pod_mock = MagicMock()
-        pod_mock.metadata.name = "copilot-review-abc12345-xyz"
-        core_v1.list_namespaced_pod.return_value = MagicMock(items=[pod_mock])
-        core_v1.read_namespaced_pod_log.return_value = POD_LOGS
-
-        executor = _make_executor()
-        with pytest.raises(RuntimeError, match="failed"):
-            await executor.execute(_make_task())
-
-        batch_v1.delete_namespaced_job.assert_called_once()
-
-    async def test_deleted_job_treated_as_failed(
-        self,
-        batch_v1: MagicMock,
-        core_v1: MagicMock,
-    ) -> None:
-        """404 from read_job_status (Job deleted) is treated as failure."""
-        api_exc_cls = sys.modules["kubernetes.client"].ApiException
-        batch_v1.read_namespaced_job.side_effect = api_exc_cls(status=404)
-
-        pod_mock = MagicMock()
-        pod_mock.metadata.name = "copilot-review-abc12345-pod"
-        core_v1.list_namespaced_pod.return_value = MagicMock(items=[pod_mock])
-        core_v1.read_namespaced_pod_log.return_value = POD_LOGS
-
-        executor = _make_executor()
-        with pytest.raises(RuntimeError, match="failed"):
-            await executor.execute(_make_task())
-
-
-class TestJobNameSanitization:
-    def test_deterministic(self) -> None:
-        from gitlab_copilot_agent.k8s_executor import _sanitize_job_name
-
-        name = _sanitize_job_name("review", "abc12345-rest")
-        assert name == _sanitize_job_name("review", "abc12345-rest")
-
-    def test_different_ids_differ(self) -> None:
-        from gitlab_copilot_agent.k8s_executor import _sanitize_job_name
-
-        assert _sanitize_job_name("review", "id-a") != _sanitize_job_name("review", "id-b")
-
-    def test_uppercased_task_type(self) -> None:
-        from gitlab_copilot_agent.k8s_executor import _sanitize_job_name
-
-        assert _sanitize_job_name("REVIEW", "x").startswith("copilot-review-")
-
-    def test_max_63_chars(self) -> None:
-        from gitlab_copilot_agent.k8s_executor import _sanitize_job_name
-
-        result = _sanitize_job_name("review", "a" * 200)
-        assert len(result) <= 63
+    def test_json_without_result_type_falls_back(self) -> None:
+        raw = json.dumps({"foo": "bar"})
+        result = _parse_result(raw, "coding")
+        assert isinstance(result, CodingResult)
+        assert result.summary == raw

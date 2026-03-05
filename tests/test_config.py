@@ -109,28 +109,10 @@ def test_jira_property_uses_custom_values() -> None:
     assert settings.jira.poll_interval == 60
 
 
-def test_k8s_executor_warns_without_secret_name() -> None:
-    """task_executor=kubernetes warns (not errors) when k8s_secret_name is not set."""
+def test_k8s_executor_accepts_settings() -> None:
+    """task_executor=kubernetes accepts valid configuration."""
     settings = make_settings(task_executor="kubernetes")
-    assert settings.k8s_secret_name is None
-
-
-def test_k8s_executor_accepts_both_names() -> None:
-    """task_executor=kubernetes succeeds when both names are provided."""
-    settings = make_settings(
-        task_executor="kubernetes",
-        k8s_secret_name="my-secret",
-        k8s_configmap_name="my-configmap",
-    )
-    assert settings.k8s_secret_name == "my-secret"
-    assert settings.k8s_configmap_name == "my-configmap"
-
-
-def test_local_executor_does_not_require_k8s_names() -> None:
-    """task_executor=local does not require k8s_secret_name or k8s_configmap_name."""
-    settings = make_settings(task_executor="local")
-    assert settings.k8s_secret_name is None
-    assert settings.k8s_configmap_name is None
+    assert settings.task_executor == "kubernetes"
 
 
 # -- Azure Container Apps executor config tests --
