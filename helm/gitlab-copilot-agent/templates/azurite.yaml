@@ -20,7 +20,7 @@ spec:
           ports:
             - { containerPort: 10000, name: blob }
             - { containerPort: 10001, name: queue }
-          args: ["azurite", "--blobHost", "0.0.0.0", "--queueHost", "0.0.0.0", "--location", "/data"]
+          args: ["azurite", "--blobHost", "0.0.0.0", "--queueHost", "0.0.0.0", "--skipApiVersionCheck", "--disableProductStyleUrl", "--location", "/data"]
           resources: {{- toYaml .Values.azurite.resources | nindent 12 }}
           volumeMounts: [{ name: data, mountPath: /data }]
       volumes:

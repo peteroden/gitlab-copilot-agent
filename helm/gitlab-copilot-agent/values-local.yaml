@@ -1,11 +1,10 @@
 image:
   pullPolicy: Never
+  tag: local
 service:
   type: LoadBalancer
 controller:
   resources:
     limits: { cpu: 500m, memory: 1Gi }
     requests: { cpu: 100m, memory: 512Mi }
-redis:
-  storage: 256Mi
 jobRunner: { cpuLimit: "500m", memoryLimit: 512Mi }
