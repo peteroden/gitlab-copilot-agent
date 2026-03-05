@@ -103,11 +103,11 @@ async def test_lifespan_with_jira_creates_shared_lock_manager(
 
 
 EXPECTED_SHUTDOWN_ORDER = [
-    "poller.stop",
-    "jira.close",
-    "dedup.aclose",
-    "repo_locks.aclose",
-    "shutdown_telemetry",
+    "jira_poller_stop",
+    "jira_client_close",
+    "dedup_store_close",
+    "repo_locks_close",
+    "telemetry_flush",
 ]
 
 
@@ -116,24 +116,21 @@ async def test_shutdown_call_ordering(
     env_vars: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify shutdown calls happen in the correct order.
-
-    Expected: poller.stop → jira.close → dedup.aclose → repo_locks.aclose → shutdown_telemetry.
-    """
+    """Verify shutdown calls happen in the correct order with structured logging."""
     call_order: list[str] = []
 
     mock_poller = AsyncMock()
     mock_poller.start = AsyncMock()
-    mock_poller.stop = AsyncMock(side_effect=lambda: call_order.append("poller.stop"))
+    mock_poller.stop = AsyncMock(side_effect=lambda: call_order.append("jira_poller_stop"))
 
     mock_jira = AsyncMock()
-    mock_jira.close = AsyncMock(side_effect=lambda: call_order.append("jira.close"))
+    mock_jira.close = AsyncMock(side_effect=lambda: call_order.append("jira_client_close"))
 
     mock_dedup = AsyncMock()
-    mock_dedup.aclose = AsyncMock(side_effect=lambda: call_order.append("dedup.aclose"))
+    mock_dedup.aclose = AsyncMock(side_effect=lambda: call_order.append("dedup_store_close"))
 
     mock_locks = AsyncMock()
-    mock_locks.aclose = AsyncMock(side_effect=lambda: call_order.append("repo_locks.aclose"))
+    mock_locks.aclose = AsyncMock(side_effect=lambda: call_order.append("repo_locks_close"))
 
     monkeypatch.setenv("JIRA_URL", JIRA_URL)
     monkeypatch.setenv("JIRA_EMAIL", JIRA_EMAIL)
@@ -152,7 +149,7 @@ async def test_shutdown_call_ordering(
         patch("gitlab_copilot_agent.main.create_dedup", return_value=mock_dedup),
         patch(
             "gitlab_copilot_agent.main.shutdown_telemetry",
-            side_effect=lambda: call_order.append("shutdown_telemetry"),
+            side_effect=lambda: call_order.append("telemetry_flush"),
         ),
     ):
         async with lifespan(test_app):
@@ -162,18 +159,18 @@ async def test_shutdown_call_ordering(
 
 
 @pytest.mark.asyncio
-async def test_shutdown_continues_when_dedup_close_fails(
+async def test_shutdown_continues_when_step_fails(
     env_vars: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify repo_locks and telemetry shut down even if dedup.aclose() raises."""
+    """Verify remaining steps run even if one step raises."""
     call_order: list[str] = []
 
     mock_dedup = AsyncMock()
-    mock_dedup.aclose = AsyncMock(side_effect=RuntimeError("redis gone"))
+    mock_dedup.aclose = AsyncMock(side_effect=RuntimeError("connection lost"))
 
     mock_locks = AsyncMock()
-    mock_locks.aclose = AsyncMock(side_effect=lambda: call_order.append("repo_locks.aclose"))
+    mock_locks.aclose = AsyncMock(side_effect=lambda: call_order.append("repo_locks_close"))
 
     test_app = FastAPI()
 
@@ -182,14 +179,52 @@ async def test_shutdown_continues_when_dedup_close_fails(
         patch("gitlab_copilot_agent.main.create_dedup", return_value=mock_dedup),
         patch(
             "gitlab_copilot_agent.main.shutdown_telemetry",
-            side_effect=lambda: call_order.append("shutdown_telemetry"),
+            side_effect=lambda: call_order.append("telemetry_flush"),
         ),
     ):
         async with lifespan(test_app):
             pass
 
-    assert "repo_locks.aclose" in call_order
-    assert "shutdown_telemetry" in call_order
+    assert "repo_locks_close" in call_order
+    assert "telemetry_flush" in call_order
+
+
+@pytest.mark.asyncio
+async def test_shutdown_continues_when_step_times_out(
+    env_vars: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify remaining steps run even if one step hangs past the timeout."""
+    import asyncio
+
+    call_order: list[str] = []
+
+    monkeypatch.setenv("SHUTDOWN_TIMEOUT", "2")
+
+    async def _hang_forever() -> None:
+        await asyncio.sleep(999)
+
+    mock_dedup = AsyncMock()
+    mock_dedup.aclose = _hang_forever
+
+    mock_locks = AsyncMock()
+    mock_locks.aclose = AsyncMock(side_effect=lambda: call_order.append("repo_locks_close"))
+
+    test_app = FastAPI()
+
+    with (
+        patch("gitlab_copilot_agent.main.create_lock", return_value=mock_locks),
+        patch("gitlab_copilot_agent.main.create_dedup", return_value=mock_dedup),
+        patch(
+            "gitlab_copilot_agent.main.shutdown_telemetry",
+            side_effect=lambda: call_order.append("telemetry_flush"),
+        ),
+    ):
+        async with lifespan(test_app):
+            pass
+
+    assert "repo_locks_close" in call_order
+    assert "telemetry_flush" in call_order
 
 
 # -- Allowlist tests --

@@ -1,5 +1,6 @@
 """FastAPI application entrypoint."""
 
+import asyncio
 import glob
 import os
 import shutil
@@ -190,19 +191,37 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await log.ainfo("service started", gitlab_url=settings.gitlab_url)
     yield
 
+    # -- Graceful shutdown with per-step timeouts --
+    steps: list[tuple[str, object]] = []
     if poller:
-        await poller.stop()
+        steps.append(("jira_poller_stop", poller.stop()))
     if gl_poller:
-        await gl_poller.stop()
+        steps.append(("gitlab_poller_stop", gl_poller.stop()))
     if jira_client:
-        await jira_client.close()
-    try:
-        await dedup_store.aclose()
-    except Exception:
-        await log.aexception("dedup_store_close_failed")
-    await repo_locks.aclose()
-    await log.ainfo("service stopped")
-    shutdown_telemetry()
+        steps.append(("jira_client_close", jira_client.close()))
+    steps.append(("dedup_store_close", dedup_store.aclose()))
+    steps.append(("repo_locks_close", repo_locks.aclose()))
+    steps.append(("telemetry_flush", asyncio.to_thread(shutdown_telemetry)))
+
+    num_steps = len(steps)
+    per_step = settings.shutdown_timeout / max(num_steps, 1)
+    timed_out: list[str] = []
+
+    await log.ainfo("shutdown_started", steps=num_steps, per_step_timeout=round(per_step, 1))
+    for name, coro in steps:
+        try:
+            await asyncio.wait_for(coro, timeout=per_step)  # type: ignore[arg-type]
+            await log.ainfo("shutdown_step_done", step=name)
+        except TimeoutError:
+            timed_out.append(name)
+            await log.awarning("shutdown_step_timeout", step=name, timeout=round(per_step, 1))
+        except Exception:
+            await log.awarning("shutdown_step_error", step=name, exc_info=True)
+
+    await log.ainfo(
+        "shutdown_complete",
+        timed_out_steps=timed_out if timed_out else None,
+    )
 
 
 app = FastAPI(title="GitLab Copilot Agent", lifespan=lifespan)
