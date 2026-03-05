@@ -240,3 +240,11 @@ class TestParseResult:
         result = _parse_result("", "review")
         assert isinstance(result, ReviewResult)
         assert result.summary == ""
+
+    def test_error_result_returns_review_with_message(self) -> None:
+        from gitlab_copilot_agent.aca_executor import _parse_result
+
+        raw = json.dumps({"result_type": "error", "error": True, "summary": "Task failed: boom"})
+        result = _parse_result(raw, "coding")
+        assert isinstance(result, ReviewResult)
+        assert "Task failed: boom" in result.summary

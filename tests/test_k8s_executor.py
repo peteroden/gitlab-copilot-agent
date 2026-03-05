@@ -38,6 +38,9 @@ LOCK_KEY = f"aca_exec:{TASK_ID}"
 FAST_POLL_INTERVAL = 0.05  # speed up polling in tests
 CODING_JSON_RESULT = json.dumps({"result_type": "coding", "summary": "coded it"})
 REVIEW_JSON_RESULT = json.dumps({"result_type": "review", "summary": "looks good"})
+ERROR_JSON_RESULT = json.dumps(
+    {"result_type": "error", "error": True, "summary": "Task failed: boom"}
+)
 PLAIN_TEXT_RESULT = "plain text output"
 INVALID_JSON = "{not-valid-json"
 MALFORMED_LOCK = "garbage"
@@ -259,3 +262,8 @@ class TestParseResult:
         result = _parse_result(raw, "coding")
         assert isinstance(result, CodingResult)
         assert result.summary == raw
+
+    def test_error_result_returns_review_with_message(self) -> None:
+        result = _parse_result(ERROR_JSON_RESULT, "coding")
+        assert isinstance(result, ReviewResult)
+        assert "Task failed: boom" in result.summary
