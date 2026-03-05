@@ -74,10 +74,12 @@ async def _dequeue_task() -> tuple[dict[str, str], QueueMessage, TaskQueue] | No
     try:
         settings = TaskRunnerSettings()
     except Exception:
+        await log.awarning("dequeue_settings_failed", exc_info=True)
         return None
     if not settings.azure_storage_connection_string and (
         not settings.azure_storage_queue_url or not settings.azure_storage_account_url
     ):
+        await log.awarning("dequeue_no_azure_config")
         return None
 
     from gitlab_copilot_agent.state import create_task_queue
@@ -91,6 +93,7 @@ async def _dequeue_task() -> tuple[dict[str, str], QueueMessage, TaskQueue] | No
     )
     msg = await queue.dequeue(visibility_timeout=600)
     if msg is None:
+        await log.ainfo("dequeue_empty")
         await queue.aclose()
         return None
 
@@ -208,8 +211,8 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
             branch = _get_required_env(ENV_BRANCH)
             payload_raw = _get_required_env(ENV_TASK_PAYLOAD)
             user_prompt = _parse_task_payload(payload_raw).get("prompt", payload_raw)
-        except RuntimeError:
-            await log.aerror("missing_env_var", exc_info=True)
+        except RuntimeError as exc:
+            await log.aerror("missing_env_var", error=str(exc))
             return 1
 
     bound_log = log.bind(task_id=task_id, task_type=task_type)
