@@ -89,6 +89,13 @@ jobs:
           kubectl describe pods -l app.kubernetes.io/name=gitlab-copilot-agent > /tmp/e2e-logs/describe.log 2>&1 || true
           kubectl get events --sort-by='.lastTimestamp' > /tmp/e2e-logs/events.log 2>&1 || true
           kubectl get jobs -o wide > /tmp/e2e-logs/jobs.log 2>&1 || true
+          # Controller pod logs
+          kubectl logs -l app.kubernetes.io/component=controller --tail=200 > /tmp/e2e-logs/controller.log 2>&1 || true
+          # Task runner job pod logs (all pods, including failed)
+          for pod in $(kubectl get pods -l app.kubernetes.io/component=job -o name 2>/dev/null); do
+            name=$(echo "$pod" | sed 's|pod/||')
+            kubectl logs "$pod" > "/tmp/e2e-logs/job-${name}.log" 2>&1 || true
+          done
 
       - name: Upload logs
         if: always()
