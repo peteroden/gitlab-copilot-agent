@@ -200,8 +200,8 @@ spec:
 | `k8s_executor.py` env var dispatch | ~100 | Replaced by queue dispatch |
 | `k8s_executor.py` K8s Job creation | ~80 | KEDA creates jobs |
 | `task_runner.py` env var fallback path | ~30 | Queue is the only path |
-| `redis_state.py` Redis result store | ~60 | BlobResultStore for all |
-| `redis_state.py` Redis lock manager | ~40 | Queue provides serialization |
+| `redis_state.py` Redis result store (now `state.py`) | ~60 | BlobResultStore for all |
+| `redis_state.py` Redis lock manager (now `state.py`) | ~40 | Queue provides serialization |
 | `config.py` Redis fields | ~20 | No longer needed |
 | `pyproject.toml` redis deps | ~2 | `redis`, `redis-entraid` removed |
 | `infra/redis.tf` | ~50 | Entire file deleted |
@@ -304,7 +304,7 @@ spec:
 - Tests
 
 ### Phase 3E: Remove Redis (~200 lines deleted, 1 PR)
-- Delete Redis-specific code from `redis_state.py`
+- Delete Redis-specific code from `state.py` (formerly `redis_state.py`)
 - Remove `redis`, `redis-entraid` from dependencies
 - Remove Redis config from `Settings`
 - Delete `infra/redis.tf` (already conditional)

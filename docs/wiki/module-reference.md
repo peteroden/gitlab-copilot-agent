@@ -18,7 +18,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Globals**:
 - `app: FastAPI`: FastAPI application instance with lifespan and webhook router
 
-**Internal Imports**: `config`, `telemetry`, `gitlab_client`, `gitlab_poller`, `jira_client`, `jira_poller`, `webhook`, `concurrency`, `redis_state`, `task_executor`, `coding_orchestrator`, `git_operations`, `project_mapping`
+**Internal Imports**: `config`, `telemetry`, `gitlab_client`, `gitlab_poller`, `jira_client`, `jira_poller`, `webhook`, `concurrency`, `state`, `task_executor`, `coding_orchestrator`, `git_operations`, `project_mapping`
 
 **Depended On By**: Deployed as uvicorn entrypoint
 
@@ -573,34 +573,16 @@ All use `extra="ignore"` config.
 
 ---
 
-### `redis_state.py`
-**Purpose**: Redis-backed implementations for Lock and DeduplicationStore.
-
-**Key Constants**:
-- `_UNLOCK_SCRIPT`: Lua script for atomic lock release
-- `_EXTEND_SCRIPT`: Lua script for atomic TTL extension
-- `_LOCK_RETRY_DELAY = 0.1`
-- `_LOCK_PREFIX = "lock:"`
-- `_DEDUP_PREFIX = "dedup:"`
-- `_RENEWAL_FACTOR = 0.5`
-
-**Key Classes**:
-- `RedisLock`: Distributed lock using SET NX + TTL (Redlock-style)
-  - `acquire(key: str, ttl_seconds: int)`: Spin until SET NX succeeds, start renewal loop
-  - `_renew_loop(lock_key: str, token: str, ttl_seconds: int)`: Periodic EXPIRE via Lua script
-  - `aclose()`: Close Redis connection
-- `RedisDedup`: Redis-backed seen set
-  - `is_seen(key: str) -> bool`: EXISTS check
-  - `mark_seen(key: str, ttl_seconds: int) -> None`: SET with TTL
-  - `aclose()`: Close Redis connection
+### `state.py`
+**Purpose**: Factory functions for concurrency primitives (lock, dedup, result store, task queue). Uses in-memory implementations for lock/dedup and delegates to Azure Storage for result store and task queue when configured.
 
 **Key Functions**:
-- `create_lock(backend, redis_url, *, redis_host, redis_port, azure_client_id) -> DistributedLock`: Factory — uses Entra ID auth when `redis_host` is set, URL auth otherwise
-- `create_dedup(backend, redis_url, *, redis_host, redis_port, azure_client_id) -> DeduplicationStore`: Factory — same dual-path as `create_lock`
-- `create_result_store(redis_url, *, redis_host, redis_port, azure_client_id) -> Redis`: Factory for task result storage
-- `_create_redis_client(redis_url, *, redis_host, redis_port, azure_client_id) -> Redis`: Internal helper that creates a Redis client via Entra ID or URL
+- `create_lock() -> DistributedLock`: Factory — returns `MemoryLock` (single-controller deployment)
+- `create_dedup() -> DeduplicationStore`: Factory — returns `MemoryDedup` (single-controller deployment)
+- `create_result_store(*, azure_storage_account_url, azure_storage_connection_string, task_blob_container) -> ResultStore`: Factory — returns `BlobResultStore` when Azure Storage is configured, otherwise `MemoryResultStore`
+- `create_task_queue(*, azure_storage_queue_url, azure_storage_account_url, azure_storage_connection_string, task_queue_name, task_blob_container) -> TaskQueue`: Factory — returns `AzureStorageTaskQueue` when Azure Storage is configured, otherwise `MemoryTaskQueue`
 
-**Internal Imports**: `concurrency`
+**Internal Imports**: `concurrency`, `azure_storage` (lazy)
 
 **Depended On By**: `main.py`
 
@@ -692,7 +674,7 @@ All use `extra="ignore"` config.
 | `project_mapping.py` | Data | 34 | Jira→GitLab mapping |
 | `config.py` | Data | 137 | Settings |
 | `concurrency.py` | State | 208 | In-memory locks/dedup |
-| `redis_state.py` | State | 128 | Redis locks/dedup |
+| `state.py` | State | 79 | Factory functions for concurrency primitives |
 | `telemetry.py` | Telemetry | 130 | OTEL setup |
 | `metrics.py` | Telemetry | 52 | Metrics instruments |
 | `process_sandbox.py` | Utils | 20 | CLI path resolution |
