@@ -74,6 +74,8 @@ jobs:
             --set 'controller.resources.requests.memory=512Mi' \
             --set "hostAliases[0].ip=$HOST_IP" \
             --set 'hostAliases[0].hostnames[0]=host.k3d.internal' \
+            --set 'keda.failedJobsHistoryLimit=10' \
+            --set 'keda.ttlSecondsAfterFinished=600' \
             --wait --timeout 120s
 
       - name: Run E2E tests
@@ -89,13 +91,19 @@ jobs:
           kubectl describe pods -l app.kubernetes.io/name=gitlab-copilot-agent > /tmp/e2e-logs/describe.log 2>&1 || true
           kubectl get events --sort-by='.lastTimestamp' > /tmp/e2e-logs/events.log 2>&1 || true
           kubectl get jobs -o wide > /tmp/e2e-logs/jobs.log 2>&1 || true
-          # Controller pod logs (use pod name selector for more context)
-          kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent -c controller --tail=1000 > /tmp/e2e-logs/controller.log 2>&1 || true
-          # Task runner job pod logs (all pods, including failed)
-          for pod in $(kubectl get pods -l app.kubernetes.io/component=job -o name 2>/dev/null); do
+          # Controller pod logs — use component label to avoid matching azurite pod
+          kubectl logs -l app.kubernetes.io/component=controller --tail=1000 > /tmp/e2e-logs/controller.log 2>&1 || true
+          # Init container logs (Azurite queue/blob setup)
+          kubectl logs -l app.kubernetes.io/component=controller -c init-azurite > /tmp/e2e-logs/init-azurite.log 2>&1 || true
+          # Task runner job pod logs (all pods, including completed/failed)
+          for pod in $(kubectl get pods -l app.kubernetes.io/component=job --field-selector=status.phase!=Running -o name 2>/dev/null; kubectl get pods -l app.kubernetes.io/component=job -o name 2>/dev/null); do
             name=$(echo "$pod" | sed 's|pod/||')
+            [ -f "/tmp/e2e-logs/job-${name}.log" ] && continue
+            kubectl logs "$pod" --previous > "/tmp/e2e-logs/job-${name}-prev.log" 2>/dev/null || true
             kubectl logs "$pod" > "/tmp/e2e-logs/job-${name}.log" 2>&1 || true
           done
+          # Azurite queue inspection — check if messages exist
+          kubectl exec deploy/copilot-agent-gitlab-copilot-agent-azurite -- ls /data/ > /tmp/e2e-logs/azurite-data.log 2>&1 || true
 
       - name: Upload logs
         if: always()
