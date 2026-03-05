@@ -115,6 +115,51 @@ At least one of these must be set:
 
 ---
 
+## Dispatch Backend
+
+All remote executors (`kubernetes`, `container_apps`) use Azure Storage Queue + Blob for dispatch (Claim Check pattern). KEDA ScaledJob watches the queue and triggers Job pods automatically.
+
+### `DISPATCH_BACKEND`
+- **Type**: `Literal["azure_storage"]`
+- **Required**: ❌ No
+- **Default**: `"azure_storage"`
+- **Description**: Dispatch backend for task queue and result storage. Tasks are dispatched via Azure Storage Queue (Claim Check: params blob + queue message). Results stored as blobs.
+
+### `AZURE_STORAGE_CONNECTION_STRING`
+- **Type**: `str | None`
+- **Required**: ⚠️ Required for K8s/Azurite deployments (unless URL-based auth is used)
+- **Default**: `None`
+- **Description**: Azure Storage connection string. Used with Azurite (local K8s) or real Azure Storage. Overrides URL-based auth when set.
+- **Example**: `"DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=...;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1"`
+
+### `AZURE_STORAGE_ACCOUNT_URL`
+- **Type**: `str | None`
+- **Required**: ⚠️ Required for ACA (managed identity auth) unless `AZURE_STORAGE_CONNECTION_STRING` is set
+- **Default**: `None`
+- **Description**: Azure Blob Storage account URL for `DefaultAzureCredential` auth
+- **Example**: `"https://mystorageaccount.blob.core.windows.net"`
+
+### `AZURE_STORAGE_QUEUE_URL`
+- **Type**: `str | None`
+- **Required**: ⚠️ Required for ACA (managed identity auth) unless `AZURE_STORAGE_CONNECTION_STRING` is set
+- **Default**: `None`
+- **Description**: Azure Queue Storage endpoint URL for `DefaultAzureCredential` auth
+- **Example**: `"https://mystorageaccount.queue.core.windows.net"`
+
+### `TASK_QUEUE_NAME`
+- **Type**: `str`
+- **Required**: ❌ No
+- **Default**: `"task-queue"`
+- **Description**: Azure Storage Queue name for task dispatch
+
+### `TASK_BLOB_CONTAINER`
+- **Type**: `str`
+- **Required**: ❌ No
+- **Default**: `"task-data"`
+- **Description**: Azure Blob container name for params and result blobs
+
+---
+
 ## Kubernetes Executor Settings
 
 Only used when `TASK_EXECUTOR=kubernetes`.
@@ -172,7 +217,7 @@ Only used when `TASK_EXECUTOR=kubernetes`.
 - **Type**: `str | None`
 - **Required**: ❌ No
 - **Default**: `None`
-- **Description**: K8s ConfigMap name for mounting Job pod non-sensitive config via `configMapKeyRef`. When set, config values (`REDIS_URL`, `COPILOT_MODEL`, `COPILOT_PROVIDER_TYPE`, `COPILOT_PROVIDER_BASE_URL`, `STATE_BACKEND`) are referenced from this ConfigMap. For Azure Entra ID auth, `REDIS_HOST`/`REDIS_PORT`/`AZURE_CLIENT_ID` are used instead of `REDIS_URL`.
+- **Description**: K8s ConfigMap name for mounting Job pod non-sensitive config via `configMapKeyRef`. When set, config values (`DISPATCH_BACKEND`, `COPILOT_MODEL`, `COPILOT_PROVIDER_TYPE`, `COPILOT_PROVIDER_BASE_URL`, `TASK_QUEUE_NAME`, `TASK_BLOB_CONTAINER`) are referenced from this ConfigMap.
 - **Helm Value**: Auto-set to the chart's ConfigMap name
 
 ### `K8S_JOB_INSTANCE_LABEL`
@@ -186,7 +231,7 @@ Only used when `TASK_EXECUTOR=kubernetes`.
 
 ## Azure Container Apps Executor Settings
 
-Only used when `TASK_EXECUTOR=container_apps`. Requires `azure-mgmt-appcontainers` and `azure-identity` packages (install with `uv sync --extra azure`).
+Only used when `TASK_EXECUTOR=container_apps`.
 
 ### `ACA_SUBSCRIPTION_ID`
 - **Type**: `str | None`
@@ -210,46 +255,6 @@ Only used when `TASK_EXECUTOR=container_apps`. Requires `azure-mgmt-appcontainer
 - **Description**: Maximum execution time in seconds before timeout
 
 **Validation**: If `TASK_EXECUTOR=container_apps`, all three ACA settings (`ACA_SUBSCRIPTION_ID`, `ACA_RESOURCE_GROUP`, `ACA_JOB_NAME`) must be set. A `ValueError` is raised at startup if any are missing.
-
----
-
-## State Backend
-
-### `STATE_BACKEND`
-- **Type**: `Literal["memory", "redis"]`
-- **Required**: ❌ No
-- **Default**: `"memory"`
-- **Options**: `"memory"` (single pod only), `"redis"` (distributed)
-- **Description**: State backend for locks and deduplication
-
-### `REDIS_URL`
-- **Type**: `str | None`
-- **Required**: ⚠️ Yes if `STATE_BACKEND=redis` (unless `REDIS_HOST` is set)
-- **Default**: `None`
-- **Description**: Redis connection URL with password. Use for non-Azure deployments (Helm, self-hosted). Mutually exclusive with `REDIS_HOST`.
-- **Format**: `redis://host:port/db` or `redis://:password@host:port/db`
-- **Example**: `"redis://:mypassword@redis-service:6379/0"`
-- **Validation**: Either `REDIS_URL` or `REDIS_HOST` is required when `STATE_BACKEND=redis` or when using a remote executor (`kubernetes`/`container_apps`)
-
-### `REDIS_HOST`
-- **Type**: `str | None`
-- **Required**: ⚠️ Yes for Azure Entra ID Redis auth (alternative to `REDIS_URL`)
-- **Default**: `None`
-- **Description**: Redis hostname for Microsoft Entra ID authentication. When set, the service uses `DefaultAzureCredential` (via `redis-entraid`) instead of password-based auth. Mutually exclusive with `REDIS_URL`.
-- **Example**: `"redis-rg-copilot-dev.redis.cache.windows.net"`
-- **Requires**: `redis-entraid` package (included in `--extra azure` install)
-
-### `REDIS_PORT`
-- **Type**: `int`
-- **Required**: ❌ No
-- **Default**: `6380`
-- **Description**: Redis port, used with `REDIS_HOST`. Default 6380 is the Azure Redis SSL port.
-
-### `AZURE_CLIENT_ID`
-- **Type**: `str | None`
-- **Required**: ❌ No (recommended for Azure managed identity)
-- **Default**: `None`
-- **Description**: Client ID of a user-assigned managed identity. Used to select the correct identity for Entra ID Redis authentication (via `managed_identity_client_id` in `DefaultAzureCredential`). Also used by the Container Apps executor for Azure SDK auth.
 
 ---
 
@@ -415,8 +420,8 @@ JSON object with top-level `"mappings"` key:
 | Validator | Condition | Error |
 |-----------|-----------|-------|
 | `_check_auth()` | Neither `GITHUB_TOKEN` nor `COPILOT_PROVIDER_TYPE` set | "Either GITHUB_TOKEN or COPILOT_PROVIDER_TYPE must be set" |
-| `_check_redis_for_remote_executors()` | Remote executor (`kubernetes`/`container_apps`) and neither `REDIS_URL` nor `REDIS_HOST` set | "Redis is required for kubernetes/container_apps executor" |
-| `_check_state_backend()` | `STATE_BACKEND=redis` and neither `REDIS_URL` nor `REDIS_HOST` set | "REDIS_URL or REDIS_HOST is required when STATE_BACKEND=redis" |
+| `_check_azure_storage()` | `dispatch_backend='azure_storage'` and no `AZURE_STORAGE_CONNECTION_STRING` and missing `AZURE_STORAGE_ACCOUNT_URL` or `AZURE_STORAGE_QUEUE_URL` | "dispatch_backend='azure_storage' requires: ... (or set AZURE_STORAGE_CONNECTION_STRING)" |
+| `_check_aca_resources()` | `TASK_EXECUTOR=container_apps` and missing ACA settings | "Container Apps executor requires: ..." |
 | `_check_auth()` | `GITLAB_POLL=true` and `GITLAB_PROJECTS` is empty | "GITLAB_PROJECTS is required when GITLAB_POLL=true" |
 
 ---
@@ -443,7 +448,7 @@ GITLAB_PROJECTS="group/project1,group/project2"
 AGENT_GITLAB_USERNAME=copilot-agent
 ```
 
-### Production (K8s Jobs + Redis + Jira + OTEL)
+### Production (K8s Jobs + Azure Storage Queue + Jira + OTEL)
 ```bash
 GITLAB_URL=https://gitlab.example.com
 GITLAB_TOKEN=glpat-xxxxx
@@ -457,8 +462,9 @@ K8S_JOB_CPU_LIMIT=2
 K8S_JOB_MEMORY_LIMIT=2Gi
 K8S_JOB_TIMEOUT=900
 
-STATE_BACKEND=redis
-REDIS_URL=redis://redis-service:6379/0  # or REDIS_HOST for Azure Entra ID auth
+DISPATCH_BACKEND=azure_storage
+AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;...  # Azurite
+# Or for real Azure: AZURE_STORAGE_ACCOUNT_URL + AZURE_STORAGE_QUEUE_URL (managed identity)
 
 GITLAB_POLL=true
 GITLAB_POLL_INTERVAL=30
@@ -502,7 +508,7 @@ All tokens/keys should be:
 - Never committed to code
 - Rotated regularly (quarterly recommended)
 
-**Rotation procedure**: Update the token value in your K8s Secret (or secrets manager) and restart pods. All credentials are stateless env vars — no migration needed. See the [deployment guide](deployment-guide.md#redis-password-rotation) for Redis-specific rotation steps.
+**Rotation procedure**: Update the token value in your K8s Secret (or secrets manager) and restart pods. All credentials are stateless env vars — no migration needed.
 
 ### Least Privilege
 - **GITLAB_TOKEN**: Scope to specific projects if possible (use project access tokens)
@@ -510,9 +516,9 @@ All tokens/keys should be:
 - **JIRA_API_TOKEN**: Read issue, transition, add comment (no admin)
 
 ### Network Isolation
-- Redis: password-protected (Helm) or Entra ID authenticated (Azure); NetworkPolicies/NSG restrict access to agent pods only
+- Azure Storage (Azurite): NetworkPolicies restrict access to agent and job pods only
 - OTEL Collector: internal endpoint only
-- Job pods: egress restricted to GitLab, Copilot API, Redis, and DNS via NetworkPolicy
+- Job pods: egress restricted to GitLab, Copilot API, Azure Storage, and DNS via NetworkPolicy
 
 ---
 
@@ -531,9 +537,8 @@ Helm `values.yaml` maps to env vars via `configmap.yaml` and `secret.yaml`:
 | `controller.copilotProviderApiKey` | `COPILOT_PROVIDER_API_KEY` | ✅ |
 | `controller.copilotModel` | `COPILOT_MODEL` | ❌ |
 | `controller.taskExecutor` | `TASK_EXECUTOR` | ❌ |
-| `controller.stateBackend` | `STATE_BACKEND` | ❌ |
-| `redis.enabled` | `REDIS_URL` (auto-generated) | ✅ (password in URL). For Azure, use `REDIS_HOST` + Entra ID instead. |
-| `redis.password` | `REDIS_PASSWORD` | ✅ |
+| `controller.dispatchBackend` | `DISPATCH_BACKEND` | ❌ |
+| `azurite.enabled` | `AZURE_STORAGE_CONNECTION_STRING` (auto-generated) | ✅ (connection string) |
 | (auto) | `K8S_SECRET_NAME` | ❌ |
 | (auto) | `K8S_CONFIGMAP_NAME` | ❌ |
 | (auto) | `K8S_JOB_INSTANCE_LABEL` | ❌ |

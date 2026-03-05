@@ -96,6 +96,7 @@ make k3d-deploy                 # deploy via Helm
 | Variable | Default | Description |
 |---|---|---|
 | `TASK_EXECUTOR` | `local` | `local`, `kubernetes`, or `container_apps` |
+| `DISPATCH_BACKEND` | `azure_storage` | Dispatch backend: `azure_storage` (Queue + Blob via Claim Check) |
 | `K8S_NAMESPACE` | `default` | Kubernetes namespace for Jobs |
 | `K8S_JOB_IMAGE` | — | Docker image for Job pods |
 | `K8S_JOB_CPU_LIMIT` | `1` | CPU limit |
@@ -105,15 +106,15 @@ make k3d-deploy                 # deploy via Helm
 | `K8S_CONFIGMAP_NAME` | `None` | K8s ConfigMap for Job pod config (auto-set by Helm) |
 | `K8S_JOB_INSTANCE_LABEL` | `""` | Helm release label for NetworkPolicy scoping (auto-set by Helm) |
 
-### State Backend
+### Azure Storage (Dispatch)
 
 | Variable | Default | Description |
 |---|---|---|
-| `STATE_BACKEND` | `memory` | `memory` or `redis` |
-| `REDIS_URL` | `None` | Redis URL (e.g., `redis://:pass@host:6379/0`). Required when `STATE_BACKEND=redis` unless `REDIS_HOST` is set. |
-| `REDIS_HOST` | `None` | Redis hostname for Entra ID auth (Azure). Mutually exclusive with `REDIS_URL`. |
-| `REDIS_PORT` | `6380` | Redis port (used with `REDIS_HOST`). Default 6380 for Azure Redis SSL. |
-| `AZURE_CLIENT_ID` | `None` | Managed identity client ID for Entra ID auth (Redis + Container Apps). |
+| `AZURE_STORAGE_CONNECTION_STRING` | `None` | Azure Storage connection string (for Azurite/K8s). Overrides URL-based auth. |
+| `AZURE_STORAGE_ACCOUNT_URL` | `None` | Azure Blob Storage endpoint for managed identity auth (ACA). |
+| `AZURE_STORAGE_QUEUE_URL` | `None` | Azure Queue Storage endpoint for managed identity auth (ACA). |
+| `TASK_QUEUE_NAME` | `task-queue` | Azure Storage Queue name for task dispatch |
+| `TASK_BLOB_CONTAINER` | `task-data` | Azure Blob container for params and results |
 
 ### Jira (all optional)
 
@@ -227,14 +228,15 @@ Active locks are never evicted — the lock manager allows temporary over-capaci
 
 ### Task Execution
 
-The service supports two execution backends controlled by `TASK_EXECUTOR`:
+The service supports three execution backends controlled by `TASK_EXECUTOR`:
 
 | Backend | How It Works | Use Case |
 |---------|-------------|----------|
 | `local` (default) | Runs Copilot CLI as a local subprocess | Development, single-node |
-| `kubernetes` | Spawns a Kubernetes Job per review | Production, multi-tenant |
+| `kubernetes` | Enqueues to Azure Storage Queue; KEDA ScaledJob triggers task runner pods | Production, self-hosted K8s |
+| `container_apps` | Enqueues to Azure Storage Queue; KEDA event trigger starts ACA Job executions | Production, Azure-managed |
 
-When using Kubernetes execution, the pod boundary provides process isolation (see [ADR-0003](docs/adr/0003-kubernetes-migration-plan.md)). Configure with `K8S_*` environment variables above.
+All remote executors use the same Claim Check dispatch pattern: params blob + queue message → KEDA triggers job → task runner dequeues, executes, writes result blob → controller polls result.
 
 **Coding task reliability**:
 - Agent outputs structured JSON listing files intentionally changed (prevents accidental artifact commits)
@@ -373,7 +375,7 @@ The devcontainer includes everything needed for local k8s development:
 │                                                  │
 │  Docker-in-Docker daemon (persists across sleep)  │
 │  └── k3d cluster (k3s nodes as containers)        │
-│      └── Controller pod + Redis pod + Job pods    │
+│      └── Controller pod + Azurite pod + KEDA ScaledJob pods │
 └─────────────────────────────────────────────────┘
 ```
 

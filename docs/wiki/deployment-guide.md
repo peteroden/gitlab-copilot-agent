@@ -59,7 +59,11 @@ helm/gitlab-copilot-agent/
     ├── service.yaml        # Service (default: ClusterIP; LoadBalancer for k3d)
     ├── serviceaccount.yaml # K8s ServiceAccount
     ├── rbac.yaml           # Role + RoleBinding (Job management)
-    ├── redis.yaml          # Redis StatefulSet + Service
+    ├── azurite.yaml        # Azurite (Azure Storage emulator) Deployment + Service
+    ├── scaledjob.yaml      # KEDA ScaledJob (event-driven task runner)
+    ├── networkpolicy-controller.yaml  # Controller NetworkPolicy
+    ├── networkpolicy-job.yaml         # Job NetworkPolicy
+    ├── networkpolicy-azurite.yaml     # Azurite NetworkPolicy
     └── otel-collector.yaml # OTEL Collector DaemonSet
 ```
 
@@ -81,7 +85,7 @@ controller:
   port: 8000
   logLevel: info
   taskExecutor: kubernetes  # or "local"
-  stateBackend: redis        # or "memory"
+  dispatchBackend: azure_storage
   copilotModel: gpt-4
   copilotProviderType: ""    # "azure", "openai", or "" for Copilot
   copilotProviderBaseUrl: ""
@@ -91,20 +95,34 @@ controller:
     requests: { cpu: 100m, memory: 256Mi }
 ```
 
-**Redis** (optional):
+**Azurite** (Azure Storage emulator for K8s):
 ```yaml
-redis:
+azurite:
   enabled: true
-  image: { repository: redis, tag: "7-alpine" }
-  port: 6379
-  password: ""  # Leave empty to auto-generate a 32-char password
+  image: { repository: mcr.microsoft.com/azure-storage/azurite, tag: latest }
   resources:
     limits: { cpu: 250m, memory: 256Mi }
-    requests: { cpu: 50m, memory: 64Mi }
-  storage: 1Gi
+    requests: { cpu: 50m, memory: 128Mi }
+  persistence:
+    enabled: true
+    size: 1Gi
 ```
 
-> **Redis Authentication**: When deployed via Helm, Redis AUTH is always enabled. A 32-character random password is auto-generated and stored in the K8s Secret. The password persists across upgrades (Helm `lookup` reuses the existing Secret value). To set an explicit password, provide `redis.password` in your values.
+> **Azurite**: When enabled, the Helm chart deploys an Azurite pod and auto-generates the `AZURE_STORAGE_CONNECTION_STRING` in the K8s Secret. An init container on the controller creates the queue and blob container on first deploy. For production Azure, disable Azurite and set `AZURE_STORAGE_ACCOUNT_URL` + `AZURE_STORAGE_QUEUE_URL` (managed identity auth).
+
+**KEDA** (event-driven job scaling):
+```yaml
+keda:
+  enabled: true
+  pollingInterval: 10
+  maxReplicaCount: 10
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+  ttlSecondsAfterFinished: 300
+  queueName: task-queue
+```
+
+> **KEDA**: Requires the KEDA operator installed in the cluster (`helm install keda keda/keda`). The `scaledjob.yaml` template creates a ScaledJob that watches the Azure Storage Queue and triggers task runner Jobs when messages arrive.
 
 **Job Runner** (K8s executor only):
 ```yaml
@@ -220,8 +238,8 @@ terraform apply -var-file="dev.tfvars"
 | Azure Container Registry | Image storage |
 | Container Apps Environment | Managed runtime |
 | Controller Container App | Webhook/poller service |
-| Task Runner Job | Ephemeral task execution |
-| Azure Cache for Redis | State + result store (private endpoint) |
+| Task Runner Job | Ephemeral task execution (KEDA event trigger) |
+| Azure Storage Account | Task queue + result blobs (Claim Check dispatch) |
 | Key Vault | Secret storage (RBAC-enabled, private endpoint) |
 | Log Analytics | Centralized logging |
 | Application Insights | Traces + structured logs via managed OTLP agent |
@@ -410,23 +428,25 @@ readinessProbe:
 
 ---
 
-### Multi-Pod (RedisLock, RedisDedup)
+### Multi-Pod
 
 **Requirements**:
-- `STATE_BACKEND=redis`
-- `REDIS_URL` configured (Helm/self-hosted) **or** `REDIS_HOST` configured (Azure Entra ID auth)
-- Redis deployment (included in Helm chart, or Azure Cache for Redis)
+- `DISPATCH_BACKEND=azure_storage`
+- Azure Storage (Azurite for K8s local, Azure Storage Account for ACA/production)
+- KEDA operator installed (for K8s) or KEDA event trigger (for ACA)
 
 **Benefits**:
 - Horizontal scaling (multiple replicas)
-- High availability (pod failures don't lose state)
-- Webhook deduplication across pods
+- Event-driven job creation (KEDA watches queue)
+- No Redis dependency
 
 **Configuration**:
 ```yaml
 controller:
-  stateBackend: redis
-redis:
+  dispatchBackend: azure_storage
+azurite:
+  enabled: true  # For local K8s; disable for production Azure
+keda:
   enabled: true
 ```
 
@@ -446,7 +466,7 @@ helm upgrade copilot-agent helm/gitlab-copilot-agent \
 **GitLabPoller**:
 - No leader election (all pods poll independently)
 - Watermark in-memory (not shared)
-- Dedup via Redis prevents duplicate processing
+- Dedup via in-memory tracker (single-pod) prevents duplicate processing
 - Recommendation: Use single replica or implement leader election
 
 **JiraPoller**:
@@ -456,8 +476,8 @@ helm upgrade copilot-agent helm/gitlab-copilot-agent \
 
 **Webhook Handler**:
 - Fully stateless (scales horizontally)
-- ReviewedMRTracker per-pod (duplicates possible without Redis dedup)
-- Recommendation: Use Redis dedup for multi-pod
+- ReviewedMRTracker per-pod (duplicates possible in multi-pod without shared state)
+- Recommendation: Use single replica or implement leader election for multi-pod
 
 ---
 
@@ -472,9 +492,9 @@ helm upgrade copilot-agent helm/gitlab-copilot-agent \
 - Memory: 1Gi request/limit
 - Adjust based on repo size and Copilot session duration
 
-**Redis**:
+**Azurite** (Azure Storage emulator):
 - CPU: 50m request, 250m limit
-- Memory: 64Mi request, 256Mi limit
+- Memory: 128Mi request, 256Mi limit
 - Storage: 1Gi PVC
 
 **OTEL Collector** (if enabled):
@@ -537,10 +557,9 @@ kubectl get hpa -n default
 - `GITHUB_TOKEN`
 - `COPILOT_PROVIDER_API_KEY` (if BYOK)
 - `JIRA_API_TOKEN` (if Jira enabled)
-- `REDIS_PASSWORD` (auto-generated if not set via `redis.password`)
-- `REDIS_URL` (auto-generated with password embedded)
+- `AZURE_STORAGE_CONNECTION_STRING` (auto-generated when Azurite is enabled)
 
-**Job Pod Credentials**: When the K8s executor is used, Job pods receive sensitive env vars (`GITLAB_TOKEN`, `GITHUB_TOKEN`, `COPILOT_PROVIDER_API_KEY`, and `GITLAB_WEBHOOK_SECRET` if set) via `secretKeyRef` pointing to this Secret — not as plaintext. Only the tokens needed by Job pods are mounted; other secrets (Jira, etc.) are excluded.
+**Job Pod Credentials**: When the K8s executor is used, Job pods receive sensitive env vars (`GITLAB_TOKEN`, `GITHUB_TOKEN`, `COPILOT_PROVIDER_API_KEY`, `AZURE_STORAGE_CONNECTION_STRING`, and `GITLAB_WEBHOOK_SECRET` if set) via `secretKeyRef` pointing to this Secret — not as plaintext. Only the tokens needed by Job pods are mounted; other secrets (Jira, etc.) are excluded.
 
 **Base64 Encoding**: Handled automatically by Helm.
 
@@ -577,7 +596,7 @@ kubectl logs <pod-name> -n default
 
 **Common Causes**:
 - Missing env vars — the agent prints a human-friendly summary listing each missing variable and its description
-- Invalid REDIS_URL or unreachable REDIS_HOST
+- Invalid Azure Storage connection string or unreachable Azurite
 - Invalid configuration combination (e.g., no LLM auth, no ingestion path)
 
 ---
@@ -596,19 +615,19 @@ kubectl describe job <job-name> -n default
 
 ---
 
-### Redis Connection Errors
+### Azure Storage / Azurite Connection Errors
 
-**Check Redis Pod**:
+**Check Azurite Pod** (K8s local):
 ```bash
-kubectl get pod -l app=redis -n default
-kubectl logs <redis-pod> -n default
+kubectl get pod -l app.kubernetes.io/component=azurite -n default
+kubectl logs <azurite-pod> -n default
 ```
 
 **Test Connection**:
 ```bash
 kubectl exec -it <agent-pod> -n default -- sh
 # Inside pod:
-redis-cli -h redis-service ping
+curl -s http://azurite:10001/devstoreaccount1?comp=list
 ```
 
 ---
@@ -642,64 +661,56 @@ curl -X POST http://<external-ip>:8000/webhook \
 
 ## Production Recommendations
 
-1. **Use Redis**: Multi-pod requires shared state
+1. **Use Azure Storage Queue dispatch**: Event-driven KEDA scaling, no Redis dependency
 2. **Enable OTEL**: Observability critical for debugging
 3. **External Secrets**: AWS Secrets Manager, HashiCorp Vault
 4. **Ingress + TLS**: Use Ingress controller with cert-manager
 5. **Resource Quotas**: Limit Job pod resource consumption
-6. **Network Policies**: Restrict Redis access to agent pods ✅ (enabled by default in Helm chart)
+6. **Network Policies**: Restrict Azurite/Azure Storage access to agent pods ✅ (enabled by default in Helm chart)
 7. **Pod Security Standards**: Enforce restricted PSS
 8. **Image Scanning**: Scan images for vulnerabilities (Trivy, Snyk)
-9. **Backup Redis**: Persistent volume snapshots
+9. **Backup Azurite PVC**: Persistent volume snapshots (for local K8s)
 10. **Monitor Metrics**: Prometheus + Grafana dashboards
 
 ---
 
-## Redis Password Rotation
+## Azure Storage Connection String Rotation
 
-The Helm chart auto-generates a Redis password on first install and persists it in the K8s Secret. To rotate the password:
+When using Azurite for local K8s development, the connection string is the well-known Azurite dev key and does not require rotation. For production Azure Storage, rotate the storage account access key:
 
-### Option 1: Let Helm regenerate
-
-```bash
-# Delete the existing Secret (Helm will generate a new password on next upgrade)
-kubectl delete secret <release-name>-gitlab-copilot-agent -n <namespace>
-
-# Re-deploy (generates new password, restarts all pods)
-helm upgrade <release> helm/gitlab-copilot-agent -f values.yaml -n <namespace>
-```
-
-### Option 2: Set an explicit password
+### Option 1: Regenerate via Azure CLI
 
 ```bash
-helm upgrade <release> helm/gitlab-copilot-agent \
-  --set redis.password="$(openssl rand -base64 32)" \
-  -f values.yaml -n <namespace>
+az storage account keys renew --account-name <storage-account> --key primary
+# Update the K8s Secret with the new connection string
+kubectl create secret generic <release>-gitlab-copilot-agent \
+  --from-literal=AZURE_STORAGE_CONNECTION_STRING="<new-connection-string>" \
+  --dry-run=client -o yaml | kubectl apply -f -
+# Restart pods
+kubectl rollout restart deployment <release>-gitlab-copilot-agent
 ```
 
-### Option 3: Use External Secrets Operator
+### Option 2: Use managed identity (ACA)
 
-For production, manage `REDIS_PASSWORD` via your secrets manager (AWS Secrets Manager, HashiCorp Vault, etc.) and sync via External Secrets Operator. This supports automated rotation policies.
-
-> **Note**: After rotation, all pods (controller, Redis, and any running Jobs) must restart to pick up the new password. Helm upgrade handles controller and Redis automatically. In-flight Jobs will fail and be retried.
+For Azure Container Apps, use `AZURE_STORAGE_ACCOUNT_URL` + `AZURE_STORAGE_QUEUE_URL` with `DefaultAzureCredential` — no connection string to rotate.
 
 ---
 
 ## NetworkPolicies
 
-The Helm chart deploys three NetworkPolicies by default:
+The Helm chart deploys NetworkPolicies by default (when `networkPolicies.enabled=true`):
 
 ### Controller Pod
 - **Ingress**: Port 8000 (webhook endpoint)
-- **Egress**: GitLab API, Copilot API, Jira API, Redis (6379), K8s API, DNS, OTLP collector
+- **Egress**: GitLab API, Copilot API, Jira API, Azurite/Azure Storage, K8s API, DNS, OTLP collector
 
 ### Job Pods
 - **Ingress**: None (Jobs don't accept inbound connections)
-- **Egress**: GitLab API (clone), Copilot API, Redis (6379), DNS
+- **Egress**: GitLab API (clone), Copilot API, Azurite/Azure Storage, DNS
 
-### Redis Pod
-- **Ingress**: Port 6379 from controller and job pods only
-- **Egress**: None (Redis is receive-only)
+### Azurite Pod
+- **Ingress**: Ports 10000 (Blob), 10001 (Queue) from controller and job pods only
+- **Egress**: None (Azurite is receive-only)
 
 All policies use `app.kubernetes.io/instance` labels to scope access within a single Helm release, preventing cross-release access in shared namespaces.
 
@@ -741,7 +752,7 @@ jobs:
 
 - [ ] Health endpoint responding
 - [ ] Pod logs show no errors
-- [ ] Redis connected (if using redis backend)
+- [ ] Azurite/Azure Storage connected (if using azure_storage dispatch)
 - [ ] Jobs creating and completing successfully
 - [ ] OTEL metrics exported (if enabled)
 - [ ] Webhook endpoint accessible from GitLab

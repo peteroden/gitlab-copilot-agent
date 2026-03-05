@@ -21,11 +21,12 @@ graph TB
     end
 
     subgraph "Semi-Trusted State"
-        REDIS[(Redis<br/>Locks & Dedup)]
+        AZURE_STORAGE[(Azure Storage<br/>Queue + Blob)]
     end
 
-    subgraph "K8s Jobs (optional)"
-        K8SEXEC[k8s_executor.py]
+    subgraph "K8s / ACA Jobs (KEDA-triggered)"
+        K8SEXEC[k8s_executor.py / aca_executor.py]
+        KEDA[KEDA ScaledJob<br/>watches queue]
         JOB1[Job Pod 1<br/>Isolated Task]
         JOB2[Job Pod N<br/>Isolated Task]
     end
@@ -53,15 +54,17 @@ graph TB
     CODING --> GL
     CODING --> JIRA
 
-    EXEC -.->|Distributed Lock| REDIS
-    GLP -.->|Dedup Store| REDIS
+    EXEC -.->|Distributed Lock| AZURE_STORAGE
+    GLP -.->|Dedup Store| AZURE_STORAGE
     
-    EXEC -.->|task_executor=k8s| K8SEXEC
-    K8SEXEC --> JOB1
-    K8SEXEC --> JOB2
-    JOB1 -.->|Store CodingResult| REDIS
-    JOB2 -.->|Store CodingResult| REDIS
-    K8SEXEC -.->|Poll result| REDIS
+    EXEC -.->|task_executor=k8s/aca| K8SEXEC
+    K8SEXEC -.->|Enqueue task| AZURE_STORAGE
+    KEDA -.->|Watches queue| AZURE_STORAGE
+    KEDA -->|Triggers| JOB1
+    KEDA -->|Triggers| JOB2
+    JOB1 -.->|Store CodingResult blob| AZURE_STORAGE
+    JOB2 -.->|Store CodingResult blob| AZURE_STORAGE
+    K8SEXEC -.->|Poll result blob| AZURE_STORAGE
     K8SEXEC -.->|Read patch, apply via git| K8SEXEC
 
     ORCH --> REPO
@@ -74,7 +77,7 @@ graph TB
     classDef semi fill:#ffffcc
     class GL,JIRA,REPO,GHAPI untrusted
     class WH,GLP,JP,ORCH,CODING,EXEC,COPILOT,K8SEXEC trusted
-    class REDIS,JOB1,JOB2 semi
+    class AZURE_STORAGE,JOB1,JOB2 semi
 ```
 
 ## Component Layers
@@ -110,8 +113,8 @@ graph TB
 - **`repo_config.py`**: Discover repo-level skills, agents, instructions
 
 ### 6. State & Concurrency
-- **`concurrency.py`**: MemoryLock, MemoryDedup, ReviewedMRTracker, ProcessedIssueTracker
-- **`redis_state.py`**: RedisLock, RedisDedup (Redlock-style distributed locking)
+- **`concurrency.py`**: MemoryLock, MemoryDedup, ReviewedMRTracker, ProcessedIssueTracker, TaskQueue protocol, QueueMessage
+- **`azure_storage.py`**: AzureStorageTaskQueue (Claim Check dispatch via Azure Storage Queue + Blob), BlobResultStore (result read/write to Blob Storage)
 
 ### 7. Telemetry
 - **`telemetry.py`**: OTEL tracing, metrics, log export
@@ -135,7 +138,7 @@ graph TB
 | **opentelemetry-exporter-otlp-proto-grpc** | 1.30.0 | OTLP gRPC exporter |
 | **opentelemetry-instrumentation-fastapi** | 0.51b0 | FastAPI auto-instrumentation |
 | **opentelemetry-instrumentation-httpx** | 0.51b0 | HTTPX auto-instrumentation |
-| **redis[hiredis]** | ≥7.2.0 | Redis client with C parser |
+| **redis[hiredis]** | ≥7.2.0 | *(removed — Redis no longer used)* |
 | **kubernetes** | ≥28.1.0 | K8s Job API (optional) |
 
 **Runtime**: Python 3.12+, Node.js 22 (for Copilot CLI), Git CLI
@@ -170,23 +173,25 @@ graph TB
 │ │ - webhook endpoint               │ │
 │ │ - gitlab_poller (leader-elect)   │ │
 │ │ - jira_poller (leader-elect)     │ │
-│ │ - KubernetesTaskExecutor         │ │
+│ │ - K8s/ACA TaskExecutor           │ │
 │ └──────────────────────────────────┘ │
 └──────────────────────────────────────┘
          │         │
-         │         └──→ Redis (locks, dedup, results)
-         │
-         └──→ K8s Job API
+         │         └──→ Azure Storage (Queue + Blob)
+         │                    ▲
+         │               KEDA ScaledJob
+         │                    │
+         └──→ K8s/ACA Job (task_runner.py)
               ┌─────────────────┐
               │ Job: copilot-*  │
               │ task_runner.py  │
               └─────────────────┘
 ```
-- `task_executor=kubernetes`, `state_backend=redis`
-- Horizontal scaling: multiple replicas share Redis for coordination
-- Webhook processing: any pod can handle any webhook (Redis dedup)
-- Poller: single active instance per project set (implicit leader via watermark)
-- Task isolation: each review/coding task runs in an ephemeral Job pod
+- `task_executor=kubernetes` or `container_apps`, `dispatch_backend=azure_storage`
+- Controller enqueues tasks to Azure Storage Queue (Claim Check: params blob + queue message)
+- KEDA ScaledJob watches queue and triggers Job pods automatically
+- Task runner dequeues, executes, writes result blob; controller polls result blob
+- No direct Job creation by controller — KEDA handles lifecycle
 
 ## Trust Boundaries
 
@@ -206,10 +211,11 @@ graph TB
 - In-memory locks and dedup stores
 
 ### Semi-Trusted (Yellow Zone)
-- Redis state (distributed locks, dedup keys, Job results)
+- Azure Storage (Queue + Blob) — task dispatch, params, results
+- KEDA operator — watches queue, creates Job pods
 - K8s Job pods (isolated tasks, inherit limited service credentials)
 
-**Risk**: Redis compromise allows lock bypass, dedup poisoning, result tampering. K8s Job compromise allows credential theft (GITLAB_TOKEN for clone, GITHUB_TOKEN passed as env vars). **Mitigation**: Job pods have read-only clone access only (no git push), results validated (base_sha check, patch validation) before apply. Only controller has git push and API write access.
+**Risk**: Azure Storage compromise allows result tampering or dispatch poisoning. K8s Job compromise allows credential theft (GITLAB_TOKEN for clone, GITHUB_TOKEN passed as env vars). **Mitigation**: Job pods have read-only clone access only (no git push), results validated (base_sha check, patch validation) before apply. Only controller has git push and API write access.
 
 ### Network Boundaries
 
@@ -219,10 +225,10 @@ graph TB
 | Service | GitLab API | HTTPS | Bearer token | Trusted → Untrusted |
 | Service | Jira API | HTTPS | Basic (email:token) | Trusted → Untrusted |
 | Service | Copilot API | HTTPS | GitHub token or BYOK key | Trusted → Semi-trusted |
-| Service | Redis | Redis protocol | None (in-cluster) | Trusted → Semi-trusted |
+| Service | Azure Storage | HTTPS/HTTP | Connection string or MI | Trusted → Semi-trusted |
 | Service | K8s API | HTTPS | ServiceAccount token | Trusted → Semi-trusted |
 | K8s Job | GitLab API | HTTPS | Inherited token | Semi-trusted → Untrusted |
-| K8s Job | Redis | Redis protocol | None (in-cluster) | Semi-trusted → Semi-trusted |
+| K8s Job | Azure Storage | HTTPS/HTTP | Connection string | Semi-trusted → Semi-trusted |
 
 ---
 
@@ -231,4 +237,4 @@ graph TB
 2. GitLab API token (compromise → repo write access, webhook replay)
 3. Copilot SDK subprocess (env vars visible to same UID, no further isolation)
 4. K8s Job credentials (GITLAB_TOKEN, GITHUB_TOKEN in pod env)
-5. Redis (no auth → lock bypass, result tampering)
+5. Azure Storage (connection string exposure → dispatch tampering, result poisoning)
