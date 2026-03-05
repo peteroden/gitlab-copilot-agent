@@ -54,6 +54,9 @@ jira:
   inReviewStatus: "In Review"
   pollInterval: 30
 extraEnv: {}
+  # Tunable env vars via extraEnv:
+  #   QUEUE_VISIBILITY_BUFFER: "60"  # seconds added to job timeout for queue message visibility (default: 60)
+clusterDomain: cluster.local
 hostAliases: []
 networkPolicies:
   # Set to true if your CNI supports NetworkPolicy (Calico, Cilium, Weave, etc.)

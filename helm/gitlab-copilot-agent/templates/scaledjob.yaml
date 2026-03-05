@@ -66,7 +66,7 @@ spec:
         queueLength: "1"
         accountName: devstoreaccount1
         cloud: Private
-        endpointSuffix: "{{ include "app.fullname" . }}-azurite.{{ .Release.Namespace }}.svc.cluster.local:10001"
+        endpointSuffix: "{{ include "app.fullname" . }}-azurite.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}:10001"
       authenticationRef:
         name: {{ include "app.fullname" . }}-azurite-auth
 {{- end }}

@@ -91,7 +91,9 @@ async def _dequeue_task() -> tuple[dict[str, str], QueueMessage, TaskQueue] | No
         task_queue_name=settings.task_queue_name,
         task_blob_container=settings.task_blob_container,
     )
-    msg = await queue.dequeue(visibility_timeout=600)
+    msg = await queue.dequeue(
+        visibility_timeout=settings.k8s_job_timeout + settings.queue_visibility_buffer,
+    )
     if msg is None:
         await log.ainfo("dequeue_empty")
         await queue.aclose()

@@ -51,7 +51,7 @@ class KubernetesTaskExecutor:
         import json as _json
 
         # Idempotency: skip enqueue if task is already in-flight
-        lock_key = f"aca_exec:{task.task_id}"
+        lock_key = f"k8s_exec:{task.task_id}"
         existing_lock = await self._store.get(lock_key)
         if existing_lock is not None:
             try:

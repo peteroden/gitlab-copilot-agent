@@ -314,6 +314,12 @@ class TaskRunnerSettings(BaseSettings):
     task_queue_name: str = Field(default="task-queue", description="Queue name")
     task_blob_container: str = Field(default="task-data", description="Blob container name")
 
+    # Job timeout (must match controller's k8s_job_timeout for visibility calculation)
+    k8s_job_timeout: int = Field(default=600, description="Job timeout in seconds")
+    queue_visibility_buffer: int = Field(
+        default=60, description="Extra seconds added to job timeout for queue visibility"
+    )
+
     @model_validator(mode="after")
     def _check_auth(self) -> "TaskRunnerSettings":
         if not self.github_token and not self.copilot_provider_type:
