@@ -4,6 +4,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      docker-base-images:
+        patterns:
+          - "*"
     ignore:
       # Node 22 is LTS (active until 2027-04). Only allow digest/patch updates.
       - dependency-name: "node"
@@ -11,7 +15,34 @@ updates:
       # Python 3.12 is stable. Only allow digest/patch updates within 3.12.x.
       - dependency-name: "python"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      opentelemetry:
+        patterns:
+          - "opentelemetry-*"
+      azure:
+        patterns:
+          - "azure-*"
+      pydantic:
+        patterns:
+          - "pydantic"
+          - "pydantic-settings"
+      web-framework:
+        patterns:
+          - "fastapi"
+          - "uvicorn"
+          - "httpx"
+      dev-tools:
+        patterns:
+          - "pytest*"
+          - "mypy"
+          - "ruff"
+          - "playwright"
+          - "pytest-cov"
+      python-all-other:
+        patterns:
+          - "*"

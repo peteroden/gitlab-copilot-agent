@@ -302,6 +302,22 @@ devcontainer exec --workspace-folder . uv run ruff check src/ tests/
 devcontainer exec --workspace-folder . uv run mypy src/
 ```
 
+### Dependency Management
+
+Dependabot monitors two ecosystems: **Docker** base images and **Python** (pip) packages. Updates are grouped into logical batches to reduce PR noise:
+
+| Group | Packages |
+|-------|----------|
+| `docker-base-images` | node, python base images |
+| `opentelemetry` | All `opentelemetry-*` (lockstep releases) |
+| `azure` | `azure-*` SDK packages |
+| `pydantic` | `pydantic`, `pydantic-settings` |
+| `web-framework` | `fastapi`, `uvicorn`, `httpx` |
+| `dev-tools` | `pytest*`, `mypy`, `ruff`, `playwright`, `pytest-cov` |
+| `python-all-other` | Everything else (catch-all) |
+
+**Auto-merge** is enabled for patch and minor updates after CI passes. Major updates and pre-1.0 packages (`github-copilot-sdk`) require manual review. See `.github/workflows/dependabot-auto-merge.yml`.
+
 ### E2E Tests
 
 End-to-end tests deploy the agent to k3d and test three flows against host-side mock services. Prerequisites: Docker, Make, k3d, kubectl.
