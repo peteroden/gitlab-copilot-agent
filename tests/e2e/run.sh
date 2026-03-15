@@ -221,24 +221,28 @@ POD=$(kubectl get pods -l app.kubernetes.io/component=controller -o name | head 
 if [ -z "$POD" ]; then
     echo " ⚠️ skipped (no controller pod found)"
 else
+    # Record restart count before SIGTERM
+    RESTARTS_BEFORE=$(kubectl get "$POD" -o jsonpath='{.status.containerStatuses[?(@.name=="controller")].restartCount}' 2>/dev/null || echo "0")
     kubectl exec "$POD" -c controller -- kill -TERM 1 2>/dev/null || true
     echo " ✅ (sent)"
 
-    echo -n "Waiting for shutdown logs..."
-    sleep 5
-    LOGS=$(kubectl logs "$POD" -c controller --tail=30 2>/dev/null || echo "")
-    HAS_SHUTDOWN=$(echo "$LOGS" | grep -c "shutdown_complete" || true)
-    [ "$HAS_SHUTDOWN" -gt 0 ] && echo " ✅" || echo " ⚠️ (shutdown_complete not found — pod may have terminated)"
-
-    echo -n "Checking pod terminates cleanly..."
-    for i in $(seq 1 20); do
-        PHASE=$(kubectl get "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || echo "gone")
-        if [ "$PHASE" = "gone" ] || [ "$PHASE" = "Succeeded" ] || [ "$PHASE" = "Failed" ]; then
-            echo " ✅ (phase=$PHASE)"; break
+    echo -n "Waiting for container restart..."
+    # Pod stays Running (Deployment restart policy) but container restarts.
+    # Verify restart count increases, proving the process exited.
+    for i in $(seq 1 30); do
+        RESTARTS_AFTER=$(kubectl get "$POD" -o jsonpath='{.status.containerStatuses[?(@.name=="controller")].restartCount}' 2>/dev/null || echo "$RESTARTS_BEFORE")
+        if [ "$RESTARTS_AFTER" -gt "$RESTARTS_BEFORE" ] 2>/dev/null; then
+            echo " ✅ (restarts: $RESTARTS_BEFORE → $RESTARTS_AFTER)"
+            break
         fi
-        [ "$i" -eq 20 ] && { echo " ❌ pod still running"; exit 1; }
+        [ "$i" -eq 30 ] && { echo " ❌ container did not restart (restarts still $RESTARTS_AFTER)"; exit 1; }
         sleep 2; echo -n "."
     done
+
+    echo -n "Checking previous container logs for shutdown..."
+    PREV_LOGS=$(kubectl logs "$POD" -c controller --previous --tail=30 2>/dev/null || echo "")
+    HAS_SHUTDOWN=$(echo "$PREV_LOGS" | grep -c "shutdown_complete" || true)
+    [ "$HAS_SHUTDOWN" -gt 0 ] && echo " ✅" || echo " ⚠️ (shutdown_complete not found — process may have exited before flush)"
 fi
 
 echo ""; echo "=== ALL E2E TESTS PASSED ==="
