@@ -160,6 +160,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     poller: JiraPoller | None = None
     gl_poller: GitLabPoller | None = None
     jira_client: JiraClient | None = None
+    project_registry: ProjectRegistry | None = None
     if settings.jira:
         jira_client = JiraClient(settings.jira.url, settings.jira.email, settings.jira.api_token)
         rendered = RenderedMap.model_validate_json(settings.jira.project_map_json)
@@ -182,6 +183,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.jira_poller = poller
         await log.ainfo("jira_poller_started", interval=settings.jira.poll_interval)
 
+    app.state.project_registry = project_registry
+
     if settings.gitlab_poll and allowed_project_ids:
         gl_client_poll = GitLabClient(settings.gitlab_url, settings.gitlab_token)
         gl_poller = GitLabPoller(
@@ -191,6 +194,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             dedup=dedup_store,
             executor=app.state.executor,
             repo_locks=repo_locks,
+            project_registry=project_registry,
         )
         gl_poller._interval = settings.gitlab_poll_interval
         await gl_poller.start()
@@ -282,6 +286,11 @@ async def config_reload(
         await log.aerror("config_reload_failed", error=str(exc))
         return {"status": "error", "detail": "Invalid configuration — check server logs"}
     await poller.reload_registry(registry)
+    app.state.project_registry = registry
+    gl_poller: GitLabPoller | None = getattr(app.state, "gl_poller", None)
+    if gl_poller is not None:
+        gl_poller._project_registry = registry
+        gl_poller._project_clients.clear()
     return {
         "status": "ok",
         "jira_keys": sorted(registry.jira_keys()),

@@ -127,6 +127,8 @@ async def test_reload_endpoint_returns_keys(
     assert data["status"] == "ok"
     assert "PROJ" in data["jira_keys"]
     mock_poller.reload_registry.assert_awaited_once()
+    # Verify app.state.project_registry was also updated
+    assert app.state.project_registry is not None
 
 
 async def test_reload_endpoint_rejects_unauthenticated(

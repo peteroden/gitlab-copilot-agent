@@ -53,6 +53,7 @@ async def handle_copilot_comment(
     payload: NoteWebhookPayload,
     executor: TaskExecutor,
     repo_locks: DistributedLock | None = None,
+    project_token: str | None = None,
 ) -> None:
     """Handle a /copilot command from an MR comment."""
     mr = payload.merge_request
@@ -67,7 +68,8 @@ async def handle_copilot_comment(
         bound_log = log.bind(project_id=project.id, mr_iid=mr.iid)
         await bound_log.ainfo("copilot_command_received", instruction=instruction[:100])
 
-        gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
+        token = project_token or settings.gitlab_token
+        gl_client = GitLabClient(settings.gitlab_url, token)
         repo_path: Path | None = None
 
         async def _execute() -> None:
@@ -76,7 +78,7 @@ async def handle_copilot_comment(
                 repo_path = await git_clone(
                     project.git_http_url,
                     mr.source_branch,
-                    settings.gitlab_token,
+                    token,
                     clone_dir=settings.clone_dir,
                 )
                 task = TaskParams(
@@ -99,7 +101,7 @@ async def handle_copilot_comment(
                     repo_path, f"fix: {instruction[:50]}", AGENT_AUTHOR_NAME, AGENT_AUTHOR_EMAIL
                 )
                 if has_changes:
-                    await git_push(repo_path, "origin", mr.source_branch, settings.gitlab_token)
+                    await git_push(repo_path, "origin", mr.source_branch, token)
                     await gl_client.post_mr_comment(
                         project.id, mr.iid, f"✅ Changes pushed.\n\n{result.summary}"
                     )

@@ -10,6 +10,7 @@ import pytest
 from gitlab_copilot_agent.concurrency import MemoryDedup
 from gitlab_copilot_agent.gitlab_client import MRAuthor, MRListItem, NoteListItem
 from gitlab_copilot_agent.gitlab_poller import GitLabPoller
+from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
 from tests.conftest import GITLAB_URL, MR_IID, PROJECT_ID, make_settings
 
 # -- Constants --
@@ -20,6 +21,7 @@ MR_AUTHOR = MRAuthor(id=99, username="dev")
 NOTE_AUTHOR = MRAuthor(id=42, username="reviewer")
 NOTE_ID = 777
 COPILOT_BODY = "/copilot review this"
+PER_PROJECT_TOKEN = "project-specific-token"
 _HANDLE_REVIEW = "gitlab_copilot_agent.gitlab_poller.handle_review"
 _HANDLE_COMMENT = "gitlab_copilot_agent.gitlab_poller.handle_copilot_comment"
 
@@ -244,3 +246,88 @@ async def test_start_initializes_watermark() -> None:
     await poller.start()
     assert poller._watermark is not None
     await poller.stop()
+
+
+# -- Per-project credential tests --
+
+
+def _make_project_registry(project_id: int = PROJECT_ID) -> ProjectRegistry:
+    return ProjectRegistry(
+        [
+            ResolvedProject(
+                jira_project="PROJ",
+                repo=PATH_WITH_NS,
+                gitlab_project_id=project_id,
+                clone_url=f"{GITLAB_URL}/{PATH_WITH_NS}.git",
+                target_branch="main",
+                credential_ref="default",
+                token=PER_PROJECT_TOKEN,
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@patch(_HANDLE_REVIEW, new_callable=AsyncMock)
+async def test_poll_passes_per_project_token_to_review(mock_hr: AsyncMock) -> None:
+    """Poller passes per-project token from registry to handle_review."""
+    registry = _make_project_registry()
+    poller, cl, _ = _poller()
+    poller._project_registry = registry
+    # Pre-populate client cache so no real GitLabClient is created
+    poller._project_clients["default"] = cl
+    cl.list_project_mrs.return_value = [_mr_item()]
+    await poller._poll_once()
+    mock_hr.assert_called_once()
+    _, kwargs = mock_hr.call_args
+    assert kwargs["project_token"] == PER_PROJECT_TOKEN
+
+
+@pytest.mark.asyncio
+@patch(_HANDLE_REVIEW, new_callable=AsyncMock)
+async def test_poll_falls_back_to_none_when_not_in_registry(mock_hr: AsyncMock) -> None:
+    """Poller passes None token when project not in registry (global fallback)."""
+    registry = _make_project_registry(project_id=9999)
+    poller, cl, _ = _poller()
+    poller._project_registry = registry
+    cl.list_project_mrs.return_value = [_mr_item()]
+    await poller._poll_once()
+    mock_hr.assert_called_once()
+    _, kwargs = mock_hr.call_args
+    assert kwargs["project_token"] is None
+
+
+@pytest.mark.asyncio
+@patch(_HANDLE_COMMENT, new_callable=AsyncMock)
+@patch(_HANDLE_REVIEW, new_callable=AsyncMock)
+async def test_poll_passes_per_project_token_to_comment_handler(
+    mock_hr: AsyncMock, mock_hc: AsyncMock
+) -> None:
+    """Poller passes per-project token from registry to handle_copilot_comment."""
+    registry = _make_project_registry()
+    poller, cl, _ = _poller()
+    poller._project_registry = registry
+    poller._project_clients["default"] = cl
+    cl.list_project_mrs.return_value = [_mr_item()]
+    cl.list_mr_notes.return_value = [_note_item()]
+    await poller._poll_once()
+    mock_hc.assert_called_once()
+    _, kwargs = mock_hc.call_args
+    assert kwargs["project_token"] == PER_PROJECT_TOKEN
+
+
+@pytest.mark.asyncio
+@patch(_HANDLE_REVIEW, new_callable=AsyncMock)
+async def test_poll_uses_per_project_client_for_discovery(mock_hr: AsyncMock) -> None:
+    """Poller uses per-project client for MR discovery, not the default client."""
+    registry = _make_project_registry()
+    poller, default_cl, _ = _poller()
+    poller._project_registry = registry
+    project_cl = AsyncMock()
+    project_cl.list_project_mrs.return_value = [_mr_item()]
+    project_cl.list_mr_notes.return_value = []
+    poller._project_clients["default"] = project_cl
+    await poller._poll_once()
+    # Per-project client used for discovery, not the default
+    project_cl.list_project_mrs.assert_called_once()
+    default_cl.list_project_mrs.assert_not_called()

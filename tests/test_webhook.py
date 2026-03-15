@@ -7,9 +7,22 @@ import pytest
 from httpx import AsyncClient
 
 from gitlab_copilot_agent.main import app
-from tests.conftest import HEADERS, MR_IID, MR_PAYLOAD, PROJECT_ID, make_mr_payload, make_settings
+from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
+from tests.conftest import (
+    GITLAB_TOKEN,
+    GITLAB_URL,
+    HEADERS,
+    MR_IID,
+    MR_PAYLOAD,
+    PROJECT_ID,
+    make_mr_payload,
+    make_settings,
+)
 
 NON_ALLOWED_PROJECT_ID = 999
+
+# Per-project credential constants
+PER_PROJECT_TOKEN = "project-specific-token"
 
 
 @pytest.mark.parametrize("token", [None, "wrong-token"])
@@ -208,3 +221,87 @@ async def test_webhook_rejects_when_project_not_in_allowlist(client: AsyncClient
         assert resp.json() == {"status": "ignored", "reason": "project not in allowlist"}
     finally:
         app.state.allowed_project_ids = None
+
+
+# -- Per-project credential tests --
+
+
+def _make_project_registry(project_id: int = PROJECT_ID) -> ProjectRegistry:
+    return ProjectRegistry(
+        [
+            ResolvedProject(
+                jira_project="PROJ",
+                repo="group/project",
+                gitlab_project_id=project_id,
+                clone_url=f"{GITLAB_URL}/group/project.git",
+                target_branch="main",
+                credential_ref="default",
+                token=PER_PROJECT_TOKEN,
+            )
+        ]
+    )
+
+
+async def test_webhook_review_uses_per_project_token(client: AsyncClient) -> None:
+    """MR review resolves per-project token from registry."""
+    app.state.project_registry = _make_project_registry()
+    mock_handle = AsyncMock()
+    try:
+        with patch("gitlab_copilot_agent.webhook.handle_review", mock_handle):
+            resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+            assert resp.json() == {"status": "queued"}
+            await asyncio.sleep(0.1)
+
+        mock_handle.assert_awaited_once()
+        _, kwargs = mock_handle.call_args
+        assert kwargs["project_token"] == PER_PROJECT_TOKEN
+    finally:
+        app.state.project_registry = None
+
+
+async def test_webhook_review_falls_back_to_global_token(client: AsyncClient) -> None:
+    """MR review falls back to global token when project not in registry."""
+    app.state.project_registry = _make_project_registry(project_id=9999)
+    mock_handle = AsyncMock()
+    try:
+        with patch("gitlab_copilot_agent.webhook.handle_review", mock_handle):
+            resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+            assert resp.json() == {"status": "queued"}
+            await asyncio.sleep(0.1)
+
+        mock_handle.assert_awaited_once()
+        _, kwargs = mock_handle.call_args
+        assert kwargs["project_token"] == GITLAB_TOKEN
+    finally:
+        app.state.project_registry = None
+
+
+async def test_webhook_copilot_uses_per_project_token(client: AsyncClient) -> None:
+    """Copilot comment resolves per-project token from registry."""
+    app.state.project_registry = _make_project_registry()
+    mock_handle = AsyncMock()
+    try:
+        with patch("gitlab_copilot_agent.webhook.handle_copilot_comment", mock_handle):
+            resp = await client.post("/webhook", json=_note_body(), headers=HEADERS)
+            assert resp.json() == {"status": "queued"}
+            await asyncio.sleep(0.1)
+
+        mock_handle.assert_awaited_once()
+        _, kwargs = mock_handle.call_args
+        assert kwargs["project_token"] == PER_PROJECT_TOKEN
+    finally:
+        app.state.project_registry = None
+
+
+async def test_webhook_review_works_without_registry(client: AsyncClient) -> None:
+    """MR review works when no project registry is configured."""
+    assert app.state.project_registry is None
+    mock_handle = AsyncMock()
+    with patch("gitlab_copilot_agent.webhook.handle_review", mock_handle):
+        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+        assert resp.json() == {"status": "queued"}
+        await asyncio.sleep(0.1)
+
+    mock_handle.assert_awaited_once()
+    _, kwargs = mock_handle.call_args
+    assert kwargs["project_token"] == GITLAB_TOKEN

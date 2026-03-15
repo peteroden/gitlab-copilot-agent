@@ -10,12 +10,33 @@ from gitlab_copilot_agent.metrics import webhook_errors_total, webhook_received_
 from gitlab_copilot_agent.models import MergeRequestWebhookPayload, NoteWebhookPayload
 from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
 from gitlab_copilot_agent.orchestrator import handle_review
+from gitlab_copilot_agent.project_registry import ProjectRegistry
 
 log = structlog.get_logger()
 
 router = APIRouter()
 
 HANDLED_ACTIONS = frozenset({"open", "update"})
+
+
+def _resolve_project_token(
+    project_id: int,
+    registry: ProjectRegistry | None,
+    fallback_token: str,
+) -> str:
+    """Return per-project token from registry, or fall back to global token."""
+    if registry is not None:
+        resolved = registry.get_by_project_id(project_id)
+        if resolved is not None:
+            log.info(
+                "credential_resolved",
+                project_id=project_id,
+                credential_ref=resolved.credential_ref,
+                source="project_registry",
+            )
+            return resolved.token
+    log.info("credential_resolved", project_id=project_id, source="global_fallback")
+    return fallback_token
 
 
 def _validate_webhook_token(received: str | None, expected: str | None) -> None:
@@ -30,13 +51,15 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
     settings = request.app.state.settings
     executor = request.app.state.executor
     review_tracker: ReviewedMRTracker = request.app.state.review_tracker
+    registry: ProjectRegistry | None = getattr(request.app.state, "project_registry", None)
     mr = payload.object_attributes
     project_id = payload.project.id
     head_sha = mr.last_commit.id
+    project_token = _resolve_project_token(project_id, registry, settings.gitlab_token)
     bound = log.bind(project_id=project_id, mr_iid=mr.iid, head_sha=head_sha)
     bound.info("background_review_starting")
     try:
-        await handle_review(settings, payload, executor)
+        await handle_review(settings, payload, executor, project_token=project_token)
         review_tracker.mark(project_id, mr.iid, head_sha)
         bound.info("background_review_completed")
     except Exception:
@@ -48,6 +71,8 @@ async def _process_copilot_comment(request: Request, payload: NoteWebhookPayload
     settings = request.app.state.settings
     executor = request.app.state.executor
     repo_locks = request.app.state.repo_locks
+    registry: ProjectRegistry | None = getattr(request.app.state, "project_registry", None)
+    project_token = _resolve_project_token(payload.project.id, registry, settings.gitlab_token)
     bound = log.bind(
         project_id=payload.project.id,
         mr_iid=payload.merge_request.iid if payload.merge_request else None,
@@ -55,7 +80,9 @@ async def _process_copilot_comment(request: Request, payload: NoteWebhookPayload
     )
     bound.info("background_copilot_comment_starting")
     try:
-        await handle_copilot_comment(settings, payload, executor, repo_locks)
+        await handle_copilot_comment(
+            settings, payload, executor, repo_locks, project_token=project_token
+        )
         bound.info("background_copilot_comment_completed")
     except Exception:
         webhook_errors_total.add(1, {"handler": "copilot_comment"})
