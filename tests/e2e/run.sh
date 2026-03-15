@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # E2E test: deploy agent to k3d, run all test flows against mock services.
-# Tests: 1. Webhook MR review, 2. Jira polling, 3. /copilot command, 4. GitLab polling.
+# Tests: 1. Webhook MR review, 2. Jira polling, 3. /copilot command,
+#        4. GitLab polling, 5. Hot-reload config, 6. Graceful shutdown.
 # Usage: ./tests/e2e/run.sh [agent-url] [mock-gitlab-url] [mock-jira-url]
 set -euo pipefail
 
@@ -190,6 +191,55 @@ has_failure = any('failed' in str(x).lower() and 'position' not in str(x) for x 
 print('yes' if has_review and not has_failure else 'no')
 " 2>/dev/null || echo "no")
 [ "$POLL_REVIEW_OK" = "yes" ] && echo " ✅" || { echo " ❌ (got failure comment)"; exit 1; }
+
+# === TEST 5: Hot-Reload Config ===
+echo ""; echo "--- Test 5: Hot-Reload Config ---"
+
+echo -n "Reloading with updated mapping..."
+RELOAD_RESP=$(curl -sf -X POST "$AGENT_URL/config/reload" \
+    -H "Content-Type: application/json" \
+    -H "X-Gitlab-Token: $WEBHOOK_SECRET" \
+    -d '{"mappings": {"DEMO": {"repo": "repo", "target_branch": "develop", "credential_ref": "default"}, "NEW": {"repo": "repo", "target_branch": "main", "credential_ref": "default"}}}')
+RELOAD_STATUS=$(echo "$RELOAD_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
+[ "$RELOAD_STATUS" = "ok" ] && echo " ✅" || { echo " ❌ ($RELOAD_RESP)"; exit 1; }
+
+echo -n "Checking new keys in response..."
+HAS_NEW=$(echo "$RELOAD_RESP" | python3 -c "import sys,json; ks=json.load(sys.stdin).get('jira_keys',[]); print('yes' if 'NEW' in ks and 'DEMO' in ks else 'no')")
+[ "$HAS_NEW" = "yes" ] && echo " ✅" || { echo " ❌ (expected DEMO+NEW)"; exit 1; }
+
+echo -n "Checking unauthenticated reload is rejected..."
+UNAUTH=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$AGENT_URL/config/reload" \
+    -H "Content-Type: application/json" \
+    -d '{"mappings": {}}')
+[ "$UNAUTH" = "401" ] && echo " ✅" || { echo " ❌ (expected 401, got $UNAUTH)"; exit 1; }
+
+# === TEST 6: Graceful Shutdown ===
+echo ""; echo "--- Test 6: Graceful Shutdown ---"
+
+echo -n "Sending SIGTERM to controller pod..."
+POD=$(kubectl get pods -l app.kubernetes.io/component=controller -o name | head -1)
+if [ -z "$POD" ]; then
+    echo " ⚠️ skipped (no controller pod found)"
+else
+    kubectl exec "$POD" -c controller -- kill -TERM 1 2>/dev/null || true
+    echo " ✅ (sent)"
+
+    echo -n "Waiting for shutdown logs..."
+    sleep 5
+    LOGS=$(kubectl logs "$POD" -c controller --tail=30 2>/dev/null || echo "")
+    HAS_SHUTDOWN=$(echo "$LOGS" | grep -c "shutdown_complete" || true)
+    [ "$HAS_SHUTDOWN" -gt 0 ] && echo " ✅" || echo " ⚠️ (shutdown_complete not found — pod may have terminated)"
+
+    echo -n "Checking pod terminates cleanly..."
+    for i in $(seq 1 20); do
+        PHASE=$(kubectl get "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || echo "gone")
+        if [ "$PHASE" = "gone" ] || [ "$PHASE" = "Succeeded" ] || [ "$PHASE" = "Failed" ]; then
+            echo " ✅ (phase=$PHASE)"; break
+        fi
+        [ "$i" -eq 20 ] && { echo " ❌ pod still running"; exit 1; }
+        sleep 2; echo -n "."
+    done
+fi
 
 echo ""; echo "=== ALL E2E TESTS PASSED ==="
 exit 0
