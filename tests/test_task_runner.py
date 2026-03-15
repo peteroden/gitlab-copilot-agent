@@ -6,8 +6,6 @@ import pytest
 
 from gitlab_copilot_agent.coding_engine import parse_agent_output
 from gitlab_copilot_agent.task_runner import (
-    ENV_BRANCH,
-    ENV_REPO_URL,
     ENV_TASK_ID,
     ENV_TASK_PAYLOAD,
     ENV_TASK_TYPE,
@@ -17,14 +15,11 @@ from gitlab_copilot_agent.task_runner import (
     _get_required_env,
     _parse_task_payload,
     _store_result,
-    _validate_repo_url,
     run_task,
 )
-from tests.conftest import EXAMPLE_CLONE_URL, GITLAB_URL
 
 TASK_ID = "task-001"
 PAYLOAD = json.dumps({"prompt": "Review this"})
-BAD_HOST = "https://evil.example.com/g/r.git"
 _M = "gitlab_copilot_agent.task_runner"
 
 
@@ -33,8 +28,6 @@ def task_env(env_vars: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Set task-runner env vars on top of the base env_vars fixture."""
     monkeypatch.setenv(ENV_TASK_TYPE, "review")
     monkeypatch.setenv(ENV_TASK_ID, TASK_ID)
-    monkeypatch.setenv(ENV_REPO_URL, EXAMPLE_CLONE_URL)
-    monkeypatch.setenv(ENV_BRANCH, "feat/x")
     monkeypatch.setenv(ENV_TASK_PAYLOAD, PAYLOAD)
 
 
@@ -57,30 +50,40 @@ class TestHelpers:
         with pytest.raises(RuntimeError, match=match):
             _parse_task_payload(raw)
 
-    @pytest.mark.parametrize("url", [EXAMPLE_CLONE_URL, "https://GitLab.Example.COM/g/r.git"])
-    def test_validate_url_ok(self, url: str) -> None:
-        _validate_repo_url(url, GITLAB_URL)
 
-    def test_validate_url_rejects_different_port(self) -> None:
-        with pytest.raises(RuntimeError, match="does not match"):
-            _validate_repo_url("https://gitlab.example.com:8443/g/r.git", GITLAB_URL)
+REPO_BLOB_KEY = "repos/task-001.tar.gz"
+QUEUE_PARAMS = {
+    "task_type": "review",
+    "task_id": TASK_ID,
+    "repo_blob_key": REPO_BLOB_KEY,
+    "user_prompt": "Review this",
+}
 
-    def test_validate_url_rejects_scheme_mismatch(self) -> None:
-        with pytest.raises(RuntimeError, match="does not match"):
-            _validate_repo_url("http://gitlab.example.com/g/r.git", GITLAB_URL)
 
-    @pytest.mark.parametrize(("url", "match"), [(BAD_HOST, "does not match"), ("x", "no host")])
-    def test_validate_url_fail(self, url: str, match: str) -> None:
-        with pytest.raises(RuntimeError, match=match):
-            _validate_repo_url(url, GITLAB_URL)
+def _make_queue_result(
+    params: dict[str, str] | None = None,
+) -> tuple[dict[str, str], MagicMock, MagicMock]:
+    """Build a (params, queue_msg, task_queue) tuple for _dequeue_task mocks."""
+    from gitlab_copilot_agent.concurrency import QueueMessage
+
+    p = params or QUEUE_PARAMS
+    msg = QueueMessage(
+        message_id="m1", receipt="r1", task_id=p["task_id"], payload=json.dumps(p), dequeue_count=1
+    )
+    queue = MagicMock()
+    queue.complete = AsyncMock()
+    queue.download_blob = AsyncMock(return_value=b"fake-tarball")
+    queue.aclose = AsyncMock()
+    return p, msg, queue
 
 
 class TestRunTask:
     async def test_ok(self, task_env: None) -> None:
         fp = Path("/tmp/fake")
+        qr = _make_queue_result()
         with (
-            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
-            patch(f"{_M}.git_clone", AsyncMock(return_value=fp)),
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=qr)),
+            patch(f"{_M}.extract_repo_tarball", AsyncMock(return_value=fp)),
             patch(f"{_M}.run_copilot_session", AsyncMock(return_value="done")),
             patch(f"{_M}._store_result", AsyncMock()) as store,
             patch(f"{_M}.shutil.rmtree") as rm,
@@ -99,26 +102,38 @@ class TestRunTask:
         with patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)):
             assert await run_task() == 1
 
-    async def test_url_mismatch(self, task_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv(ENV_REPO_URL, BAD_HOST)
-        with (
-            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
-            patch(f"{_M}._store_result", AsyncMock()) as store,
-        ):
+    async def test_missing_blob_key_returns_error(self, task_env: None) -> None:
+        """Review/coding tasks without repo_blob_key return error and close queue."""
+        params = {**QUEUE_PARAMS, "repo_blob_key": None}
+        _, msg, queue = _make_queue_result(params)
+        qr = (params, msg, queue)
+        with patch(f"{_M}._dequeue_task", AsyncMock(return_value=qr)):
             assert await run_task() == 1
-            store.assert_awaited_once()
-            stored = json.loads(store.call_args[0][1])
-            assert stored["result_type"] == "error"
-            assert "does not match" in stored["summary"]
+        queue.aclose.assert_awaited_once()
+
+    async def test_env_path_without_queue_returns_error(self, task_env: None) -> None:
+        """Env-var path (no queue) cannot run review/coding tasks."""
+        with patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)):
+            assert await run_task() == 1
+
+    async def test_invalid_blob_key_prefix_returns_error(self, task_env: None) -> None:
+        """Blob keys must start with 'repos/' prefix; queue is closed."""
+        params = {**QUEUE_PARAMS, "repo_blob_key": "evil/path.tar.gz"}
+        _, msg, queue = _make_queue_result(params)
+        qr = (params, msg, queue)
+        with patch(f"{_M}._dequeue_task", AsyncMock(return_value=qr)):
+            assert await run_task() == 1
+        queue.aclose.assert_awaited_once()
 
     async def test_coding(self, task_env: None, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv(ENV_TASK_TYPE, "coding")
         coding_json = json.dumps(
             {"result_type": "coding", "summary": "x", "patch": "p", "base_sha": "abc"}
         )
+        params = {**QUEUE_PARAMS, "task_type": "coding"}
+        qr = _make_queue_result(params)
         with (
-            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
-            patch(f"{_M}.git_clone", AsyncMock(return_value=Path("/tmp/r"))),
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=qr)),
+            patch(f"{_M}.extract_repo_tarball", AsyncMock(return_value=Path("/tmp/r"))),
             patch(f"{_M}.run_copilot_session", AsyncMock(return_value="x")) as ms,
             patch(f"{_M}._build_coding_result", AsyncMock(return_value=coding_json)),
             patch(f"{_M}._store_result", AsyncMock()),
@@ -131,9 +146,10 @@ class TestRunTask:
 
     async def test_failure_writes_error_result(self, task_env: None) -> None:
         copilot_error = "Copilot session timed out after 30s"
+        qr = _make_queue_result()
         with (
-            patch(f"{_M}._dequeue_task", AsyncMock(return_value=None)),
-            patch(f"{_M}.git_clone", AsyncMock(return_value=Path("/tmp/r"))),
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=qr)),
+            patch(f"{_M}.extract_repo_tarball", AsyncMock(return_value=Path("/tmp/r"))),
             patch(
                 f"{_M}.run_copilot_session",
                 AsyncMock(side_effect=RuntimeError(copilot_error)),
@@ -243,8 +259,6 @@ class TestStoreResult:
             from gitlab_copilot_agent.config import TaskRunnerSettings
 
             settings = TaskRunnerSettings(
-                gitlab_url=GITLAB_URL,
-                gitlab_token="t",
                 github_token="g",
                 azure_storage_connection_string="conn",
             )
@@ -264,8 +278,6 @@ class TestStoreResult:
             from gitlab_copilot_agent.config import TaskRunnerSettings
 
             settings = TaskRunnerSettings(
-                gitlab_url=GITLAB_URL,
-                gitlab_token="t",
                 github_token="g",
                 azure_storage_connection_string="conn",
             )
@@ -280,8 +292,8 @@ class TestDequeueTask:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Returns None when TaskRunnerSettings can't be created."""
-        monkeypatch.delenv("GITLAB_URL", raising=False)
-        monkeypatch.delenv("GITLAB_TOKEN", raising=False)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("COPILOT_PROVIDER_TYPE", raising=False)
         monkeypatch.delenv("AZURE_STORAGE_CONNECTION_STRING", raising=False)
         result = await _dequeue_task()
         assert result is None
@@ -290,8 +302,6 @@ class TestDequeueTask:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Returns None when no Azure Storage is configured."""
-        monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
-        monkeypatch.setenv("GITLAB_TOKEN", "t")
         monkeypatch.setenv("GITHUB_TOKEN", "g")
         monkeypatch.delenv("AZURE_STORAGE_CONNECTION_STRING", raising=False)
         monkeypatch.delenv("AZURE_STORAGE_QUEUE_URL", raising=False)
@@ -301,8 +311,6 @@ class TestDequeueTask:
 
     async def test_returns_none_when_queue_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Returns None and closes queue when no messages."""
-        monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
-        monkeypatch.setenv("GITLAB_TOKEN", "t")
         monkeypatch.setenv("GITHUB_TOKEN", "g")
         monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", "conn")
         mock_queue = MagicMock()
@@ -317,8 +325,6 @@ class TestDequeueTask:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Returns parsed params, message, and queue on successful dequeue."""
-        monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
-        monkeypatch.setenv("GITLAB_TOKEN", "t")
         monkeypatch.setenv("GITHUB_TOKEN", "g")
         monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", "conn")
 

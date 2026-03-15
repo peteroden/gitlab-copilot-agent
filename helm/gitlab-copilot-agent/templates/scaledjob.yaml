@@ -31,13 +31,29 @@ spec:
             image: "{{ .Values.jobRunner.image | default (printf "%s:%s" .Values.image.repository (.Values.image.tag | default "latest")) }}"
             command: [".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]
             envFrom:
-              - secretRef:
-                  name: {{ include "app.fullname" . }}
               - configMapRef:
                   name: {{ include "app.fullname" . }}
             env:
               - name: HOME
                 value: /tmp
+              - name: AZURE_STORAGE_CONNECTION_STRING
+                valueFrom:
+                  secretKeyRef:
+                    name: {{ include "app.fullname" . }}
+                    key: AZURE_STORAGE_CONNECTION_STRING
+                    optional: true
+              - name: GITHUB_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: {{ include "app.fullname" . }}
+                    key: GITHUB_TOKEN
+                    optional: true
+              - name: COPILOT_PROVIDER_API_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: {{ include "app.fullname" . }}
+                    key: COPILOT_PROVIDER_API_KEY
+                    optional: true
             resources:
               limits:
                 cpu: {{ .Values.jobRunner.cpuLimit }}

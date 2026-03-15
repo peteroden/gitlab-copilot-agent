@@ -469,3 +469,68 @@ class TestGitCloneRetry:
                     backoff_base=0.01,
                 )
             mock_sleep.assert_not_awaited()
+
+
+class TestTarRepoToBytes:
+    """Tests for tar_repo_to_bytes."""
+
+    async def test_creates_tarball_from_directory(self, tmp_path: Path) -> None:
+        """Tars a directory and returns valid gzip data."""
+        import io
+        import tarfile
+
+        from gitlab_copilot_agent.git_operations import tar_repo_to_bytes
+
+        (tmp_path / "file.txt").write_text("hello")
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "nested.py").write_text("code")
+
+        data = await tar_repo_to_bytes(str(tmp_path))
+        assert data[:2] == b"\x1f\x8b"  # gzip magic
+
+        buf = io.BytesIO(data)
+        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+            names = {m.name for m in tar.getmembers()}
+        assert "./file.txt" in names
+        assert "./sub/nested.py" in names
+
+    async def test_excludes_git_config(self, tmp_path: Path) -> None:
+        """Tarball excludes .git/config to prevent credential leakage."""
+        import io
+        import tarfile
+
+        from gitlab_copilot_agent.git_operations import tar_repo_to_bytes
+
+        git_dir = tmp_path / ".git"
+        git_dir.mkdir()
+        (git_dir / "config").write_text("url = https://oauth2:SECRET@gitlab.com/x.git")
+        (git_dir / "HEAD").write_text("ref: refs/heads/main")
+        (tmp_path / "src.py").write_text("code")
+
+        data = await tar_repo_to_bytes(str(tmp_path))
+        buf = io.BytesIO(data)
+        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+            names = {m.name for m in tar.getmembers()}
+        assert "./.git/config" not in names
+        assert "./.git/HEAD" in names
+        assert "./src.py" in names
+
+
+class TestExtractRepoTarball:
+    """Tests for extract_repo_tarball."""
+
+    async def test_round_trip(self, tmp_path: Path) -> None:
+        """Tar then extract preserves file content."""
+        from gitlab_copilot_agent.git_operations import (
+            extract_repo_tarball,
+            tar_repo_to_bytes,
+        )
+
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "hello.txt").write_text("world")
+        data = await tar_repo_to_bytes(str(src))
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        extracted = await extract_repo_tarball(data, str(out_dir))
+        assert (extracted / "hello.txt").read_text() == "world"

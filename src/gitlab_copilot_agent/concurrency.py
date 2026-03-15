@@ -77,6 +77,14 @@ class TaskQueue(Protocol):
         """Acknowledge processing. Deletes the queue message."""
         ...
 
+    async def upload_blob(self, name: str, data: bytes) -> None:
+        """Upload arbitrary binary data to the blob container."""
+        ...
+
+    async def download_blob(self, name: str) -> bytes:
+        """Download binary data from the blob container."""
+        ...
+
     async def aclose(self) -> None: ...
 
 
@@ -102,6 +110,7 @@ class MemoryTaskQueue:
     def __init__(self) -> None:
         self._messages: list[QueueMessage] = []
         self._counter: int = 0
+        self._blobs: dict[str, bytes] = {}
 
     async def enqueue(self, task_id: str, payload: str) -> None:
         self._counter += 1
@@ -120,8 +129,17 @@ class MemoryTaskQueue:
     async def complete(self, message: QueueMessage) -> None:
         """No-op — message already consumed by dequeue."""
 
+    async def upload_blob(self, name: str, data: bytes) -> None:
+        self._blobs[name] = data
+
+    async def download_blob(self, name: str) -> bytes:
+        if name not in self._blobs:
+            raise KeyError(f"Blob not found: {name}")
+        return self._blobs[name]
+
     async def aclose(self) -> None:
         self._messages.clear()
+        self._blobs.clear()
 
 
 class MemoryLock:
