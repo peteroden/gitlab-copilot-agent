@@ -6,7 +6,6 @@ import os
 import shutil
 import sys
 from pathlib import Path
-from urllib.parse import ParseResult, urlparse
 
 import structlog
 
@@ -16,16 +15,15 @@ from gitlab_copilot_agent.config import TaskRunnerSettings
 from gitlab_copilot_agent.copilot_session import run_copilot_session
 from gitlab_copilot_agent.git_operations import (
     MAX_PATCH_SIZE,
-    git_clone,
+    extract_repo_tarball,
     git_diff_staged,
     git_head_sha,
 )
-from gitlab_copilot_agent.git_operations import _sanitize_url_for_log as _sanitize_url
 from gitlab_copilot_agent.prompt_defaults import get_prompt
 
 log = structlog.get_logger()
-ENV_TASK_TYPE, ENV_TASK_ID, ENV_REPO_URL = "TASK_TYPE", "TASK_ID", "REPO_URL"
-ENV_BRANCH, ENV_TASK_PAYLOAD = "BRANCH", "TASK_PAYLOAD"
+ENV_TASK_TYPE, ENV_TASK_ID = "TASK_TYPE", "TASK_ID"
+ENV_TASK_PAYLOAD = "TASK_PAYLOAD"
 VALID_TASK_TYPES: frozenset[str] = frozenset({"review", "coding", "echo"})
 _RESULT_TTL = 3600  # 1 hour
 
@@ -120,28 +118,6 @@ def _parse_task_payload(raw: str) -> dict[str, str]:
     return data
 
 
-def _effective_port(parsed: ParseResult) -> int:
-    """Return explicit port or default for scheme (443 for https, 80 for http)."""
-    if parsed.port:
-        return parsed.port
-    return 443 if parsed.scheme == "https" else 80
-
-
-def _validate_repo_url(repo_url: str, gitlab_url: str) -> None:
-    repo_parsed, gitlab_parsed = urlparse(repo_url), urlparse(gitlab_url)
-    repo_host, gitlab_host = repo_parsed.hostname, gitlab_parsed.hostname
-    if not repo_host or not gitlab_host:
-        raise RuntimeError("REPO_URL or GITLAB_URL has no host component")
-    if repo_host.lower() != gitlab_host.lower() or _effective_port(repo_parsed) != _effective_port(
-        gitlab_parsed
-    ):
-        raise RuntimeError(
-            f"REPO_URL authority does not match GITLAB_URL "
-            f"({repo_host}:{_effective_port(repo_parsed)} vs "
-            f"{gitlab_host}:{_effective_port(gitlab_parsed)})"
-        )
-
-
 async def _build_coding_result(
     repo_path: Path, summary: str, bound_log: structlog.stdlib.BoundLogger
 ) -> str:
@@ -201,18 +177,15 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
         params_dict, queue_msg, task_queue = queue_result
         task_type = params_dict["task_type"]
         task_id = params_dict["task_id"]
-        repo_url = params_dict["repo_url"]
-        branch = params_dict["branch"]
+        repo_blob_key = params_dict.get("repo_blob_key")
         user_prompt = params_dict["user_prompt"]
-        payload_raw = json.dumps({"prompt": user_prompt})
     else:
         try:
             task_type = _get_required_env(ENV_TASK_TYPE)
             task_id = _get_required_env(ENV_TASK_ID)
-            repo_url = _get_required_env(ENV_REPO_URL)
-            branch = _get_required_env(ENV_BRANCH)
             payload_raw = _get_required_env(ENV_TASK_PAYLOAD)
             user_prompt = _parse_task_payload(payload_raw).get("prompt", payload_raw)
+            repo_blob_key = None
         except RuntimeError as exc:
             await log.aerror("missing_env_var", error=str(exc))
             return 1
@@ -237,14 +210,23 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
             if task_queue:
                 await task_queue.aclose()
 
+    # Review/coding tasks require blob-based repo transfer
     settings = TaskRunnerSettings()
     repo_path: Path | None = None
     try:
-        _validate_repo_url(repo_url, settings.gitlab_url)
-        await bound_log.ainfo("task_start", repo=_sanitize_url(repo_url), branch=branch)
-        repo_path = await git_clone(
-            repo_url, branch, settings.gitlab_token, clone_dir=settings.clone_dir
-        )
+        if not repo_blob_key or task_queue is None:
+            await bound_log.aerror(
+                "repo_blob_required",
+                detail="Review/coding tasks require queue-based dispatch with repo_blob_key",
+            )
+            return 1
+        if not repo_blob_key.startswith("repos/"):
+            await bound_log.aerror("invalid_repo_blob_key", key=repo_blob_key)
+            return 1
+
+        await bound_log.ainfo("task_start", repo_blob_key=repo_blob_key)
+        tarball = await task_queue.download_blob(repo_blob_key)
+        repo_path = await extract_repo_tarball(tarball, settings.clone_dir)
         if task_type == "coding":
             from gitlab_copilot_agent.coding_engine import ensure_git_exclude
 

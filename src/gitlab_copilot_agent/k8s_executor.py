@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from gitlab_copilot_agent.git_operations import tar_repo_to_bytes
 from gitlab_copilot_agent.task_executor import CodingResult, ReviewResult, TaskResult
 
 if TYPE_CHECKING:
@@ -47,7 +48,7 @@ class KubernetesTaskExecutor:
         return await self._execute_via_queue(task)
 
     async def _execute_via_queue(self, task: TaskParams) -> TaskResult:
-        """KEDA path: enqueue task, poll for result blob."""
+        """KEDA path: upload repo tarball, enqueue task, poll for result blob."""
         import json as _json
 
         # Idempotency: skip enqueue if task is already in-flight
@@ -62,12 +63,18 @@ class KubernetesTaskExecutor:
             except (ValueError, IndexError):
                 pass
 
+        # Upload repo tarball to blob storage (replaces git clone on runner)
+        repo_blob_key: str | None = None
+        if task.repo_path:
+            repo_blob_key = f"repos/{task.task_id}.tar.gz"
+            tarball = await tar_repo_to_bytes(task.repo_path)
+            await self._task_queue.upload_blob(repo_blob_key, tarball)
+
         payload = _json.dumps(
             {
                 "task_type": task.task_type,
                 "task_id": task.task_id,
-                "repo_url": task.repo_url,
-                "branch": task.branch,
+                "repo_blob_key": repo_blob_key,
                 "system_prompt": task.system_prompt,
                 "user_prompt": task.user_prompt,
             }

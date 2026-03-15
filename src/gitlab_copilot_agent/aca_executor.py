@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from gitlab_copilot_agent.git_operations import tar_repo_to_bytes
 from gitlab_copilot_agent.task_executor import CodingResult, ReviewResult, TaskResult
 
 if TYPE_CHECKING:
@@ -23,14 +24,13 @@ _EXECUTION_LOCK_TTL = 900  # sentinel TTL to prevent duplicate enqueues
 _EXECUTION_LOCK_PREFIX = "aca_exec:"
 
 
-def _build_dispatch_payload(task: TaskParams) -> str:
+def _build_dispatch_payload(task: TaskParams, repo_blob_key: str | None) -> str:
     """Serialize task params for the queue (Claim Check blob payload)."""
     return json.dumps(
         {
             "task_type": task.task_type,
             "task_id": task.task_id,
-            "repo_url": task.repo_url,
-            "branch": task.branch,
+            "repo_blob_key": repo_blob_key,
             "system_prompt": task.system_prompt,
             "user_prompt": task.user_prompt,
         }
@@ -93,7 +93,14 @@ class ContainerAppsTaskExecutor:
             except (ValueError, IndexError):
                 pass  # malformed lock, proceed to re-enqueue
 
-        payload = _build_dispatch_payload(task)
+        # Upload repo tarball to blob storage (replaces git clone on runner)
+        repo_blob_key: str | None = None
+        if task.repo_path:
+            repo_blob_key = f"repos/{task.task_id}.tar.gz"
+            tarball = await tar_repo_to_bytes(task.repo_path)
+            await self._task_queue.upload_blob(repo_blob_key, tarball)
+
+        payload = _build_dispatch_payload(task, repo_blob_key)
         bound.info("aca_enqueue_starting")
         await self._task_queue.enqueue(task.task_id, payload)
         lock_val = f"enqueued:{int(time.time()) + _EXECUTION_LOCK_TTL}"

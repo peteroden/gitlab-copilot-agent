@@ -269,14 +269,11 @@ class TaskRunnerSettings(BaseSettings):
 
     Unlike the full ``Settings``, this has no controller-specific validations
     (webhook secret, polling projects, k8s/ACA executor config).  The task
-    runner only needs GitLab + Copilot credentials and prompt configuration.
+    runner only needs Copilot/LLM credentials and prompt configuration.
+    It receives the repo via blob transfer — no GitLab credentials needed.
     """
 
     model_config = {"env_prefix": ""}
-
-    # GitLab
-    gitlab_url: str = Field(description="GitLab instance URL")
-    gitlab_token: str = Field(description="GitLab API private token")
 
     # Copilot / LLM
     copilot_model: str = Field(default="gpt-4", description="Model to use")

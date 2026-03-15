@@ -84,14 +84,13 @@ class TestDispatchPayload:
         from gitlab_copilot_agent.aca_executor import _build_dispatch_payload
 
         task = _make_task()
-        payload = json.loads(_build_dispatch_payload(task))
+        payload = json.loads(_build_dispatch_payload(task, "repos/test.tar.gz"))
         keys = set(payload.keys())
 
         expected_keys = {
             "task_type",
             "task_id",
-            "repo_url",
-            "branch",
+            "repo_blob_key",
             "system_prompt",
             "user_prompt",
         }
@@ -105,11 +104,11 @@ class TestDispatchPayload:
         from gitlab_copilot_agent.aca_executor import _build_dispatch_payload
 
         task = _make_task()
-        payload = json.loads(_build_dispatch_payload(task))
+        blob_key = "repos/test.tar.gz"
+        payload = json.loads(_build_dispatch_payload(task, blob_key))
         assert payload["task_type"] == TASK_TYPE
         assert payload["task_id"] == TASK_ID
-        assert payload["repo_url"] == REPO_URL
-        assert payload["branch"] == BRANCH
+        assert payload["repo_blob_key"] == blob_key
         assert payload["user_prompt"] == USER_PROMPT
 
 

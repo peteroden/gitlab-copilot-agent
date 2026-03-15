@@ -100,6 +100,15 @@ class AzureStorageTaskQueue:
         await self._queue.delete_message(message.message_id, message.receipt)
         log.info("task_completed", task_id=message.task_id, message_id=message.message_id)
 
+    async def upload_blob(self, name: str, data: bytes) -> None:
+        blob = self._blob.get_blob_client(name)
+        await blob.upload_blob(data, overwrite=True)
+
+    async def download_blob(self, name: str) -> bytes:
+        blob = self._blob.get_blob_client(name)
+        download = await blob.download_blob()
+        return await download.readall()
+
     async def aclose(self) -> None:
         await self._queue.close()
         await self._blob.close()
