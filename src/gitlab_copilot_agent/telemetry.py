@@ -41,8 +41,8 @@ def configure_logging() -> None:
             structlog.contextvars.merge_contextvars,
             structlog.stdlib.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
-            add_trace_context,  # type: ignore[list-item]
-            emit_to_otel_logs,  # type: ignore[list-item]
+            add_trace_context,  # pyright: ignore[reportArgumentType]
+            emit_to_otel_logs,  # pyright: ignore[reportArgumentType]
             structlog.processors.format_exc_info,
             renderer,
         ],
@@ -88,7 +88,7 @@ def _check_connectivity(endpoint: str, timeout: float = 3.0) -> bool:
                 urllib.request.urlopen(req, timeout=timeout)  # noqa: S310
             return True
         else:
-            import grpc  # type: ignore[import-untyped]  # noqa: PLC0415
+            import grpc  # pyright: ignore[reportMissingTypeStubs]  # noqa: PLC0415
 
             parsed = urlparse(endpoint)
             target = f"{parsed.hostname}:{parsed.port or 4317}"
@@ -258,7 +258,7 @@ def shutdown_telemetry() -> None:
 
         log_provider = get_logger_provider()
         if isinstance(log_provider, LoggerProvider):
-            log_provider.shutdown()  # type: ignore[no-untyped-call]
+            log_provider.shutdown()  # pyright: ignore[reportUnknownMemberType]
 
     _initialized = False
     _otel_logging_configured = False

@@ -83,12 +83,12 @@ class CodingOrchestrator:
                     issue.fields.description if isinstance(issue.fields.description, str) else None
                 )
                 repo_path: Path | None = None
+                in_prog = (
+                    self._settings.jira.in_progress_status
+                    if self._settings.jira
+                    else "In Progress"
+                )
                 try:
-                    in_prog = (
-                        self._settings.jira.in_progress_status
-                        if self._settings.jira
-                        else "In Progress"
-                    )
                     await self._jira.transition_issue(issue.key, in_prog)
                     repo_path = await git_clone(
                         project_mapping.clone_url,

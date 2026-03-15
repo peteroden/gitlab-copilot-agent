@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Git pre-commit hook: runs ruff and mypy on staged Python files.
+# Git pre-commit hook: runs ruff and pyright on staged Python files.
 # Install: ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
 set -euo pipefail
 
@@ -18,7 +18,7 @@ $RUN uv run ruff check src/ tests/
 echo "🔍 ruff format..."
 $RUN uv run ruff format --check src/ tests/
 
-echo "🔍 mypy..."
-$RUN uv run mypy src/
+echo "🔍 pyright..."
+$RUN uv run pyright src/
 
 echo "✅ All checks passed"

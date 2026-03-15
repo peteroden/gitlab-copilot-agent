@@ -105,7 +105,7 @@ Only clean up dead/obsolete code when specifically directed. Never as a side eff
 | Language | Style Guide | Linter / Formatter | Static Analysis |
 |----------|-------------|---------------------|-----------------|
 | TypeScript | Google TS Style | ESLint + Prettier | `tsc --strict` |
-| Python | PEP 8 | Ruff (lint + format), uv (packages) | mypy `--strict` |
+| Python | PEP 8 | Ruff (lint + format), uv (packages) | pyright (strict) |
 | C | Linux kernel style | clang-format + clang-tidy | cppcheck, `-Wall -Wextra -Werror` |
 | C++ | C++ Core Guidelines | clang-format + clang-tidy | cppcheck, `-Wall -Wextra -Werror` |
 | Rust | Rust API Guidelines | rustfmt | clippy (deny warnings) |

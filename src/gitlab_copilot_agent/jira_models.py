@@ -60,7 +60,9 @@ class JiraSearchResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    issues: list[JiraIssue] = Field(default_factory=list, description="Matching issues")
+    issues: list[JiraIssue] = Field(  # pyright: ignore[reportUnknownVariableType]
+        default_factory=list, description="Matching issues"
+    )
     next_page_token: str | None = Field(
         default=None, alias="nextPageToken", description="Token for next page"
     )
@@ -81,6 +83,6 @@ class JiraTransitionsResponse(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    transitions: list[JiraTransition] = Field(
+    transitions: list[JiraTransition] = Field(  # pyright: ignore[reportUnknownVariableType]
         default_factory=list, description="Available transitions"
     )

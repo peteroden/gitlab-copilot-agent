@@ -125,7 +125,7 @@ def _print_config_errors(exc: ValidationError) -> None:
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_telemetry()
     try:
-        settings = Settings()
+        settings = Settings()  # pyright: ignore[reportCallIssue]
     except ValidationError as exc:
         _print_config_errors(exc)
         sys.exit(1)
@@ -196,7 +196,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             repo_locks=repo_locks,
             project_registry=project_registry,
         )
-        gl_poller._interval = settings.gitlab_poll_interval
+        gl_poller._interval = settings.gitlab_poll_interval  # pyright: ignore[reportPrivateUsage]
         await gl_poller.start()
         app.state.gl_poller = gl_poller
         await log.ainfo(
@@ -227,7 +227,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await log.ainfo("shutdown_started", steps=num_steps, per_step_timeout=round(per_step, 1))
     for name, coro in steps:
         try:
-            await asyncio.wait_for(coro, timeout=per_step)  # type: ignore[arg-type]
+            await asyncio.wait_for(coro, timeout=per_step)  # pyright: ignore[reportArgumentType]
             await log.ainfo("shutdown_step_done", step=name)
         except TimeoutError:
             timed_out.append(name)
@@ -289,8 +289,8 @@ async def config_reload(
     app.state.project_registry = registry
     gl_poller: GitLabPoller | None = getattr(app.state, "gl_poller", None)
     if gl_poller is not None:
-        gl_poller._project_registry = registry
-        gl_poller._project_clients.clear()
+        gl_poller._project_registry = registry  # pyright: ignore[reportPrivateUsage]
+        gl_poller._project_clients.clear()  # pyright: ignore[reportPrivateUsage]
     return {
         "status": "ok",
         "jira_keys": sorted(registry.jira_keys()),

@@ -70,7 +70,7 @@ async def _dequeue_task() -> tuple[dict[str, str], QueueMessage, TaskQueue] | No
     can't be created or dispatch_backend isn't azure_storage.
     """
     try:
-        settings = TaskRunnerSettings()
+        settings = TaskRunnerSettings()  # pyright: ignore[reportCallIssue]
     except Exception:
         await log.awarning("dequeue_settings_failed", exc_info=True)
         return None
@@ -108,14 +108,14 @@ def _get_required_env(name: str) -> str:
     return value
 
 
-def _parse_task_payload(raw: str) -> dict[str, str]:
+def _parse_task_payload(raw: str) -> dict[str, object]:
     try:
-        data = json.loads(raw)
+        data: object = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"Invalid JSON in {ENV_TASK_PAYLOAD}: {exc}") from exc
     if not isinstance(data, dict):
         raise RuntimeError(f"{ENV_TASK_PAYLOAD} must be a JSON object, got {type(data).__name__}")
-    return data
+    return {str(k): v for k, v in data.items()}  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType, reportUnknownArgumentType]
 
 
 async def _build_coding_result(
@@ -184,7 +184,7 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
             task_type = _get_required_env(ENV_TASK_TYPE)
             task_id = _get_required_env(ENV_TASK_ID)
             payload_raw = _get_required_env(ENV_TASK_PAYLOAD)
-            user_prompt = _parse_task_payload(payload_raw).get("prompt", payload_raw)
+            user_prompt = str(_parse_task_payload(payload_raw).get("prompt", payload_raw))
             repo_blob_key = None
         except RuntimeError as exc:
             await log.aerror("missing_env_var", error=str(exc))
@@ -197,7 +197,7 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
     if task_type == "echo":
         try:
             result = json.dumps({"echo": user_prompt, "task_id": task_id})
-            settings = TaskRunnerSettings() if queue_result is not None else None
+            settings = TaskRunnerSettings() if queue_result is not None else None  # pyright: ignore[reportCallIssue]
             await _store_result(task_id, result, settings)
             if task_queue and queue_msg:
                 await task_queue.complete(queue_msg)
@@ -211,7 +211,7 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
                 await task_queue.aclose()
 
     # Review/coding tasks require blob-based repo transfer
-    settings = TaskRunnerSettings()
+    settings = TaskRunnerSettings()  # pyright: ignore[reportCallIssue]
     repo_path: Path | None = None
     try:
         if not repo_blob_key or task_queue is None:

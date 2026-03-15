@@ -40,12 +40,12 @@ def _build_dispatch_payload(task: TaskParams, repo_blob_key: str | None) -> str:
 def _parse_result(raw: str, task_type: str) -> TaskResult:
     """Parse a raw result string into a structured TaskResult."""
     try:
-        data = json.loads(raw)
+        data: object = json.loads(raw)
         if isinstance(data, dict) and "result_type" in data:
             if data["result_type"] == "coding":
                 return CodingResult.model_validate(data)
             if data["result_type"] == "error":
-                summary = data.get("summary", "Task failed (unknown error)")
+                summary = str(data.get("summary", "Task failed (unknown error)"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
                 log.error("task_error_result", summary=summary)
                 return ReviewResult(summary=summary)
             return ReviewResult.model_validate(data)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import frontmatter  # type: ignore[import-untyped]
+import frontmatter  # pyright: ignore[reportMissingTypeStubs]
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -50,7 +50,7 @@ class RepoConfig(BaseModel):
     skill_directories: list[str] = Field(
         default_factory=list, description="Paths to skill directories"
     )
-    custom_agents: list[AgentConfig] = Field(
+    custom_agents: list[AgentConfig] = Field(  # pyright: ignore[reportUnknownVariableType]
         default_factory=list, description="Custom agent configurations"
     )
     instructions: str | None = Field(
