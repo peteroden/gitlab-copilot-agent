@@ -57,6 +57,7 @@ async def test_lifespan_without_jira_starts_and_stops(env_vars: None) -> None:
         assert isinstance(test_app.state.repo_locks, RepoLockManager)
         assert isinstance(test_app.state.dedup_store, MemoryDedup)
         assert isinstance(test_app.state.executor, LocalTaskExecutor)
+        assert test_app.state.project_registry is None
 
 
 @pytest.mark.asyncio
@@ -92,11 +93,13 @@ async def test_lifespan_with_jira_creates_shared_lock_manager(
         patch("gitlab_copilot_agent.main.CredentialRegistry"),
         patch("gitlab_copilot_agent.main.ProjectRegistry") as mock_registry_cls,
     ):
-        mock_registry_cls.from_rendered_map = AsyncMock(return_value=AsyncMock())
+        mock_registry = AsyncMock()
+        mock_registry_cls.from_rendered_map = AsyncMock(return_value=mock_registry)
         async with lifespan(test_app):
             mock_poller.start.assert_called_once()
             assert test_app.state.repo_locks is not None
             assert isinstance(test_app.state.repo_locks, RepoLockManager)
+            assert test_app.state.project_registry is mock_registry
             mock_orch_class.assert_called_once()
             args, _kwargs = mock_orch_class.call_args
             assert isinstance(args[3], LocalTaskExecutor)
@@ -287,11 +290,16 @@ async def test_lifespan_starts_gitlab_poller(
 
     with (
         patch("gitlab_copilot_agent.main.GitLabClient", return_value=mock_gl),
-        patch("gitlab_copilot_agent.main.GitLabPoller", return_value=mock_poller),
+        patch(
+            "gitlab_copilot_agent.main.GitLabPoller", return_value=mock_poller
+        ) as mock_poller_cls,
     ):
         async with lifespan(test_app):
             mock_poller.start.assert_called_once()
             assert test_app.state.gl_poller is mock_poller
+            # Verify project_registry=None passed (no Jira configured)
+            _, kwargs = mock_poller_cls.call_args
+            assert kwargs.get("project_registry") is None
         mock_poller.stop.assert_called_once()
 
 

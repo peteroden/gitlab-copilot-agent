@@ -11,6 +11,7 @@ import structlog
 from gitlab_copilot_agent.concurrency import DeduplicationStore, DistributedLock
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.gitlab_client import (
+    GitLabClient,
     GitLabClientProtocol,
     MRListItem,
     NoteListItem,
@@ -27,6 +28,7 @@ from gitlab_copilot_agent.models import (
 )
 from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
 from gitlab_copilot_agent.orchestrator import handle_review
+from gitlab_copilot_agent.project_registry import ProjectRegistry
 from gitlab_copilot_agent.task_executor import TaskExecutor
 
 log = structlog.get_logger()
@@ -45,6 +47,7 @@ class GitLabPoller:
         dedup: DeduplicationStore,
         executor: TaskExecutor,
         repo_locks: DistributedLock | None = None,
+        project_registry: ProjectRegistry | None = None,
     ) -> None:
         self._client = gl_client
         self._settings = settings
@@ -52,6 +55,8 @@ class GitLabPoller:
         self._dedup = dedup
         self._executor = executor
         self._repo_locks = repo_locks
+        self._project_registry = project_registry
+        self._project_clients: dict[str, GitLabClientProtocol] = {}
         self._interval: int = 30
         self._task: asyncio.Task[None] | None = None
         self._watermark: str | None = None
@@ -87,14 +92,41 @@ class GitLabPoller:
     async def _poll_once(self) -> None:
         poll_start = datetime.now(UTC).isoformat()
         for pid in self._project_ids:
-            mrs = await self._client.list_project_mrs(
-                pid, state="opened", updated_after=self._watermark
-            )
+            client = self._client_for_project(pid)
+            mrs = await client.list_project_mrs(pid, state="opened", updated_after=self._watermark)
             for mr in mrs:
                 await self._process_mr(pid, mr)
-            await self._process_notes(pid, mrs)
+            await self._process_notes(pid, mrs, client)
         self._watermark = poll_start
         self._note_watermark = poll_start
+
+    def _resolve_token(self, project_id: int) -> str | None:
+        """Return per-project token from registry, or None for global fallback."""
+        if self._project_registry is not None:
+            resolved = self._project_registry.get_by_project_id(project_id)
+            if resolved is not None:
+                log.info(
+                    "credential_resolved",
+                    project_id=project_id,
+                    credential_ref=resolved.credential_ref,
+                    source="project_registry",
+                )
+                return resolved.token
+        log.info("credential_resolved", project_id=project_id, source="global_fallback")
+        return None
+
+    def _client_for_project(self, project_id: int) -> GitLabClientProtocol:
+        """Return a per-project GitLabClient if available, else the default client."""
+        if self._project_registry is not None:
+            resolved = self._project_registry.get_by_project_id(project_id)
+            if resolved is not None:
+                ref = resolved.credential_ref
+                if ref not in self._project_clients:
+                    self._project_clients[ref] = GitLabClient(
+                        self._settings.gitlab_url, resolved.token
+                    )
+                return self._project_clients[ref]
+        return self._client
 
     async def _process_mr(self, project_id: int, mr: MRListItem) -> None:
         if self._settings.gitlab_review_on_push:
@@ -126,12 +158,19 @@ class GitLabPoller:
                 oldrev=None,
             ),
         )
-        await handle_review(self._settings, payload, self._executor)
+        await handle_review(
+            self._settings,
+            payload,
+            self._executor,
+            project_token=self._resolve_token(project_id),
+        )
         await self._dedup.mark_seen(key, ttl_seconds=_DEDUP_TTL)
 
-    async def _process_notes(self, project_id: int, mrs: list[MRListItem]) -> None:
+    async def _process_notes(
+        self, project_id: int, mrs: list[MRListItem], client: GitLabClientProtocol
+    ) -> None:
         for mr in mrs:
-            notes = await self._client.list_mr_notes(
+            notes = await client.list_mr_notes(
                 project_id, mr.iid, created_after=self._note_watermark
             )
             for note in notes:
@@ -148,7 +187,11 @@ class GitLabPoller:
                     continue
                 payload = _build_note_payload(note, mr, project_id, self._settings)
                 await handle_copilot_comment(
-                    self._settings, payload, self._executor, self._repo_locks
+                    self._settings,
+                    payload,
+                    self._executor,
+                    self._repo_locks,
+                    project_token=self._resolve_token(project_id),
                 )
                 await self._dedup.mark_seen(note_key, ttl_seconds=_DEDUP_TTL)
 

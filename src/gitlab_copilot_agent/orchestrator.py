@@ -26,7 +26,10 @@ _tracer = get_tracer(__name__)
 
 
 async def handle_review(
-    settings: Settings, payload: MergeRequestWebhookPayload, executor: TaskExecutor
+    settings: Settings,
+    payload: MergeRequestWebhookPayload,
+    executor: TaskExecutor,
+    project_token: str | None = None,
 ) -> None:
     """Full review pipeline: clone → review → parse → post comments."""
     mr = payload.object_attributes
@@ -40,14 +43,15 @@ async def handle_review(
 
         bound_log.info("review_started")
 
-        gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
+        token = project_token or settings.gitlab_token
+        gl_client = GitLabClient(settings.gitlab_url, token)
         repo_path: Path | None = None
 
         try:
             repo_path = await gl_client.clone_repo(
                 project.git_http_url,
                 mr.source_branch,
-                settings.gitlab_token,
+                token,
                 clone_dir=settings.clone_dir,
             )
 
@@ -80,7 +84,7 @@ async def handle_review(
                 inline_comments=len(parsed.comments),
             )
 
-            gl = gitlab.Gitlab(settings.gitlab_url, private_token=settings.gitlab_token)
+            gl = gitlab.Gitlab(settings.gitlab_url, private_token=token)
 
             await post_review(
                 gl, project.id, mr.iid, mr_details.diff_refs, parsed, mr_details.changes
