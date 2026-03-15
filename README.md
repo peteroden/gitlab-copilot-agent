@@ -154,24 +154,40 @@ The service can **optionally** poll Jira for issues and automatically create bra
 
 ### Example `JIRA_PROJECT_MAP`
 
-The JSON must use the `{"mappings": {...}}` schema with numeric `gitlab_project_id` and `clone_url`:
+Create a YAML source file, then render to JSON with the `mapping-helper` CLI:
+
+```yaml
+# mappings.yaml
+defaults:
+  target_branch: main
+  credential_ref: default
+
+bindings:
+  - jira_project: PROJ
+    repo: myorg/myrepo
+  - jira_project: DEMO
+    repo: demos/example
+    target_branch: develop
+```
+
+```bash
+# Validate and render
+mapping-helper validate mappings.yaml
+mapping-helper render-json mappings.yaml
+```
+
+The rendered JSON (set as `JIRA_PROJECT_MAP`):
 
 ```json
 {
   "mappings": {
-    "PROJ": {
-      "gitlab_project_id": 42,
-      "clone_url": "https://gitlab.com/myorg/myrepo.git",
-      "target_branch": "main"
-    },
-    "DEMO": {
-      "gitlab_project_id": 87,
-      "clone_url": "https://gitlab.com/demos/example.git",
-      "target_branch": "develop"
-    }
+    "PROJ": { "repo": "myorg/myrepo", "target_branch": "main", "credential_ref": "default" },
+    "DEMO": { "repo": "demos/example", "target_branch": "develop", "credential_ref": "default" }
   }
 }
 ```
+
+See [Configuration Reference](docs/wiki/configuration-reference.md) for named credentials and hot-reload.
 
 ### How It Works
 

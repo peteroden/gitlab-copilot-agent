@@ -10,15 +10,16 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Purpose**: FastAPI application entrypoint, lifespan management, poller startup.
 
 **Key Functions**:
-- `lifespan(app: FastAPI) -> AsyncIterator[None]`: Initialize telemetry, load settings, start pollers, cleanup on shutdown
+- `lifespan(app: FastAPI) -> AsyncIterator[None]`: Initialize telemetry, load settings, build credential/project registries, start pollers, graceful shutdown
 - `health() -> dict[str, object]`: Health check endpoint, includes GitLab poller status if enabled
+- `config_reload(body: RenderedMap, request: Request) -> dict`: Hot-reload project registry from new mapping JSON (requires `X-Gitlab-Token` auth)
 - `_cleanup_stale_repos(clone_dir: str | None) -> None`: Remove leftover `mr-review-*` dirs on startup
 - `_create_executor(backend: str, settings: Settings | None) -> TaskExecutor`: Factory for LocalTaskExecutor or KubernetesTaskExecutor
 
 **Key Globals**:
 - `app: FastAPI`: FastAPI application instance with lifespan and webhook router
 
-**Internal Imports**: `config`, `telemetry`, `gitlab_client`, `gitlab_poller`, `jira_client`, `jira_poller`, `webhook`, `concurrency`, `state`, `task_executor`, `coding_orchestrator`, `git_operations`, `project_mapping`
+**Internal Imports**: `config`, `telemetry`, `gitlab_client`, `gitlab_poller`, `jira_client`, `jira_poller`, `webhook`, `concurrency`, `state`, `task_executor`, `coding_orchestrator`, `git_operations`, `mapping_models`, `credential_registry`, `project_registry`
 
 **Depended On By**: Deployed as uvicorn entrypoint
 
@@ -518,15 +519,40 @@ All use `extra="ignore"` config.
 
 ---
 
-### `project_mapping.py`
-**Purpose**: Jira project key → GitLab project mapping.
+### `project_mapping.py` *(legacy)*
+**Purpose**: Original Jira→GitLab mapping. Superseded by `mapping_models.py` + `project_registry.py` for the Jira polling path.
+
+---
+
+### `mapping_models.py`
+**Purpose**: Pydantic models for YAML source mappings and rendered JSON format.
 
 **Key Models**:
-- `GitLabProjectMapping`: gitlab_project_id, clone_url, target_branch
-- `ProjectMap`: mappings (dict of key → mapping)
-  - `get(jira_project_key: str) -> GitLabProjectMapping | None`
+- `MappingSource`: YAML source with `defaults` + `bindings` list
+- `RenderedMap`: Flat JSON for `JIRA_PROJECT_MAP` env var and `/config/reload` body
+- `RenderedBinding`: Single binding — `repo`, `target_branch`, `credential_ref`
 
-**Internal Imports**: None
+**Depended On By**: `mapping_cli.py`, `project_registry.py`, `main.py`
+
+---
+
+### `credential_registry.py`
+**Purpose**: Resolve credential aliases to GitLab tokens from environment.
+
+**Key Methods**:
+- `from_env() -> CredentialRegistry`: Reads `GITLAB_TOKEN` + `GITLAB_TOKEN__<ALIAS>` env vars
+- `resolve(credential_ref: str) -> str`: Returns token for alias, raises `KeyError` if unknown
+
+**Depended On By**: `project_registry.py`, `main.py`
+
+---
+
+### `project_registry.py`
+**Purpose**: Fully resolved project context for runtime use.
+
+**Key Types**:
+- `ResolvedProject`: Frozen dataclass — `jira_project`, `repo`, `gitlab_project_id`, `clone_url`, `target_branch`, `credential_ref`, `token` (masked in repr)
+- `ProjectRegistry`: Registry with `from_rendered_map()` async factory, `get_by_jira()`, `jira_keys()`
 
 **Depended On By**: `jira_poller.py`, `coding_orchestrator.py`, `main.py`
 
