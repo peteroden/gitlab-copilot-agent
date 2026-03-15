@@ -39,7 +39,7 @@ updates:
       dev-tools:
         patterns:
           - "pytest*"
-          - "mypy"
+          - "pyright"
           - "ruff"
           - "playwright"
           - "pytest-cov"

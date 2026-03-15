@@ -43,7 +43,7 @@ applyTo: "**/*.py"
 - `Protocol` over `ABC` for interfaces.
 - `TypeAlias` for complex union/generic types.
 - All functions fully annotated including return types.
-- Target: `mypy --strict` clean.
+- Target: pyright strict mode clean.
 
 ## Project Layout
 

@@ -305,7 +305,7 @@ This shows:
 ## Development
 
 ```bash
-# Install pre-commit hook (runs ruff + mypy before each commit)
+# Install pre-commit hook (runs ruff + pyright before each commit)
 ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
 
 # Run tests
@@ -315,7 +315,7 @@ devcontainer exec --workspace-folder . uv run pytest
 devcontainer exec --workspace-folder . uv run ruff check src/ tests/
 
 # Type check
-devcontainer exec --workspace-folder . uv run mypy src/
+devcontainer exec --workspace-folder . uv run pyright src/
 ```
 
 ### Dependency Management
@@ -329,7 +329,7 @@ Dependabot monitors two ecosystems: **Docker** base images and **Python** (pip) 
 | `azure` | `azure-*` SDK packages |
 | `pydantic` | `pydantic`, `pydantic-settings` |
 | `web-framework` | `fastapi`, `uvicorn`, `httpx` |
-| `dev-tools` | `pytest*`, `mypy`, `ruff`, `playwright`, `pytest-cov` |
+| `dev-tools` | `pytest*`, `pyright`, `ruff`, `playwright`, `pytest-cov` |
 | `python-all-other` | Everything else (catch-all) |
 
 **Auto-merge** is enabled for patch and minor updates after CI passes. Major updates and pre-1.0 packages (`github-copilot-sdk`) require manual review. See `.github/workflows/dependabot-auto-merge.yml`.

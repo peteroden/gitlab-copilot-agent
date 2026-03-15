@@ -20,7 +20,7 @@ from gitlab_copilot_agent.config import Settings, TaskRunnerSettings
 from gitlab_copilot_agent.metrics import (
     copilot_session_duration,
 )
-from gitlab_copilot_agent.process_sandbox import _get_real_cli_path
+from gitlab_copilot_agent.process_sandbox import get_real_cli_path
 from gitlab_copilot_agent.repo_config import discover_repo_config
 from gitlab_copilot_agent.telemetry import get_tracer
 
@@ -68,7 +68,7 @@ async def run_copilot_session(
             "task_type": task_type,
         },
     ):
-        cli_path = _get_real_cli_path()
+        cli_path = get_real_cli_path()
         try:
             client_opts: CopilotClientOptions = {
                 "cli_path": cli_path,
@@ -128,7 +128,7 @@ async def run_copilot_session(
                     done = asyncio.Event()
                     messages: list[str] = []
 
-                    def on_event(event: Any) -> None:
+                    def on_event(event: Any) -> None:  # pyright: ignore[reportExplicitAny]
                         match getattr(event, "type", None):
                             case t if t and t.value == "assistant.message":
                                 content = getattr(event.data, "content", "")
@@ -136,6 +136,8 @@ async def run_copilot_session(
                                     messages.append(content)
                             case t if t and t.value == "session.idle":
                                 done.set()
+                            case _:
+                                pass
 
                     session.on(on_event)
                     await session.send({"prompt": user_prompt})

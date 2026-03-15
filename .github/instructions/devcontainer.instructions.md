@@ -19,7 +19,7 @@ When running on the host, every dev tool invocation must be prefixed with:
 devcontainer exec --workspace-folder . <command>
 ```
 
-This includes: language runtimes (`python`, `node`, `go`), package managers (`uv`, `npm`, `pip`), linters (`ruff`, `mypy`, `eslint`), test runners (`pytest`, `jest`), build tools (`tsc`, `make`), inline scripts (`python3 << 'EOF'`), and application servers (`uv run uvicorn`, `npm start`).
+This includes: language runtimes (`python`, `node`, `go`), package managers (`uv`, `npm`, `pip`), linters (`ruff`, `pyright`, `eslint`), test runners (`pytest`, `jest`), build tools (`tsc`, `make`), inline scripts (`python3 << 'EOF'`), and application servers (`uv run uvicorn`, `npm start`).
 
 ## Commands That Don't Require the Devcontainer
 

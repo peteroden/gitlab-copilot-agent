@@ -76,7 +76,9 @@ class MRDetails(BaseModel):
     title: str = Field(description="MR title")
     description: str | None = Field(description="MR description")
     diff_refs: MRDiffRef = Field(description="Git diff reference SHAs")
-    changes: list[MRChange] = Field(default_factory=list, description="List of file changes")
+    changes: list[MRChange] = Field(  # pyright: ignore[reportUnknownVariableType]
+        default_factory=list, description="List of file changes"
+    )
 
 
 class GitLabClientProtocol(Protocol):
@@ -105,30 +107,21 @@ class GitLabClient:
         def _fetch() -> MRDetails:
             project = self._gl.projects.get(project_id)
             mr = project.mergerequests.get(mr_iid)
-            changes_data = mr.changes()
+            changes_data: dict[str, object] = mr.changes()  # pyright: ignore[reportAssignmentType]
 
-            diff_refs_raw = changes_data["diff_refs"]
-            diff_refs = MRDiffRef(
-                base_sha=diff_refs_raw["base_sha"],
-                start_sha=diff_refs_raw["start_sha"],
-                head_sha=diff_refs_raw["head_sha"],
-            )
+            diff_refs = MRDiffRef.model_validate(changes_data["diff_refs"])
 
-            changes = [
-                MRChange(
-                    old_path=c["old_path"],
-                    new_path=c["new_path"],
-                    diff=c["diff"],
-                    new_file=c.get("new_file", False),
-                    deleted_file=c.get("deleted_file", False),
-                    renamed_file=c.get("renamed_file", False),
-                )
-                for c in changes_data.get("changes", [])
-            ]
+            raw_changes = changes_data.get("changes", [])
+            assert isinstance(raw_changes, list)
+            changes: list[MRChange] = []
+            for c in raw_changes:  # pyright: ignore[reportUnknownVariableType]
+                if isinstance(c, dict):
+                    changes.append(MRChange.model_validate(c))
 
+            raw_desc = changes_data.get("description")
             return MRDetails(
-                title=changes_data.get("title", ""),
-                description=changes_data.get("description"),
+                title=str(changes_data.get("title", "")),
+                description=str(raw_desc) if raw_desc is not None else None,
                 diff_refs=diff_refs,
                 changes=changes,
             )
@@ -168,7 +161,7 @@ class GitLabClient:
                     "description": description,
                 }
             )
-            return mr.iid  # type: ignore[no-any-return]
+            return mr.iid  # pyright: ignore[reportReturnType]
 
         return await asyncio.to_thread(_create)
 
@@ -220,6 +213,6 @@ class GitLabClient:
 
         def _resolve() -> int:
             project = self._gl.projects.get(id_or_path)
-            return project.id  # type: ignore[no-any-return]
+            return project.id  # pyright: ignore[reportReturnType]
 
         return await asyncio.to_thread(_resolve)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
 class ReviewComment(BaseModel):
@@ -14,7 +14,7 @@ class ReviewComment(BaseModel):
     model_config = ConfigDict(frozen=True)
     file: str = Field(description="Path to the reviewed file")
     line: int = Field(description="Line number of the comment")
-    severity: str = Field(description="Severity level: error, warning, or info")
+    severity: str = Field(default="info", description="Severity level: error, warning, or info")
     comment: str = Field(description="Review comment text")
     suggestion: str | None = Field(default=None, description="Suggested replacement code")
     suggestion_start_offset: int = Field(
@@ -45,28 +45,20 @@ def parse_review(raw: str) -> ParsedReview:
         return ParsedReview(comments=[], summary=raw.strip())
 
     try:
-        items = json.loads(json_match.group(1))
+        parsed: object = json.loads(json_match.group(1))
     except json.JSONDecodeError:
         return ParsedReview(comments=[], summary=raw.strip())
 
-    comments = []
-    for item in items:
+    if not isinstance(parsed, list):
+        return ParsedReview(comments=[], summary=raw.strip())
+
+    comments: list[ReviewComment] = []
+    for item in parsed:  # pyright: ignore[reportUnknownVariableType]
         if not isinstance(item, dict):
             continue
         try:
-            suggestion = item.get("suggestion")
-            comments.append(
-                ReviewComment(
-                    file=str(item["file"]),
-                    line=int(item["line"]),
-                    severity=str(item.get("severity", "info")),
-                    comment=str(item["comment"]),
-                    suggestion=str(suggestion) if suggestion else None,
-                    suggestion_start_offset=int(item.get("suggestion_start_offset", 0)),
-                    suggestion_end_offset=int(item.get("suggestion_end_offset", 0)),
-                )
-            )
-        except (KeyError, ValueError):
+            comments.append(ReviewComment.model_validate(item))
+        except (KeyError, ValueError, ValidationError):
             continue
 
     summary = raw[json_match.end() :].strip()
