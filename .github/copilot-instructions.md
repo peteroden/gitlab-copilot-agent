@@ -64,15 +64,18 @@ These are non-negotiable. Violating any of these is a session failure.
 
 1. **NEVER merge PRs.** Create the PR, then stop. The user reviews and merges all PRs. No exceptions, no "it's a small change", no "CI passed so it's safe."
 2. **Run the full CI-equivalent locally before every commit.** If the project has a `make lint`, `make test`, or equivalent — run it. Do not run individual tools (e.g., just the formatter) as a shortcut. If CI fails on something you could have caught locally, that's a bug in your process.
-3. **Cross-model code review before every PR push.** No exceptions for "small" PRs. Invoke the `code-review` skill or a code-review agent using a different model than the one that wrote the code.
-4. **Verify your git branch before every commit.** Run `git branch --show-current` before committing, especially after rebase, stash, or checkout operations. Committing to the wrong branch wastes time and risks force-push accidents.
-5. **Smoke-test behavioral changes.** Unit tests passing is necessary but not sufficient. If you change logging, telemetry, startup behavior, or error handling — verify with a quick manual run if possible. Don't let the user discover broken behavior live.
+3. **Cross-model code review before every PR push.** No exceptions for "small" PRs. Invoke the `code-review` skill or a code-review agent using a different model than the one that wrote the code. See the code-review skill for approved model pairs.
+4. **OWASP security review before every PR push.** No exceptions. Invoke the `owasp-review` skill on every PR, just like code review. Security issues hide in unexpected places.
+5. **Verify your git branch before every commit.** Run `git branch --show-current` before committing, especially after rebase, stash, or checkout operations. Committing to the wrong branch wastes time and risks force-push accidents.
+6. **Smoke-test behavioral changes.** Unit tests passing is necessary but not sufficient. If you change logging, telemetry, startup behavior, or error handling — verify with a quick manual run if possible. Don't let the user discover broken behavior live.
+7. **Documentation alongside code, not after.** Every PR that changes module boundaries, data flow, security model, or public APIs must include documentation updates in the same PR. Do not defer docs to a follow-up unless the PR is already at the 200-line limit.
 
 ## PR Requirements
 
-- ≤200 diff lines (additions + deletions). If larger, split into stacked PRs.
+- ≤200 diff lines of **code** (additions + deletions). Documentation, code comments, and test fixtures do not count toward this limit.
 - Each stacked PR must be fully functional and standalone.
-- **Code review before push**: invoke a code review agent (ideally a different model than the one that wrote the code) on every PR. Fix all High/Critical findings before merge. Create follow-up issues for Medium findings.
+- **Code review before push**: invoke a code review agent (using the approved cross-vendor model — see code-review skill) on every PR. Fix all High/Critical findings before merge. Create follow-up issues for Medium findings.
+- **Security review before push**: invoke the `owasp-review` skill on every PR, same as code review.
 - PR description format:
   ```
   ## What
