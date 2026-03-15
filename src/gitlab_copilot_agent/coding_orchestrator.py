@@ -24,7 +24,7 @@ from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_models import JiraIssue
 from gitlab_copilot_agent.metrics import coding_tasks_duration, coding_tasks_total
-from gitlab_copilot_agent.project_mapping import GitLabProjectMapping
+from gitlab_copilot_agent.project_registry import ResolvedProject
 from gitlab_copilot_agent.task_executor import TaskExecutor
 from gitlab_copilot_agent.telemetry import get_tracer
 
@@ -64,7 +64,7 @@ class CodingOrchestrator:
                 "in_review_transition_failed", issue_key=issue_key, target_status=in_review
             )
 
-    async def handle(self, issue: JiraIssue, project_mapping: GitLabProjectMapping) -> None:
+    async def handle(self, issue: JiraIssue, project_mapping: ResolvedProject) -> None:
         if self._tracker.is_processed(issue.key):
             return
 
@@ -93,7 +93,7 @@ class CodingOrchestrator:
                     repo_path = await git_clone(
                         project_mapping.clone_url,
                         project_mapping.target_branch,
-                        self._settings.gitlab_token,
+                        project_mapping.token,
                         clone_dir=self._settings.clone_dir,
                         max_retries=self._settings.git_clone_max_retries,
                         backoff_base=self._settings.git_clone_backoff_base,
@@ -126,7 +126,7 @@ class CodingOrchestrator:
                         repo_path,
                         "origin",
                         branch,
-                        self._settings.gitlab_token,
+                        project_mapping.token,
                     )
                     mr_title = f"feat({issue.key.lower()}): {issue.fields.summary}"
                     mr_desc = f"Automated implementation for {issue.key}.\n\n{result.summary}"

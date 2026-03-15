@@ -12,7 +12,7 @@ from opentelemetry import trace
 from gitlab_copilot_agent.config import JiraSettings
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_models import JiraIssue
-from gitlab_copilot_agent.project_mapping import GitLabProjectMapping, ProjectMap
+from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
 from gitlab_copilot_agent.telemetry import get_tracer
 
 log = structlog.get_logger()
@@ -22,7 +22,7 @@ _tracer = get_tracer(__name__)
 class CodingTaskHandler(Protocol):
     """Interface for handling discovered coding tasks."""
 
-    async def handle(self, issue: JiraIssue, project_mapping: GitLabProjectMapping) -> None: ...
+    async def handle(self, issue: JiraIssue, project_mapping: ResolvedProject) -> None: ...
 
 
 class JiraPoller:
@@ -32,7 +32,7 @@ class JiraPoller:
         self,
         jira_client: JiraClient,
         settings: JiraSettings,
-        project_map: ProjectMap,
+        project_map: ProjectRegistry,
         handler: CodingTaskHandler,
         allowed_project_ids: set[int] | None = None,
     ) -> None:
@@ -69,7 +69,7 @@ class JiraPoller:
         """Single poll cycle — search for issues, filter by project map, invoke handler."""
         with _tracer.start_as_current_span("jira.poll"):
             # Build JQL for all projects in the map
-            project_keys = list(self._project_map.mappings.keys())
+            project_keys = sorted(self._project_map.jira_keys())
             if not project_keys:
                 return
 
@@ -85,7 +85,7 @@ class JiraPoller:
                 if issue.key in self._processed_issues:
                     continue
 
-                mapping = self._project_map.get(issue.project_key)
+                mapping = self._project_map.get_by_jira(issue.project_key)
                 if mapping:
                     if (
                         self._allowed_project_ids is not None

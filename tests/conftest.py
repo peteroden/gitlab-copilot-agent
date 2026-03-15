@@ -24,9 +24,8 @@ JIRA_URL = "https://jira.example.com"
 JIRA_EMAIL = "bot@example.com"
 JIRA_TOKEN = "test-jira-token"
 JIRA_PROJECT_MAP_JSON = (
-    '{"mappings": {"PROJ": {"gitlab_project_id": 42, '
-    '"clone_url": "https://gitlab.example.com/group/project.git", '
-    '"target_branch": "main"}}}'
+    '{"mappings": {"PROJ": {"repo": "group/project", '
+    '"target_branch": "main", "credential_ref": "default"}}}'
 )
 
 PROJECT_ID = 42
