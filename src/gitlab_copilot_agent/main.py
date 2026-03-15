@@ -279,7 +279,8 @@ async def config_reload(
     try:
         registry = await ProjectRegistry.from_rendered_map(body, creds, settings.gitlab_url)
     except Exception as exc:
-        return {"status": "error", "detail": str(exc)}
+        await log.aerror("config_reload_failed", error=str(exc))
+        return {"status": "error", "detail": "Invalid configuration — check server logs"}
     await poller.reload_registry(registry)
     return {
         "status": "ok",
