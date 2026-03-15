@@ -11,6 +11,7 @@ from copilot import CopilotClient
 from copilot.types import (
     CopilotClientOptions,
     CustomAgentConfig,
+    PermissionHandler,
     ProviderConfig,
     SessionConfig,
 )
@@ -121,6 +122,7 @@ async def run_copilot_session(
                     session_opts["provider"] = provider
                     session_opts["model"] = settings.copilot_model
 
+                session_opts["on_permission_request"] = PermissionHandler.approve_all
                 session = await client.create_session(session_opts)
                 try:
                     done = asyncio.Event()
