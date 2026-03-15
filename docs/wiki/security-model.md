@@ -301,16 +301,13 @@ graph TB
 - TTL after finished: 300s (pod auto-deleted)
 - Optional `hostAliases` for custom DNS resolution
 
-**Credentials Passed** (via K8s Secret refs when `k8s_secret_name` configured):
-- `GITLAB_TOKEN` (clone only — pod has no push access)
-- `GITHUB_TOKEN` (or `COPILOT_PROVIDER_API_KEY`) via `secretKeyRef`
-- `GITLAB_WEBHOOK_SECRET` (optional — only when webhooks are used, not used in pod)
+**Credentials Passed** (via explicit K8s Secret key refs):
+- `GITHUB_TOKEN` (or `COPILOT_PROVIDER_API_KEY`) for Copilot/LLM auth
+- `AZURE_STORAGE_CONNECTION_STRING` for queue dequeue and blob download
 
-Only the 3 tokens needed by Job pods are mounted — other secrets (`JIRA_*`, etc.) are excluded to limit blast radius.
+Only the secrets needed by Job pods are mounted. **GITLAB_TOKEN is never passed to the runner** — it receives the repo via blob transfer from the controller. Other secrets (`JIRA_*`, `GITLAB_WEBHOOK_SECRET`) are also excluded.
 
-When `k8s_secret_name` is not set (non-Helm deployments), credentials fall back to plaintext env vars with a startup warning.
-
-**Result Path**: Pod stores `CodingResult` (summary + patch + base_sha) or `ReviewResult` (summary only) in Redis. Controller reads result — only the controller commits, pushes, and posts API calls.
+**Result Path**: Pod stores `CodingResult` (summary + patch + base_sha) or `ReviewResult` (summary only) in Azure Blob Storage. Controller reads result — only the controller commits, pushes, and posts API calls.
 
 **Threat**: Malicious repo code executed during review → can read pod env, exfiltrate tokens.
 
@@ -320,7 +317,7 @@ When `k8s_secret_name` is not set (non-Helm deployments), credentials fall back 
 - Results validated before apply: `base_sha` match, path traversal scan, size limit
 - Agent does not execute arbitrary code (only SDK, git, standard tools)
 - No network egress policy yet (attacker can still exfiltrate via DNS/HTTP — see Recommended Hardening)
-- Egress restricted by NetworkPolicy when deployed via Helm (allows GitLab, Copilot API, Redis, DNS only)
+- Egress restricted by NetworkPolicy when deployed via Helm (allows Copilot API, Azure Storage, DNS — GitLab egress still permitted but no longer needed)
 
 **Code**: `k8s_executor.py` → `_create_job()`
 
@@ -337,7 +334,7 @@ When `k8s_secret_name` is not set (non-Helm deployments), credentials fall back 
 
 **Secret Management (S1)**:
 - Secrets configured as Key Vault references on the Job template
-- **Never passed per-execution** — only non-sensitive env vars (task_id, repo_url, branch, prompts) are overridden at runtime
+- **Never passed per-execution** — only non-sensitive env vars (task_id, repo_blob_key, prompts) are overridden at runtime
 - Key Vault access scoped via RBAC (Key Vault Secrets User role)
 
 **Identity Separation (S4)**:
@@ -346,7 +343,7 @@ When `k8s_secret_name` is not set (non-Helm deployments), credentials fall back 
 
 **Authentication (S3)**: OIDC federation for CI/CD — no stored Azure credentials in GitHub Actions.
 
-**Result Path**: Job stores result in Redis (via private endpoint). Controller reads result — only the controller posts API calls.
+**Result Path**: Job stores result in Azure Blob Storage (via private endpoint). Controller reads result — only the controller posts API calls.
 
 **Code**: `aca_executor.py` → `_start_execution()`
 
@@ -364,12 +361,15 @@ When `k8s_secret_name` is not set (non-Helm deployments), credentials fall back 
 
 **Code**: `helm/gitlab-copilot-agent/templates/secret.yaml`
 
-**Values**:
+**Values** (all stored in K8s Secret):
 - `GITLAB_TOKEN`
 - `GITLAB_WEBHOOK_SECRET`
 - `GITHUB_TOKEN`
 - `COPILOT_PROVIDER_API_KEY`
 - `JIRA_API_TOKEN`
+- `AZURE_STORAGE_CONNECTION_STRING`
+
+**Access**: The controller pod receives all secrets via `envFrom`. Job pods (task runner) receive only `GITHUB_TOKEN`, `COPILOT_PROVIDER_API_KEY`, and `AZURE_STORAGE_CONNECTION_STRING` via explicit `secretKeyRef` entries — they never see `GITLAB_TOKEN`, `GITLAB_WEBHOOK_SECRET`, or `JIRA_API_TOKEN`.
 
 ---
 
@@ -407,7 +407,7 @@ When `k8s_secret_name` is not set (non-Helm deployments), credentials fall back 
 
 **Firewall**: Kubernetes NetworkPolicies deployed by Helm restrict traffic:
 - **Controller pod**: Ingress on port 8000, egress to GitLab/Copilot/Jira APIs, Redis, K8s API, DNS
-- **Job pods**: No ingress, egress to GitLab, Copilot API, Redis, DNS only
+- **Job pods**: No ingress, egress currently allows HTTPS/HTTP/SSH/git and Azure Storage (NetworkPolicy permits broad outbound — tightening to Copilot API + Azure Storage only is recommended now that GitLab access is no longer needed)
 - **Redis pod**: Ingress from controller and job pods only (port 6379), no egress
 
 NetworkPolicies use `app.kubernetes.io/instance` labels to scope to the Helm release, preventing cross-release access.
@@ -421,16 +421,15 @@ NetworkPolicies use `app.kubernetes.io/instance` labels to scope to the Helm rel
 | Service | GitLab API | HTTPS | Bearer token | MR metadata, comments |
 | Service | Jira API | HTTPS | Basic auth | Issue data, transitions |
 | Service | Copilot API / BYOK | HTTPS | Bearer / API key | Code review prompts |
-| Service | Redis | Redis (6379) | None | Locks, dedup keys, results |
+| Service | Azure Storage | HTTPS/HTTP | Connection string / MI | Queue, blobs (params, results, repo tarballs) |
 | Service | K8s API | HTTPS | ServiceAccount token | Job creation, status |
-| K8s Job | GitLab API | HTTPS | Bearer token | Repo clone |
 | K8s Job | Copilot API | HTTPS | Bearer / API key | Code generation |
-| K8s Job | Redis | Redis (6379) | None | Store results |
+| K8s Job | Azure Storage | HTTPS/HTTP | Connection string | Repo blob download, result upload |
 
-**Redis Security**: 
-- Password authentication enabled by default via Helm (auto-generated 32-char password stored in K8s Secret)
-- Use Kubernetes NetworkPolicy to restrict to service + jobs only ✅ (implemented — PR #164)
-- Consider TLS for production if Redis traffic crosses node boundaries
+**Azure Storage Security**: 
+- Production uses Managed Identity (`DefaultAzureCredential`); connection strings used only for local Azurite dev
+- Kubernetes NetworkPolicy restricts egress to required endpoints ✅
+- Storage account policy enforces `shared_access_key_enabled=false` in production
 
 ---
 

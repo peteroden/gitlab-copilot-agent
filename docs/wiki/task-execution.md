@@ -134,18 +134,19 @@ class LocalTaskExecutor:
 
 ## task_runner.py (K8s / ACA Job Entrypoint)
 
-**Purpose**: Standalone script that runs inside Job pods, dequeues task from Azure Storage Queue, executes Copilot session, stores result in Azure Blob Storage.
+**Purpose**: Standalone script that runs inside Job pods, dequeues task from Azure Storage Queue, downloads repo tarball from blob, executes Copilot session, stores result in Azure Blob Storage.
 
 **Flow**:
 1. Dequeue message from Azure Storage Queue (visibility timeout = 600s)
 2. Download params blob from Azure Blob Storage (Claim Check)
-3. Parse task params: TASK_TYPE, TASK_ID, REPO_URL, BRANCH, TASK_PAYLOAD
+3. Parse task params: TASK_TYPE, TASK_ID, REPO_BLOB_KEY, USER_PROMPT
 4. Validate TASK_TYPE ∈ {"review", "coding", "echo"}
-5. Validate REPO_URL authority matches GITLAB_URL (host + port)
-6. Clone repo via `git_clone()`
-7. Call `run_copilot_session()` with `get_prompt(settings, type)` system prompt
+5. Validate REPO_BLOB_KEY starts with `repos/` prefix (defense-in-depth)
+6. Download repo tarball from blob (`repos/{task_id}.tar.gz`)
+7. Extract tarball to temp dir (uses `tarfile.extractall(filter="data")` for security)
+8. Call `run_copilot_session()` with `get_prompt(settings, type)` system prompt
    - **For coding tasks**: includes `validate_response` callback that checks for required JSON output; retries once in-session if missing
-8. **For coding tasks**: Parse structured output and stage files:
+9. **For coding tasks**: Parse structured output and stage files:
    - Parse agent response as `CodingAgentOutput` (Pydantic model with `summary` and `files_changed`)
    - Stage only explicitly listed files via `git add -- <file>` (not `git add -A`)
    - Skip files that don't exist on disk (logged as warnings)
@@ -154,18 +155,19 @@ class LocalTaskExecutor:
    - Validate patch size ≤ `MAX_PATCH_SIZE` (10 MB, from `git_operations.py`)
    - Validate patch for path traversal (`../`)
    - Build `CodingResult(summary, patch, base_sha)`
-9. **For review tasks**: Build `ReviewResult(summary)`
-10. Upload result as JSON blob to Azure Blob Storage (`results/{task_id}.json`)
-11. Complete (delete) the queue message via `TaskQueue.complete()`
-12. Return exit code 0 (success) or 1 (error)
+10. **For review tasks**: Build `ReviewResult(summary)`
+11. Upload result as JSON blob to Azure Blob Storage (`results/{task_id}.json`)
+12. Complete (delete) the queue message via `TaskQueue.complete()`
+13. Return exit code 0 (success) or 1 (error)
 
-**Validation**: `_validate_repo_url()` ensures REPO_URL is from trusted GitLab instance (prevents SSRF).
+**Security**: The task runner has **zero GitLab credentials**. It receives the repo via blob transfer from the controller, which clones with per-project tokens. The runner only accesses Azure Blob Storage (for repo tarballs and results) and the Copilot API.
 
 **Example**:
 ```python
 $ python -m gitlab_copilot_agent.task_runner
 # Dequeues from Azure Storage Queue, downloads params blob
-# Clones repo, runs review, stores result blob, deletes queue message
+# Downloads repo tarball from blob, extracts, runs review
+# Stores result blob, deletes queue message
 ```
 
 ---
