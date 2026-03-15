@@ -65,7 +65,7 @@ class ProjectRegistry:
         gitlab_url: str,
     ) -> ProjectRegistry:
         projects: list[ResolvedProject] = []
-        base = gitlab_url.rstrip("/").split("://", 1)[-1]
+        base_url = gitlab_url.rstrip("/")
         for jira_key, binding in rendered.mappings.items():
             token = credentials.resolve(binding.credential_ref)
             client = GitLabClient(gitlab_url, token)
@@ -75,7 +75,7 @@ class ProjectRegistry:
                     jira_project=jira_key,
                     repo=binding.repo,
                     gitlab_project_id=pid,
-                    clone_url=f"https://{base}/{binding.repo}.git",
+                    clone_url=f"{base_url}/{binding.repo}.git",
                     target_branch=binding.target_branch,
                     credential_ref=binding.credential_ref,
                     token=token,

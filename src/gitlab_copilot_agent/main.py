@@ -21,12 +21,14 @@ from gitlab_copilot_agent.concurrency import (
     ReviewedMRTracker,
 )
 from gitlab_copilot_agent.config import Settings
+from gitlab_copilot_agent.credential_registry import CredentialRegistry
 from gitlab_copilot_agent.git_operations import CLONE_DIR_PREFIX
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.gitlab_poller import GitLabPoller
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_poller import JiraPoller
-from gitlab_copilot_agent.project_mapping import ProjectMap
+from gitlab_copilot_agent.mapping_models import RenderedMap
+from gitlab_copilot_agent.project_registry import ProjectRegistry
 from gitlab_copilot_agent.state import (
     create_dedup,
     create_lock,
@@ -159,13 +161,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     jira_client: JiraClient | None = None
     if settings.jira:
         jira_client = JiraClient(settings.jira.url, settings.jira.email, settings.jira.api_token)
-        project_map = ProjectMap.model_validate_json(settings.jira.project_map_json)
+        rendered = RenderedMap.model_validate_json(settings.jira.project_map_json)
+        creds = CredentialRegistry.from_env()
+        try:
+            project_registry = await ProjectRegistry.from_rendered_map(
+                rendered, creds, settings.gitlab_url
+            )
+        except (KeyError, ValueError) as exc:
+            raise ValueError(f"Failed to build project registry: {exc}") from exc
         gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
         tracker = ProcessedIssueTracker()
         handler = CodingOrchestrator(
             settings, gl_client, jira_client, app.state.executor, repo_locks, tracker
         )
-        poller = JiraPoller(jira_client, settings.jira, project_map, handler, allowed_project_ids)
+        poller = JiraPoller(
+            jira_client, settings.jira, project_registry, handler, allowed_project_ids
+        )
         await poller.start()
         await log.ainfo("jira_poller_started", interval=settings.jira.poll_interval)
 

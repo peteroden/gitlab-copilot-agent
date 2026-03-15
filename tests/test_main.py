@@ -89,7 +89,10 @@ async def test_lifespan_with_jira_creates_shared_lock_manager(
         patch(
             "gitlab_copilot_agent.main.CodingOrchestrator", return_value=mock_orchestrator
         ) as mock_orch_class,
+        patch("gitlab_copilot_agent.main.CredentialRegistry"),
+        patch("gitlab_copilot_agent.main.ProjectRegistry") as mock_registry_cls,
     ):
+        mock_registry_cls.from_rendered_map = AsyncMock(return_value=AsyncMock())
         async with lifespan(test_app):
             mock_poller.start.assert_called_once()
             assert test_app.state.repo_locks is not None
@@ -145,6 +148,8 @@ async def test_shutdown_call_ordering(
         patch("gitlab_copilot_agent.main.JiraClient", return_value=mock_jira),
         patch("gitlab_copilot_agent.main.JiraPoller", return_value=mock_poller),
         patch("gitlab_copilot_agent.main.CodingOrchestrator"),
+        patch("gitlab_copilot_agent.main.CredentialRegistry"),
+        patch("gitlab_copilot_agent.main.ProjectRegistry") as mock_reg,
         patch("gitlab_copilot_agent.main.create_lock", return_value=mock_locks),
         patch("gitlab_copilot_agent.main.create_dedup", return_value=mock_dedup),
         patch(
@@ -152,6 +157,7 @@ async def test_shutdown_call_ordering(
             side_effect=lambda: call_order.append("telemetry_flush"),
         ),
     ):
+        mock_reg.from_rendered_map = AsyncMock(return_value=AsyncMock())
         async with lifespan(test_app):
             pass
 

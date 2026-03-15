@@ -58,8 +58,10 @@ SAMPLE_DIFF = """\
 
 
 @app.get("/api/v4/projects/{project_id}")
-async def get_project(project_id: int) -> dict:
-    return {"id": project_id, "path_with_namespace": "test/e2e-repo"}
+async def get_project(project_id: str) -> dict:
+    # Accept both numeric IDs and URL-encoded paths (python-gitlab encodes slashes)
+    pid = int(project_id) if project_id.isdigit() else PROJECT_ID
+    return {"id": pid, "path_with_namespace": "test/e2e-repo"}
 
 
 @app.get("/api/v4/projects/{project_id}/merge_requests/{mr_iid}")
