@@ -58,20 +58,6 @@ SAMPLE_DIFF = """\
 """
 
 
-@app.get("/api/v4/projects/{project_id}")
-async def get_project(project_id: str) -> dict:
-    # Accept both numeric IDs and URL-encoded paths (python-gitlab encodes slashes)
-    decoded = unquote(project_id)
-    if project_id.isdigit():
-        pid = int(project_id)
-    elif decoded == "repo":
-        pid = PROJECT_ID
-    else:
-        # Different paths get different IDs to avoid duplicate project rejection
-        pid = abs(hash(decoded)) % 100_000
-    return {"id": pid, "path_with_namespace": decoded if "/" in decoded else f"test/{decoded}"}
-
-
 @app.get("/api/v4/projects/{project_id}/merge_requests/{mr_iid}")
 async def get_mr(project_id: int, mr_iid: int) -> dict:
     return {
@@ -182,6 +168,21 @@ async def list_notes(project_id: int, mr_iid: int) -> Response:
     notes = _mr_notes.get(mr_iid, [])
     headers = {"x-total": str(len(notes)), "x-total-pages": "1", "x-page": "1"}
     return JSONResponse(content=notes, headers=headers)
+
+
+# Catch-all project lookup — registered last so specific routes match first.
+@app.get("/api/v4/projects/{project_id:path}")
+async def get_project(project_id: str) -> dict:
+    # Accept both numeric IDs and URL-encoded paths (python-gitlab encodes slashes)
+    decoded = unquote(project_id)
+    if project_id.isdigit():
+        pid = int(project_id)
+    elif decoded == "repo":
+        pid = PROJECT_ID
+    else:
+        # Different paths get different IDs to avoid duplicate project rejection
+        pid = abs(hash(decoded)) % 100_000
+    return {"id": pid, "path_with_namespace": decoded if "/" in decoded else f"test/{decoded}"}
 
 
 # --- Mock control endpoints (test script injects state) ---
