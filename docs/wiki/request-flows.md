@@ -277,12 +277,12 @@ sequenceDiagram
                 Note over POLL: Skip already processed
             end
             
-            POLL->>POLL: project_map.get(issue.project_key)
+            POLL->>POLL: registry.get_by_jira(issue.project_key)
             alt No mapping
                 Note over POLL: Skip
             end
             
-            POLL->>CODING: handle(issue, project_mapping)
+            POLL->>CODING: handle(issue, resolved_project)
             
             Note over CODING: Acquire lock on clone_url
             
@@ -324,9 +324,9 @@ sequenceDiagram
     end
 ```
 
-**Processed Tracker**: In-memory set of processed issue keys (cleared on service restart).
+**Processed Tracker**: In-memory set of processed issue keys (cleared on service restart or hot-reload).
 
-**Locking**: Per-repo lock on `clone_url` to prevent concurrent clone/push operations.
+**Locking**: `asyncio.Lock` around `_poll_once()` prevents races during hot-reload. Per-repo lock on `clone_url` prevents concurrent clone/push operations.
 
 **Error Handling**:
 - On exception: log, emit `coding_tasks_total` with outcome=error, post failure comment to Jira, re-raise
