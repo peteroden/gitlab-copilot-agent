@@ -422,33 +422,44 @@ See [configuration-reference.md](configuration-reference.md) for all fields.
 
 ---
 
-## Project Mapping Models (`project_mapping.py`)
+## Project Mapping Models
 
-### `GitLabProjectMapping`
-**Purpose**: Mapping entry for a single Jira project to its GitLab counterpart.
+### `RenderedBinding` (`mapping_models.py`)
+**Purpose**: A single Jira→GitLab binding in the rendered JSON format.
 
 **Config**: `strict=True`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `gitlab_project_id` | `int` | — | GitLab project ID |
-| `clone_url` | `str` | — | GitLab repo HTTPS clone URL |
-| `target_branch` | `str` | `"main"` | Default MR target branch |
+| `repo` | `str` | — | GitLab repo path (e.g., `group/project`) |
+| `target_branch` | `str` | — | Default MR target branch |
+| `credential_ref` | `str` | — | Credential alias (`"default"` or named) |
 
 ---
 
-### `ProjectMap`
-**Purpose**: Collection of Jira→GitLab project mappings loaded from config.
+### `RenderedMap` (`mapping_models.py`)
+**Purpose**: Top-level rendered JSON passed as `JIRA_PROJECT_MAP`.
 
 **Config**: `strict=True`
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `mappings` | `dict[str, GitLabProjectMapping]` | `{}` | Map of Jira project key → GitLab project config |
+| `mappings` | `dict[str, RenderedBinding]` | — | Map of Jira project key → binding |
 
-**Methods**:
-- `get(jira_project_key: str) -> GitLabProjectMapping | None`: Look up GitLab project for a Jira project key
-- `__contains__(key: str) -> bool`: Check if key is in mappings
+---
+
+### `ResolvedProject` (`project_registry.py`)
+**Purpose**: Fully resolved project context for runtime use.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `jira_project` | `str` | Jira project key |
+| `repo` | `str` | GitLab repo path |
+| `gitlab_project_id` | `int` | Resolved GitLab project ID |
+| `clone_url` | `str` | HTTPS clone URL |
+| `target_branch` | `str` | Default MR target branch |
+| `credential_ref` | `str` | Credential alias |
+| `token` | `str` | Resolved GitLab token (masked in repr) |
 
 ---
 

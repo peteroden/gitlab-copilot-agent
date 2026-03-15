@@ -386,32 +386,91 @@ All optional — service runs review-only without these.
 
 ## Jira Project Map Format
 
-JSON object with top-level `"mappings"` key:
+The project map uses a **rendered JSON** format for the `JIRA_PROJECT_MAP` env var. This is typically generated from a YAML source file using the `mapping-helper` CLI.
+
+### YAML Source Format (recommended)
+
+Create a `mappings.yaml` file:
+
+```yaml
+defaults:
+  target_branch: main
+  credential_ref: default
+
+bindings:
+  - jira_project: PROJ
+    repo: group/project
+  - jira_project: OPS
+    repo: platform/tools
+    target_branch: develop
+    credential_ref: platform_team
+```
+
+### Rendered JSON (env var value)
+
+Generate with `mapping-helper render-json mappings.yaml`:
 
 ```json
 {
   "mappings": {
     "PROJ": {
-      "gitlab_project_id": 42,
-      "clone_url": "https://gitlab.example.com/group/project.git",
-      "target_branch": "main"
+      "repo": "group/project",
+      "target_branch": "main",
+      "credential_ref": "default"
     },
-    "DEMO": {
-      "gitlab_project_id": 99,
-      "clone_url": "https://gitlab.example.com/team/demo.git",
-      "target_branch": "develop"
+    "OPS": {
+      "repo": "platform/tools",
+      "target_branch": "develop",
+      "credential_ref": "platform_team"
     }
   }
 }
 ```
 
-**Fields**:
-- **Jira project key** (e.g., `"PROJ"`): Top-level keys in `mappings`
-- **gitlab_project_id** (`int`): GitLab project ID
-- **clone_url** (`str`): HTTPS clone URL
-- **target_branch** (`str`): Default MR target branch (default: `"main"`)
+### Fields
 
-**Parsing**: Loaded via `ProjectMap.model_validate_json()` in `main.py`.
+- **Jira project key** (e.g., `"PROJ"`): Top-level keys in `mappings`
+- **repo** (`str`): GitLab repo path (e.g., `group/project`)
+- **target_branch** (`str`): Default MR target branch
+- **credential_ref** (`str`): Credential alias — `"default"` uses `GITLAB_TOKEN`, named aliases use `GITLAB_TOKEN__<ALIAS>` (e.g., `credential_ref: platform_team` → `GITLAB_TOKEN__PLATFORM_TEAM`)
+
+### CLI Commands
+
+```bash
+# Validate YAML syntax and semantics
+mapping-helper validate mappings.yaml
+
+# Show human-readable summary
+mapping-helper show mappings.yaml
+
+# Render JSON for JIRA_PROJECT_MAP env var
+mapping-helper render-json mappings.yaml
+```
+
+### Named Credentials
+
+Set additional GitLab tokens as env vars with the `GITLAB_TOKEN__` prefix:
+
+```bash
+GITLAB_TOKEN=glpat-default-token        # Used by credential_ref: default
+GITLAB_TOKEN__PLATFORM_TEAM=glpat-other  # Used by credential_ref: platform_team
+```
+
+Alias matching is case-insensitive. Startup fails fast if a binding references an unknown alias.
+
+### Hot-Reload
+
+Update mappings at runtime without restart:
+
+```bash
+mapping-helper render-json updated-mappings.yaml | \
+  curl -X POST http://localhost:8000/config/reload \
+    -H 'Content-Type: application/json' \
+    -H 'X-Gitlab-Token: <webhook-secret>' \
+    -d @-
+```
+
+The endpoint atomically swaps the registry and clears dedup state. New credentials (`GITLAB_TOKEN__*` env vars) require a container restart.
 
 ---
 
@@ -478,7 +537,7 @@ JIRA_TRIGGER_STATUS="AI Ready"
 JIRA_IN_PROGRESS_STATUS="In Progress"
 JIRA_IN_REVIEW_STATUS="In Review"
 JIRA_POLL_INTERVAL=30
-JIRA_PROJECT_MAP='{"mappings":{"PROJ":{"gitlab_project_id":42,"clone_url":"https://gitlab.example.com/group/project.git","target_branch":"main"}}}'
+JIRA_PROJECT_MAP='{"mappings":{"PROJ":{"repo":"group/project","target_branch":"main","credential_ref":"default"}}}'
 
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 SERVICE_VERSION=1.0.0
