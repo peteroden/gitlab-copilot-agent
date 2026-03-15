@@ -2,6 +2,7 @@
 
 import asyncio
 import glob
+import hmac
 import os
 import shutil
 import sys
@@ -11,7 +12,7 @@ from contextlib import asynccontextmanager
 
 import structlog
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import ValidationError
 
@@ -21,12 +22,14 @@ from gitlab_copilot_agent.concurrency import (
     ReviewedMRTracker,
 )
 from gitlab_copilot_agent.config import Settings
+from gitlab_copilot_agent.credential_registry import CredentialRegistry
 from gitlab_copilot_agent.git_operations import CLONE_DIR_PREFIX
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.gitlab_poller import GitLabPoller
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_poller import JiraPoller
-from gitlab_copilot_agent.project_mapping import ProjectMap
+from gitlab_copilot_agent.mapping_models import RenderedMap
+from gitlab_copilot_agent.project_registry import ProjectRegistry
 from gitlab_copilot_agent.state import (
     create_dedup,
     create_lock,
@@ -159,14 +162,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     jira_client: JiraClient | None = None
     if settings.jira:
         jira_client = JiraClient(settings.jira.url, settings.jira.email, settings.jira.api_token)
-        project_map = ProjectMap.model_validate_json(settings.jira.project_map_json)
+        rendered = RenderedMap.model_validate_json(settings.jira.project_map_json)
+        creds = CredentialRegistry.from_env()
+        try:
+            project_registry = await ProjectRegistry.from_rendered_map(
+                rendered, creds, settings.gitlab_url
+            )
+        except (KeyError, ValueError) as exc:
+            raise ValueError(f"Failed to build project registry: {exc}") from exc
         gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
         tracker = ProcessedIssueTracker()
         handler = CodingOrchestrator(
             settings, gl_client, jira_client, app.state.executor, repo_locks, tracker
         )
-        poller = JiraPoller(jira_client, settings.jira, project_map, handler, allowed_project_ids)
+        poller = JiraPoller(
+            jira_client, settings.jira, project_registry, handler, allowed_project_ids
+        )
         await poller.start()
+        app.state.jira_poller = poller
         await log.ainfo("jira_poller_started", interval=settings.jira.poll_interval)
 
     if settings.gitlab_poll and allowed_project_ids:
@@ -240,6 +253,38 @@ async def health() -> dict[str, object]:
             "watermark": gl_poller._watermark,
         }
     return result
+
+
+@app.post("/config/reload")
+async def config_reload(
+    body: RenderedMap,
+    request: Request,
+) -> dict[str, object]:
+    """Reload the Jira project registry without restarting.
+
+    Requires the same webhook secret used for GitLab webhook auth.
+    """
+    settings: Settings = request.app.state.settings
+    secret = settings.gitlab_webhook_secret
+    received = request.headers.get("X-Gitlab-Token")
+    if secret is None:
+        raise HTTPException(status_code=403, detail="Webhook secret not configured")
+    if received is None or not hmac.compare_digest(received, secret):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    poller: JiraPoller | None = getattr(app.state, "jira_poller", None)
+    if poller is None:
+        return {"status": "error", "detail": "Jira poller not active"}
+    creds = CredentialRegistry.from_env()
+    try:
+        registry = await ProjectRegistry.from_rendered_map(body, creds, settings.gitlab_url)
+    except Exception as exc:
+        return {"status": "error", "detail": str(exc)}
+    await poller.reload_registry(registry)
+    return {
+        "status": "ok",
+        "jira_keys": sorted(registry.jira_keys()),
+    }
 
 
 if __name__ == "__main__":

@@ -8,8 +8,15 @@ import pytest
 from gitlab_copilot_agent.config import JiraSettings
 from gitlab_copilot_agent.jira_models import JiraIssue, JiraIssueFields, JiraStatus
 from gitlab_copilot_agent.jira_poller import JiraPoller
-from gitlab_copilot_agent.project_mapping import GitLabProjectMapping, ProjectMap
-from tests.conftest import EXAMPLE_CLONE_URL, JIRA_EMAIL, JIRA_TOKEN, JIRA_URL, PROJECT_ID
+from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
+from tests.conftest import (
+    EXAMPLE_CLONE_URL,
+    GITLAB_TOKEN,
+    JIRA_EMAIL,
+    JIRA_TOKEN,
+    JIRA_URL,
+    PROJECT_ID,
+)
 
 
 def make_jira_settings(**overrides: str | int) -> JiraSettings:
@@ -42,16 +49,20 @@ def make_jira_issue(key: str = "PROJ-123", status: str = "AI Ready") -> JiraIssu
 
 
 @pytest.fixture
-def project_map() -> ProjectMap:
-    """Project map with a single test mapping."""
-    return ProjectMap(
-        mappings={
-            "PROJ": GitLabProjectMapping(
+def project_map() -> ProjectRegistry:
+    """Project registry with a single test mapping."""
+    return ProjectRegistry(
+        [
+            ResolvedProject(
+                jira_project="PROJ",
+                repo="group/project",
                 gitlab_project_id=PROJECT_ID,
                 clone_url=EXAMPLE_CLONE_URL,
                 target_branch="main",
+                credential_ref="default",
+                token=GITLAB_TOKEN,
             )
-        }
+        ]
     )
 
 
@@ -74,7 +85,7 @@ def mock_handler() -> AsyncMock:
 @pytest.mark.asyncio
 async def test_poll_once_discovers_issues_and_calls_handler(
     mock_jira_client: AsyncMock,
-    project_map: ProjectMap,
+    project_map: ProjectRegistry,
     mock_handler: AsyncMock,
 ) -> None:
     """Test that _poll_once discovers issues and invokes the handler."""
@@ -92,14 +103,17 @@ async def test_poll_once_discovers_issues_and_calls_handler(
     assert 'status = "AI Ready"' in call_args
     assert 'project IN ("PROJ")' in call_args
 
-    # Verify handler was called
-    mock_handler.handle.assert_called_once_with(issue, project_map.mappings["PROJ"])
+    # Verify handler was called with the resolved project
+    mock_handler.handle.assert_called_once()
+    call_args = mock_handler.handle.call_args[0]
+    assert call_args[0] == issue
+    assert call_args[1].gitlab_project_id == PROJECT_ID
 
 
 @pytest.mark.asyncio
 async def test_poll_once_skips_processed_issues(
     mock_jira_client: AsyncMock,
-    project_map: ProjectMap,
+    project_map: ProjectRegistry,
     mock_handler: AsyncMock,
 ) -> None:
     """Test that already-processed issues are skipped on subsequent polls."""
@@ -121,7 +135,7 @@ async def test_poll_once_skips_processed_issues(
 @pytest.mark.asyncio
 async def test_poll_once_skips_issues_not_in_project_map(
     mock_jira_client: AsyncMock,
-    project_map: ProjectMap,
+    project_map: ProjectRegistry,
     mock_handler: AsyncMock,
 ) -> None:
     """Test that issues from projects not in the map are skipped."""
@@ -141,7 +155,7 @@ async def test_poll_once_skips_issues_not_in_project_map(
 @pytest.mark.asyncio
 async def test_poll_once_handles_errors_gracefully(
     mock_jira_client: AsyncMock,
-    project_map: ProjectMap,
+    project_map: ProjectRegistry,
     mock_handler: AsyncMock,
 ) -> None:
     """Test that errors in handler are propagated (caught by _poll_loop)."""
@@ -160,7 +174,7 @@ async def test_poll_once_handles_errors_gracefully(
 @pytest.mark.asyncio
 async def test_start_and_stop_lifecycle(
     mock_jira_client: AsyncMock,
-    project_map: ProjectMap,
+    project_map: ProjectRegistry,
     mock_handler: AsyncMock,
 ) -> None:
     """Test that start() and stop() work correctly."""
@@ -184,9 +198,9 @@ async def test_poll_once_with_no_projects_in_map(
     mock_handler: AsyncMock,
 ) -> None:
     """Test that _poll_once does nothing when project map is empty."""
-    empty_map = ProjectMap(mappings={})
+    empty_registry = ProjectRegistry([])
     settings = make_jira_settings()
-    poller = JiraPoller(mock_jira_client, settings, empty_map, mock_handler)
+    poller = JiraPoller(mock_jira_client, settings, empty_registry, mock_handler)
 
     await poller._poll_once()
 
@@ -205,7 +219,7 @@ async def test_poll_once_with_no_projects_in_map(
 )
 async def test_poll_once_allowlist_enforcement(
     mock_jira_client: AsyncMock,
-    project_map: ProjectMap,
+    project_map: ProjectRegistry,
     mock_handler: AsyncMock,
     allowed_project_ids: set[int] | None,
     expect_handled: bool,

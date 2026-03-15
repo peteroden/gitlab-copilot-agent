@@ -8,7 +8,7 @@ import pytest
 from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
 from gitlab_copilot_agent.git_operations import TransientCloneError
 from gitlab_copilot_agent.jira_models import JiraIssue, JiraIssueFields, JiraStatus
-from gitlab_copilot_agent.project_mapping import GitLabProjectMapping
+from gitlab_copilot_agent.project_registry import ResolvedProject
 from gitlab_copilot_agent.task_executor import CodingResult
 from tests.conftest import (
     EXAMPLE_CLONE_URL,
@@ -35,10 +35,14 @@ _TEST_ISSUE = JiraIssue(
     ),
 )
 
-_TEST_MAPPING = GitLabProjectMapping(
+_TEST_MAPPING = ResolvedProject(
+    jira_project="PROJ",
+    repo="group/project",
     gitlab_project_id=99,
     clone_url=EXAMPLE_CLONE_URL,
     target_branch="main",
+    credential_ref="default",
+    token="test-token",
 )
 
 
