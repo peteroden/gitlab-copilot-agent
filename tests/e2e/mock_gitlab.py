@@ -12,6 +12,7 @@ Usage: uv run python tests/e2e/mock_gitlab.py [--port 9999]
 import subprocess
 import tempfile
 from pathlib import Path
+from urllib.parse import unquote
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, Response
@@ -60,8 +61,15 @@ SAMPLE_DIFF = """\
 @app.get("/api/v4/projects/{project_id}")
 async def get_project(project_id: str) -> dict:
     # Accept both numeric IDs and URL-encoded paths (python-gitlab encodes slashes)
-    pid = int(project_id) if project_id.isdigit() else PROJECT_ID
-    return {"id": pid, "path_with_namespace": "test/e2e-repo"}
+    decoded = unquote(project_id)
+    if project_id.isdigit():
+        pid = int(project_id)
+    elif decoded == "repo":
+        pid = PROJECT_ID
+    else:
+        # Different paths get different IDs to avoid duplicate project rejection
+        pid = abs(hash(decoded)) % 100_000
+    return {"id": pid, "path_with_namespace": decoded if "/" in decoded else f"test/{decoded}"}
 
 
 @app.get("/api/v4/projects/{project_id}/merge_requests/{mr_iid}")

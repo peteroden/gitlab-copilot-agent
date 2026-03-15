@@ -199,7 +199,7 @@ echo -n "Reloading with updated mapping..."
 RELOAD_RESP=$(curl -sf -X POST "$AGENT_URL/config/reload" \
     -H "Content-Type: application/json" \
     -H "X-Gitlab-Token: $WEBHOOK_SECRET" \
-    -d '{"mappings": {"DEMO": {"repo": "repo", "target_branch": "develop", "credential_ref": "default"}, "NEW": {"repo": "repo", "target_branch": "main", "credential_ref": "default"}}}')
+    -d '{"mappings": {"DEMO": {"repo": "repo", "target_branch": "develop", "credential_ref": "default"}, "NEW": {"repo": "other/repo", "target_branch": "main", "credential_ref": "default"}}}')
 RELOAD_STATUS=$(echo "$RELOAD_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
 [ "$RELOAD_STATUS" = "ok" ] && echo " ✅" || { echo " ❌ ($RELOAD_RESP)"; exit 1; }
 
