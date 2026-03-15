@@ -301,27 +301,28 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Key Constants**:
 - `VALID_TASK_TYPES = frozenset({"review", "coding", "echo"})`
-- `_RESULT_KEY_PREFIX = "result:"`
 - `_RESULT_TTL = 3600`
 
 **Key Functions**:
 - `run_task() -> int`: Main entry point
-  - Reads env vars: TASK_TYPE, TASK_ID, REPO_URL, BRANCH, TASK_PAYLOAD, REDIS_URL
+  - Dequeues task from Azure Storage Queue (or reads env vars for echo tasks)
   - Validates task type
-  - Validates REPO_URL matches GITLAB_URL (host + port)
-  - Clones repo
+  - Validates `repo_blob_key` starts with `repos/` prefix
+  - Downloads repo tarball from blob and extracts to temp dir
   - Calls `run_copilot_session()`
   - For coding tasks: calls `_build_coding_result()` to capture diff
-  - Stores result in Redis (JSON-encoded `TaskResult`)
+  - Stores result in Azure Blob Storage (JSON-encoded `TaskResult`)
   - Returns exit code 0/1
 - `_build_coding_result(response: str, repo_path: Path) -> CodingResult`: Parse `CodingAgentOutput` from response, stage listed files explicitly, capture `git diff --cached --binary`, validate size ≤ `MAX_PATCH_SIZE`, validate patch (no `../`), return `CodingResult`
 - `_coding_response_validator(response: str) -> str | None`: Validate agent response contains structured JSON; returns retry prompt if missing
-- `_store_result(task_id: str, result: str) -> None`: Persist to Redis with TTL
+- `_store_result(task_id: str, result: str) -> None`: Persist to Azure Blob Storage with TTL
+- `_dequeue_task() -> tuple | None`: Dequeue from Azure Storage Queue if configured
 - `_get_required_env(name: str) -> str`: Raise if env var missing
 - `_parse_task_payload(raw: str) -> dict[str, str]`: Parse JSON payload
-- `_validate_repo_url(repo_url: str, gitlab_url: str) -> None`: Ensure repo_url authority matches gitlab_url
 
-**Internal Imports**: `config`, `copilot_session`, `git_operations`, `coding_engine`, `prompt_defaults`, `task_executor`
+**Security**: Zero GitLab credentials. Repo received via blob transfer from controller.
+
+**Internal Imports**: `config`, `copilot_session`, `git_operations`, `coding_engine`, `prompt_defaults`
 
 **Depended On By**: K8s Job container command
 

@@ -215,7 +215,7 @@ graph TB
 - KEDA operator — watches queue, creates Job pods
 - K8s Job pods (isolated tasks, inherit limited service credentials)
 
-**Risk**: Azure Storage compromise allows result tampering or dispatch poisoning. K8s Job compromise allows credential theft (GITLAB_TOKEN for clone, GITHUB_TOKEN passed as env vars). **Mitigation**: Job pods have read-only clone access only (no git push), results validated (base_sha check, patch validation) before apply. Only controller has git push and API write access.
+**Risk**: Azure Storage compromise allows result tampering or dispatch poisoning. K8s Job compromise allows theft of GITHUB_TOKEN (Copilot API) and AZURE_STORAGE_CONNECTION_STRING (queue/blob access). **Mitigation**: Job pods have zero GitLab credentials (repo received via blob transfer, no git push). Results validated (base_sha check, patch validation) before apply. Only controller has git push and API write access.
 
 ### Network Boundaries
 
@@ -227,7 +227,6 @@ graph TB
 | Service | Copilot API | HTTPS | GitHub token or BYOK key | Trusted → Semi-trusted |
 | Service | Azure Storage | HTTPS/HTTP | Connection string or MI | Trusted → Semi-trusted |
 | Service | K8s API | HTTPS | ServiceAccount token | Trusted → Semi-trusted |
-| K8s Job | GitLab API | HTTPS | Inherited token | Semi-trusted → Untrusted |
 | K8s Job | Azure Storage | HTTPS/HTTP | Connection string | Semi-trusted → Semi-trusted |
 
 ---
@@ -236,5 +235,5 @@ graph TB
 1. Webhook endpoint (HMAC bypass → RCE via malicious repo URL)
 2. GitLab API token (compromise → repo write access, webhook replay)
 3. Copilot SDK subprocess (env vars visible to same UID, no further isolation)
-4. K8s Job credentials (GITLAB_TOKEN, GITHUB_TOKEN in pod env)
+4. K8s Job credentials (GITHUB_TOKEN + AZURE_STORAGE_CONNECTION_STRING in pod env — no GITLAB_TOKEN)
 5. Azure Storage (connection string exposure → dispatch tampering, result poisoning)
