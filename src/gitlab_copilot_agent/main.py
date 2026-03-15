@@ -2,6 +2,7 @@
 
 import asyncio
 import glob
+import hmac
 import os
 import shutil
 import sys
@@ -11,7 +12,7 @@ from contextlib import asynccontextmanager
 
 import structlog
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import ValidationError
 
@@ -178,6 +179,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             jira_client, settings.jira, project_registry, handler, allowed_project_ids
         )
         await poller.start()
+        app.state.jira_poller = poller
         await log.ainfo("jira_poller_started", interval=settings.jira.poll_interval)
 
     if settings.gitlab_poll and allowed_project_ids:
@@ -251,6 +253,38 @@ async def health() -> dict[str, object]:
             "watermark": gl_poller._watermark,
         }
     return result
+
+
+@app.post("/config/reload")
+async def config_reload(
+    body: RenderedMap,
+    request: Request,
+) -> dict[str, object]:
+    """Reload the Jira project registry without restarting.
+
+    Requires the same webhook secret used for GitLab webhook auth.
+    """
+    settings: Settings = request.app.state.settings
+    secret = settings.gitlab_webhook_secret
+    received = request.headers.get("X-Gitlab-Token")
+    if secret is None:
+        raise HTTPException(status_code=403, detail="Webhook secret not configured")
+    if received is None or not hmac.compare_digest(received, secret):
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    poller: JiraPoller | None = getattr(app.state, "jira_poller", None)
+    if poller is None:
+        return {"status": "error", "detail": "Jira poller not active"}
+    creds = CredentialRegistry.from_env()
+    try:
+        registry = await ProjectRegistry.from_rendered_map(body, creds, settings.gitlab_url)
+    except Exception as exc:
+        return {"status": "error", "detail": str(exc)}
+    await poller.reload_registry(registry)
+    return {
+        "status": "ok",
+        "jira_keys": sorted(registry.jira_keys()),
+    }
 
 
 if __name__ == "__main__":
