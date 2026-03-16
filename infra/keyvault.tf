@@ -77,6 +77,7 @@ resource "null_resource" "kv_bootstrap_open" {
 
   provisioner "local-exec" {
     command     = <<-EOT
+      set -euo pipefail
       az keyvault update --name "$VAULT_NAME" --public-network-access Enabled -o none
       echo "⏳ Waiting for propagation..."
       sleep 15
@@ -102,6 +103,7 @@ resource "null_resource" "kv_seed_secrets" {
 
   provisioner "local-exec" {
     command     = <<-EOT
+      set -euo pipefail
       for name in $(echo "$SECRET_NAMES" | tr ',' ' '); do
         az keyvault secret set --vault-name "$VAULT_NAME" --name "$name" \
           --value "$(echo "$SECRETS_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['$name'])")" \
@@ -131,6 +133,7 @@ resource "null_resource" "kv_bootstrap_close" {
 
   provisioner "local-exec" {
     command     = <<-EOT
+      set -euo pipefail
       az keyvault update --name "$VAULT_NAME" --public-network-access Disabled -o none
       echo "✓ KV public access disabled"
     EOT

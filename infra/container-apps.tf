@@ -53,18 +53,14 @@ resource "null_resource" "acr_import" {
   }
 
   provisioner "local-exec" {
+    # az acr import is ARM control-plane — works with public access disabled
     command     = <<-EOT
-      # Temporarily enable public access for the import
-      az acr update -n "$ACR_NAME" --public-network-access Enabled -o none
-      echo "Waiting for ACR public access..."
-      sleep 10
+      set -euo pipefail
       az acr import -n "$ACR_NAME" \
         --source "ghcr.io/$GHCR_IMAGE:$IMAGE_TAG" \
         --image "gitlab-copilot-agent:$IMAGE_TAG" \
         --force
       echo "Imported ghcr.io/$GHCR_IMAGE:$IMAGE_TAG"
-      az acr update -n "$ACR_NAME" --public-network-access Disabled -o none
-      echo "ACR public access disabled"
     EOT
     interpreter = ["bash", "-c"]
     environment = {
