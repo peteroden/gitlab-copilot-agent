@@ -7,20 +7,19 @@ Every project must have a devcontainer. Agents execute all commands inside devco
 
 ## Devcontainer Tiers
 
-### Yolo (Developer Agent) — No Network
+### Yolo (Developer Agent) — Safelisted Network
 
-For sandboxed development. The agent cannot reach the internet or install packages at runtime.
+For sandboxed development. The agent limits network access to safelisted registries (Terraform, PyPI, Azure/Jira/GitLab docs) per its agent instructions. No ad-hoc package installation at runtime.
 
 ```jsonc
 // .devcontainer/devcontainer.json
 {
   "name": "${project-name}-yolo",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
-  "runArgs": ["--network=none"],
   "features": {
     // Add only what the project needs
   },
-  "postCreateCommand": "echo 'Yolo devcontainer ready — no network access'",
+  "postCreateCommand": "echo 'Yolo devcontainer ready'",
   "customizations": {
     "vscode": {
       "extensions": ["GitHub.copilot"]
@@ -107,6 +106,20 @@ The devcontainer must support:
 - [ ] Debugger attachment
 - [ ] Auto-install dependencies on container start
 - [ ] Local config via `.env` (not production credentials)
+
+## Dependency Installation Policy
+
+**All dependencies must be reproducible.** Agents must never install packages ad-hoc at runtime.
+
+| ✅ Allowed | ❌ Prohibited |
+|---|---|
+| Add to `pyproject.toml` / `package.json` then run `uv sync` / `npm ci` | `pip install`, `npm install <pkg>`, `apt install` at runtime |
+| Add devcontainer features in `devcontainer.json` | Manual tool installation in a running container |
+| Add system packages to `postCreateCommand` | One-off `curl \| bash` installs |
+| `terraform init` (downloads providers per lockfile) | |
+| `uv sync` / `npm ci` (installs from lockfile) | |
+
+When a task requires a new dependency: update the declarative config (`pyproject.toml`, `devcontainer.json`, `Dockerfile`), rebuild the container if needed, then use the dependency. The container must be reproducible from its config files alone.
 
 ## postCreateCommand Examples
 

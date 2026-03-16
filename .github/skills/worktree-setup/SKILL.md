@@ -19,11 +19,11 @@ Branch naming follows conventional format:
 
 ## Start the Devcontainer
 
-For a **yolo (developer) agent** — no network:
+For a **yolo (developer) agent** — safelisted network only:
 ```bash
 devcontainer up --workspace-folder ../worktrees/<branch-name>
 ```
-Ensure the devcontainer.json uses `"network": "none"` for yolo agents.
+The devcontainer should not use `"network": "none"`. Developer agents self-limit to safelisted registries per their agent instructions.
 
 For an **interactive agent** — with network:
 ```bash
