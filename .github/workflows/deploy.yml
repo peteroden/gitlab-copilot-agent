@@ -97,8 +97,8 @@ jobs:
         run: |
           terraform apply -auto-approve \
             -var-file="${{ inputs.environment }}.tfvars" \
-            -var="controller_image=placeholder" \
-            -var="job_image=placeholder"
+            -var="controller_image=mcr.microsoft.com/k8se/quickstart:latest" \
+            -var="job_image=mcr.microsoft.com/k8se/quickstart:latest"
 
       - name: Get ACR login server
         id: acr
