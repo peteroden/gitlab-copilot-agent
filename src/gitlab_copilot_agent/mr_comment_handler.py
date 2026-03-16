@@ -83,7 +83,7 @@ async def handle_copilot_comment(
                 )
                 task = TaskParams(
                     task_type="coding",
-                    task_id=f"mr-{project.id}-{mr.iid}",
+                    task_id=f"mr-{project.id}-{mr.iid}-{payload.object_attributes.id}",
                     repo_url=project.git_http_url,
                     branch=mr.source_branch,
                     system_prompt=get_prompt(settings, "mr_comment"),

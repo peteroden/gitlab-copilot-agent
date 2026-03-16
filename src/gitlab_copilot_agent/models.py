@@ -55,6 +55,7 @@ class MergeRequestWebhookPayload(BaseModel):
 
 class NoteObjectAttributes(BaseModel):
     model_config = ConfigDict(strict=True)
+    id: int = Field(default=0, description="Note ID (0 when unavailable)")
     note: str = Field(description="Comment body text")
     noteable_type: str = Field(description="Type of noteable: MergeRequest, Issue, etc.")
 
