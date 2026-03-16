@@ -80,6 +80,29 @@ variable "copilot_model" {
   default     = "gpt-4"
 }
 
+variable "copilot_auth" {
+  description = "LLM authentication mode: 'github_token' (GitHub PAT via Copilot SDK) or 'byok' (bring-your-own-key via COPILOT_PROVIDER_API_KEY)"
+  type        = string
+  default     = "github_token"
+
+  validation {
+    condition     = contains(["github_token", "byok"], var.copilot_auth)
+    error_message = "copilot_auth must be 'github_token' or 'byok'"
+  }
+}
+
+variable "copilot_provider_type" {
+  description = "BYOK provider type (e.g. 'azure_openai', 'openai'). Required when copilot_auth='byok'."
+  type        = string
+  default     = ""
+}
+
+variable "copilot_provider_base_url" {
+  description = "BYOK provider base URL. Required when copilot_auth='byok'."
+  type        = string
+  default     = ""
+}
+
 # --- Jira (optional — leave empty to skip) ---
 
 variable "jira_url" {

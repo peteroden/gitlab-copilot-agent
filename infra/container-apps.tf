@@ -81,12 +81,12 @@ resource "azapi_update_resource" "cae_otlp" {
   }
 }
 
-# S1: Key Vault secret refs — base set shared by all workloads, plus controller-only
+# S1: Key Vault secret refs — derived from copilot_auth mode and Jira config
 locals {
-  kv_secrets_runner = {
-    "github-token"    = "github-token"
-    "copilot-api-key" = "copilot-api-key"
-  }
+  kv_secrets_runner = merge(
+    var.copilot_auth == "github_token" ? { "github-token" = "github-token" } : {},
+    var.copilot_auth == "byok" ? { "copilot-api-key" = "copilot-api-key" } : {},
+  )
   kv_secrets_controller = merge(
     local.kv_secrets_runner,
     { "gitlab-token" = "gitlab-token" },
@@ -202,6 +202,22 @@ resource "azurerm_container_app" "controller" {
         }
       }
 
+      # BYOK provider config (only set when copilot_auth='byok')
+      dynamic "env" {
+        for_each = var.copilot_auth == "byok" ? [1] : []
+        content {
+          name  = "COPILOT_PROVIDER_TYPE"
+          value = var.copilot_provider_type
+        }
+      }
+      dynamic "env" {
+        for_each = var.copilot_auth == "byok" ? [1] : []
+        content {
+          name  = "COPILOT_PROVIDER_BASE_URL"
+          value = var.copilot_provider_base_url
+        }
+      }
+
       # S1: Secrets via Key Vault references
       dynamic "env" {
         for_each = local.kv_secrets_controller
@@ -308,6 +324,22 @@ resource "azurerm_container_app_job" "task_runner" {
       env {
         name  = "DEPLOYMENT_ENV"
         value = "dev"
+      }
+
+      # BYOK provider config (only set when copilot_auth='byok')
+      dynamic "env" {
+        for_each = var.copilot_auth == "byok" ? [1] : []
+        content {
+          name  = "COPILOT_PROVIDER_TYPE"
+          value = var.copilot_provider_type
+        }
+      }
+      dynamic "env" {
+        for_each = var.copilot_auth == "byok" ? [1] : []
+        content {
+          name  = "COPILOT_PROVIDER_BASE_URL"
+          value = var.copilot_provider_base_url
+        }
       }
 
       # S1: Secrets via Key Vault references

@@ -18,12 +18,11 @@ resource "azurerm_storage_account" "tasks" {
 }
 
 resource "azurerm_storage_queue" "tasks" {
-  name                 = "task-queue"
-  storage_account_name = azurerm_storage_account.tasks.name
+  name               = "task-queue"
+  storage_account_id = azurerm_storage_account.tasks.id
 }
 
 resource "azurerm_storage_container" "task_data" {
-  name                  = "task-data"
-  storage_account_name  = azurerm_storage_account.tasks.name
-  container_access_type = "private"
+  name               = "task-data"
+  storage_account_id = azurerm_storage_account.tasks.id
 }
