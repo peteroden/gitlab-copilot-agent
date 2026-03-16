@@ -23,7 +23,76 @@ env:
   TERRAFORM_VERSION: "1.9.x"
 
 jobs:
+  infra:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+    outputs:
+      acr_login_server: ${{ steps.acr.outputs.login_server }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Enable TF state storage public access
+        run: |
+          az storage account update \
+            -n ${{ vars.TF_STATE_STORAGE_ACCOUNT }} \
+            -g ${{ vars.TF_STATE_RESOURCE_GROUP }} \
+            --public-network-access Enabled \
+            -o none
+
+      - name: Terraform init
+        working-directory: infra
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=${{ inputs.environment }}.terraform.tfstate" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="use_oidc=true"
+
+      - name: Terraform apply (infra only — placeholder image)
+        working-directory: infra
+        run: |
+          terraform apply -auto-approve \
+            -var-file="${{ inputs.environment }}.tfvars" \
+            -var="controller_image=placeholder" \
+            -var="job_image=placeholder"
+
+      - name: Get ACR login server
+        id: acr
+        working-directory: infra
+        run: |
+          echo "login_server=$(terraform output -raw acr_login_server)" >> "$GITHUB_OUTPUT"
+
+      - name: Disable TF state storage public access
+        if: always()
+        run: |
+          az storage account update \
+            -n ${{ vars.TF_STATE_STORAGE_ACCOUNT }} \
+            -g ${{ vars.TF_STATE_RESOURCE_GROUP }} \
+            --public-network-access Disabled \
+            -o none
+
   build-push:
+    needs: infra
     runs-on: ubuntu-latest
     outputs:
       acr_image: ${{ steps.meta.outputs.acr_image }}
@@ -43,13 +112,13 @@ jobs:
       - name: Build and push
         id: meta
         run: |
-          IMAGE="${{ vars.ACR_NAME }}.azurecr.io/gitlab-copilot-agent:${{ inputs.image_tag }}"
+          IMAGE="${{ needs.infra.outputs.acr_login_server }}/gitlab-copilot-agent:${{ inputs.image_tag }}"
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
           echo "acr_image=$IMAGE" >> "$GITHUB_OUTPUT"
 
   deploy:
-    needs: build-push
+    needs: [infra, build-push]
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     env:
@@ -91,7 +160,7 @@ jobs:
             -backend-config="use_azuread_auth=true" \
             -backend-config="use_oidc=true"
 
-      - name: Terraform apply
+      - name: Terraform apply (with real image)
         working-directory: infra
         run: |
           terraform apply -auto-approve \
