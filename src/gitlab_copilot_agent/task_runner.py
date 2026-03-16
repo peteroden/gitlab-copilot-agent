@@ -119,9 +119,12 @@ def _parse_task_payload(raw: str) -> dict[str, object]:
 
 
 async def _build_coding_result(
-    repo_path: Path, summary: str, bound_log: structlog.stdlib.BoundLogger
+    repo_path: Path,
+    summary: str,
+    bound_log: structlog.stdlib.BoundLogger,
+    pre_session_sha: str,
 ) -> str:
-    """Stage explicitly listed files, capture diff and base SHA."""
+    """Stage explicitly listed files, capture diff against pre-session HEAD."""
     agent_output = parse_agent_output(summary)
     if not agent_output or not agent_output.files_changed:
         raise RuntimeError(
@@ -136,17 +139,30 @@ async def _build_coding_result(
         await _run_git_simple(repo_path, "add", "--", f)
     await bound_log.ainfo("staged_explicit_files", count=len(agent_output.files_changed))
 
-    base_sha = await git_head_sha(repo_path)
+    # Capture staged diff first. If empty, the agent may have already
+    # committed — fall back to diffing against the pre-session HEAD.
     patch = await git_diff_staged(repo_path)
+    if not patch:
+        current_sha = await git_head_sha(repo_path)
+        if current_sha != pre_session_sha:
+            await bound_log.ainfo(
+                "agent_committed_detected",
+                pre_sha=pre_session_sha[:12],
+                current_sha=current_sha[:12],
+            )
+            patch = await _run_git_simple(repo_path, "diff", pre_session_sha, "HEAD", "--binary")
+
     if len(patch.encode()) > MAX_PATCH_SIZE:
         raise RuntimeError(f"Patch size {len(patch.encode())} exceeds limit {MAX_PATCH_SIZE}")
-    await bound_log.ainfo("diff_captured", patch_bytes=len(patch.encode()), base_sha=base_sha[:12])
+    await bound_log.ainfo(
+        "diff_captured", patch_bytes=len(patch.encode()), base_sha=pre_session_sha[:12]
+    )
     return json.dumps(
         {
             "result_type": "coding",
             "summary": agent_output.summary,
             "patch": patch,
-            "base_sha": base_sha,
+            "base_sha": pre_session_sha,
         }
     )
 
@@ -227,10 +243,12 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
         await bound_log.ainfo("task_start", repo_blob_key=repo_blob_key)
         tarball = await task_queue.download_blob(repo_blob_key)
         repo_path = await extract_repo_tarball(tarball, settings.clone_dir)
+        pre_session_sha: str | None = None
         if task_type == "coding":
             from gitlab_copilot_agent.coding_engine import ensure_git_exclude
 
             ensure_git_exclude(str(repo_path))
+            pre_session_sha = await git_head_sha(repo_path)
         prompt = get_prompt(settings, "review" if task_type == "review" else "coding")
         summary = await run_copilot_session(
             settings,
@@ -241,7 +259,8 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
             validate_response=_coding_response_validator if task_type == "coding" else None,
         )
         if task_type == "coding":
-            result = await _build_coding_result(repo_path, summary, bound_log)
+            assert pre_session_sha is not None
+            result = await _build_coding_result(repo_path, summary, bound_log, pre_session_sha)
         else:
             result = json.dumps({"result_type": "review", "summary": summary})
         await _store_result(task_id, result, settings)
