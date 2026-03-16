@@ -18,38 +18,13 @@ on:
 permissions:
   id-token: write
   contents: read
+  packages: write
 
 env:
   TERRAFORM_VERSION: "1.9.x"
 
 jobs:
-  build-push:
-    runs-on: ubuntu-latest
-    outputs:
-      acr_image: ${{ steps.meta.outputs.acr_image }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: ACR login
-        run: az acr login --name ${{ vars.ACR_NAME }}
-
-      - name: Build and push
-        id: meta
-        run: |
-          IMAGE="${{ vars.ACR_NAME }}.azurecr.io/gitlab-copilot-agent:${{ inputs.image_tag }}"
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
-          echo "acr_image=$IMAGE" >> "$GITHUB_OUTPUT"
-
   deploy:
-    needs: build-push
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     env:
@@ -61,6 +36,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Step 1: Build and push image to GHCR (no infra dependency)
+      - name: GHCR login
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push to GHCR
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "✓ Pushed $IMAGE"
+
+      # Step 2: Provision infrastructure (single terraform apply)
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -71,39 +64,76 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
 
       - name: Enable TF state storage public access
+        env:
+          TF_STATE_SA: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          TF_STATE_RG: ${{ vars.TF_STATE_RESOURCE_GROUP }}
         run: |
           az storage account update \
-            -n ${{ vars.TF_STATE_STORAGE_ACCOUNT }} \
-            -g ${{ vars.TF_STATE_RESOURCE_GROUP }} \
+            -n "${TF_STATE_SA}" \
+            -g "${TF_STATE_RG}" \
             --public-network-access Enabled \
             -o none
 
-      - name: Terraform init
+      - name: Terraform init (with retry for propagation)
         working-directory: infra
+        env:
+          TF_STATE_RG: ${{ vars.TF_STATE_RESOURCE_GROUP }}
+          TF_STATE_SA: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          DEPLOY_ENV: ${{ inputs.environment }}
         run: |
-          terraform init \
-            -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
-            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
-            -backend-config="container_name=tfstate" \
-            -backend-config="key=${{ inputs.environment }}.terraform.tfstate" \
-            -backend-config="use_azuread_auth=true" \
-            -backend-config="use_oidc=true"
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if terraform init \
+                 -backend-config="resource_group_name=${TF_STATE_RG}" \
+                 -backend-config="storage_account_name=${TF_STATE_SA}" \
+                 -backend-config="container_name=tfstate" \
+                 -backend-config="key=${DEPLOY_ENV}.terraform.tfstate" \
+                 -backend-config="use_azuread_auth=true" \
+                 -backend-config="use_oidc=true" 2>&1; then
+              echo "Terraform init succeeded on attempt $attempt"
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "::error::Terraform init failed after 12 attempts (120s)"
+              exit 1
+            fi
+            echo "Attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
+
+      - name: Substitute tfvars placeholders
+        working-directory: infra
+        env:
+          AZURE_SUB_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          JIRA_EMAIL: ${{ vars.JIRA_EMAIL }}
+          DEPLOY_ENV: ${{ inputs.environment }}
+        run: |
+          sed -i \
+            -e "s|__AZURE_SUBSCRIPTION_ID__|${AZURE_SUB_ID}|g" \
+            -e "s|__JIRA_EMAIL__|${JIRA_EMAIL}|g" \
+            "${DEPLOY_ENV}.tfvars"
 
       - name: Terraform apply
         working-directory: infra
+        env:
+          TF_VAR_kv_bootstrap_secrets: '{"gitlab-token":"${{ secrets.GITLAB_TOKEN }}","github-token":"${{ secrets.GH_PAT_FOR_COPILOT }}","jira-api-token":"${{ secrets.JIRA_API_TOKEN }}"}'
+          TF_VAR_image_tag: ${{ inputs.image_tag }}
+          TFVARS_FILE: ${{ inputs.environment }}.tfvars
         run: |
           terraform apply -auto-approve \
-            -var-file="${{ inputs.environment }}.tfvars" \
-            -var="controller_image=${{ needs.build-push.outputs.acr_image }}" \
-            -var="job_image=${{ needs.build-push.outputs.acr_image }}"
+            -var-file="${TFVARS_FILE}" \
+            -var="image_tag=${TF_VAR_image_tag}"
 
       - name: Disable TF state storage public access
         if: always()
+        env:
+          TF_STATE_SA: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          TF_STATE_RG: ${{ vars.TF_STATE_RESOURCE_GROUP }}
         run: |
           az storage account update \
-            -n ${{ vars.TF_STATE_STORAGE_ACCOUNT }} \
-            -g ${{ vars.TF_STATE_RESOURCE_GROUP }} \
+            -n "${TF_STATE_SA}" \
+            -g "${TF_STATE_RG}" \
             --public-network-access Disabled \
             -o none

@@ -134,6 +134,7 @@ class TestRunTask:
         with (
             patch(f"{_M}._dequeue_task", AsyncMock(return_value=qr)),
             patch(f"{_M}.extract_repo_tarball", AsyncMock(return_value=Path("/tmp/r"))),
+            patch(f"{_M}.git_head_sha", AsyncMock(return_value="abc123")),
             patch(f"{_M}.run_copilot_session", AsyncMock(return_value="x")) as ms,
             patch(f"{_M}._build_coding_result", AsyncMock(return_value=coding_json)),
             patch(f"{_M}._store_result", AsyncMock()),
@@ -219,7 +220,9 @@ class TestBuildCodingResult:
             patch(f"{_M}.git_head_sha", AsyncMock(return_value="abc123")),
             patch(f"{_M}.git_diff_staged", AsyncMock(return_value="diff --git ...")),
         ):
-            result = await _build_coding_result(Path("/repo"), DELETED_FILE_OUTPUT, AsyncMock())
+            result = await _build_coding_result(
+                Path("/repo"), DELETED_FILE_OUTPUT, AsyncMock(), "abc123"
+            )
         data = json.loads(result)
         assert data["summary"] == "Removed old module"
         # Both files staged regardless of whether they exist on disk
@@ -235,9 +238,26 @@ class TestBuildCodingResult:
             patch(f"{_M}.git_head_sha", AsyncMock(return_value="abc123")),
             patch(f"{_M}.git_diff_staged", AsyncMock(return_value="diff --git ...")),
         ):
-            await _build_coding_result(Path("/repo"), TRAVERSAL_OUTPUT, AsyncMock())
+            await _build_coding_result(Path("/repo"), TRAVERSAL_OUTPUT, AsyncMock(), "abc123")
         # Only src/ok.py staged; ../../etc/passwd skipped
         git_mock.assert_awaited_once_with(Path("/repo"), "add", "--", "src/ok.py")
+
+    async def test_agent_committed_fallback(self) -> None:
+        """When staged diff is empty but HEAD moved, diff against pre-session SHA."""
+        git_mock = AsyncMock(return_value="diff --git a/src/utils.py ...")
+        with (
+            patch(f"{_M}._run_git_simple", git_mock),
+            patch(f"{_M}.git_head_sha", AsyncMock(return_value="def456")),
+            patch(f"{_M}.git_diff_staged", AsyncMock(return_value="")),
+        ):
+            result = await _build_coding_result(
+                Path("/repo"), DELETED_FILE_OUTPUT, AsyncMock(), "abc123"
+            )
+        data = json.loads(result)
+        assert data["patch"] == "diff --git a/src/utils.py ..."
+        assert data["base_sha"] == "abc123"
+        # Verify fallback diff was called with pre-session SHA
+        git_mock.assert_any_await(Path("/repo"), "diff", "abc123", "HEAD", "--binary")
 
 
 _STATE_MOD = "gitlab_copilot_agent.state"

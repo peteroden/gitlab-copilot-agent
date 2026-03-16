@@ -214,6 +214,7 @@ def _build_note_payload(
             git_http_url=f"{project_url}.git",
         ),
         object_attributes=NoteObjectAttributes(
+            id=note.id,
             note=note.body,
             noteable_type="MergeRequest",
         ),
