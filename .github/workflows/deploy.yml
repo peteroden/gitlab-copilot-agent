@@ -56,6 +56,20 @@ jobs:
             -g ${{ vars.TF_STATE_RESOURCE_GROUP }} \
             --public-network-access Enabled \
             -o none
+          echo "Waiting for public access to propagate..."
+          for i in $(seq 1 12); do
+            if az storage container list \
+                 --account-name ${{ vars.TF_STATE_STORAGE_ACCOUNT }} \
+                 --auth-mode login --only-show-errors -o none 2>/dev/null; then
+              echo "Storage accessible after $((i * 5))s"
+              break
+            fi
+            if [ "$i" -eq 12 ]; then
+              echo "::error::Timeout waiting for storage access"
+              exit 1
+            fi
+            sleep 5
+          done
 
       - name: Terraform init
         working-directory: infra
@@ -156,6 +170,20 @@ jobs:
             -g ${{ vars.TF_STATE_RESOURCE_GROUP }} \
             --public-network-access Enabled \
             -o none
+          echo "Waiting for public access to propagate..."
+          for i in $(seq 1 12); do
+            if az storage container list \
+                 --account-name ${{ vars.TF_STATE_STORAGE_ACCOUNT }} \
+                 --auth-mode login --only-show-errors -o none 2>/dev/null; then
+              echo "Storage accessible after $((i * 5))s"
+              break
+            fi
+            if [ "$i" -eq 12 ]; then
+              echo "::error::Timeout waiting for storage access"
+              exit 1
+            fi
+            sleep 5
+          done
 
       - name: Terraform init
         working-directory: infra
