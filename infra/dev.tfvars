@@ -7,4 +7,5 @@ jira_url             = "https://peteroden.atlassian.net"
 jira_email           = "__JIRA_EMAIL__"
 jira_project_map     = "{\"mappings\":{\"DEMO\":{\"repo\":\"peteroden/copilot-demo\",\"target_branch\":\"main\",\"credential_ref\":\"default\"},\"E2ETEST\":{\"repo\":\"peteroden/e2e-storage-test\",\"target_branch\":\"main\",\"credential_ref\":\"default\"}}}"
 kv_bootstrap         = true
-kv_bootstrap_secrets = {}
+# kv_bootstrap_secrets: omitted here — pipeline injects via TF_VAR_kv_bootstrap_secrets
+# to avoid var-file precedence overriding the env var.
