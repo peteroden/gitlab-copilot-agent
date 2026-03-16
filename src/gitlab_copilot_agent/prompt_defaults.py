@@ -40,6 +40,7 @@ Guidelines:
 - Update documentation if needed
 - Do not introduce new dependencies without strong justification
 - Never commit generated or cached files (__pycache__, .pyc, node_modules, etc.)
+- Do NOT run git add, git commit, or git push — the caller handles version control
 
 Output format:
 Your final message MUST end with a JSON block listing the files you changed.
