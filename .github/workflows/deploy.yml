@@ -81,7 +81,8 @@ jobs:
             -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
             -backend-config="container_name=tfstate" \
-            -backend-config="key=${{ inputs.environment }}.terraform.tfstate"
+            -backend-config="key=${{ inputs.environment }}.terraform.tfstate" \
+            -backend-config="use_azuread_auth=true"
 
       - name: Terraform apply
         working-directory: infra
