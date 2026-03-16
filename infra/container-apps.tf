@@ -344,11 +344,9 @@ resource "azurerm_container_app_job" "task_runner" {
         name             = "queue-trigger"
         custom_rule_type = "azure-queue"
         metadata = {
-          queueName      = "task-queue"
-          queueLength    = "1"
-          accountName    = azurerm_storage_account.tasks.name
-          cloud          = "Private"
-          endpointSuffix = "privatelink.queue.core.windows.net"
+          queueName   = "task-queue"
+          queueLength = "1"
+          accountName = azurerm_storage_account.tasks.name
         }
       }
     }
@@ -466,4 +464,35 @@ resource "azurerm_role_assignment" "job_blob_contributor" {
   scope                = azurerm_storage_account.tasks.id
   role_definition_name = "Storage Blob Data Contributor"
   principal_id         = azurerm_user_assigned_identity.job.principal_id
+}
+
+# Patch KEDA scale rule with managed identity for queue auth.
+# The azurerm provider doesn't yet support the `identity` field on scale rules,
+# so we use azapi_update_resource to add it after the job is created.
+resource "azapi_update_resource" "job_keda_identity" {
+  type        = "Microsoft.App/jobs@2024-08-02-preview"
+  resource_id = azurerm_container_app_job.task_runner.id
+
+  body = {
+    properties = {
+      configuration = {
+        eventTriggerConfig = {
+          scale = {
+            rules = [
+              {
+                name = "queue-trigger"
+                type = "azure-queue"
+                metadata = {
+                  queueName   = "task-queue"
+                  queueLength = "1"
+                  accountName = azurerm_storage_account.tasks.name
+                }
+                identity = azurerm_user_assigned_identity.job.id
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
 }
