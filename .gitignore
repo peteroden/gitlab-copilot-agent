@@ -20,7 +20,7 @@ demo.env
 .terraform/
 *.tfstate
 *.tfstate.*
-*.tfvars
+*.tfvars.local
 !*.tfvars.example
 .terraform.lock.hcl
 infra/tfplan

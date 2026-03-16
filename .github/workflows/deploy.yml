@@ -68,6 +68,14 @@ jobs:
             -backend-config="use_azuread_auth=true" \
             -backend-config="use_oidc=true"
 
+      - name: Substitute tfvars placeholders
+        working-directory: infra
+        run: |
+          sed -i \
+            -e 's|__AZURE_SUBSCRIPTION_ID__|${{ vars.AZURE_SUBSCRIPTION_ID }}|g' \
+            -e 's|__JIRA_EMAIL__|${{ vars.JIRA_EMAIL }}|g' \
+            "${{ inputs.environment }}.tfvars"
+
       - name: Terraform apply (infra only — placeholder image)
         working-directory: infra
         run: |
@@ -159,6 +167,14 @@ jobs:
             -backend-config="key=${{ inputs.environment }}.terraform.tfstate" \
             -backend-config="use_azuread_auth=true" \
             -backend-config="use_oidc=true"
+
+      - name: Substitute tfvars placeholders
+        working-directory: infra
+        run: |
+          sed -i \
+            -e 's|__AZURE_SUBSCRIPTION_ID__|${{ vars.AZURE_SUBSCRIPTION_ID }}|g' \
+            -e 's|__JIRA_EMAIL__|${{ vars.JIRA_EMAIL }}|g' \
+            "${{ inputs.environment }}.tfvars"
 
       - name: Terraform apply (with real image)
         working-directory: infra
