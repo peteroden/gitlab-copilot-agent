@@ -22,6 +22,13 @@ resource "azurerm_role_assignment" "job_acr" {
   principal_id         = azurerm_user_assigned_identity.job.principal_id
 }
 
+# Deployer (CI/CD SP): ACR push for image builds
+resource "azurerm_role_assignment" "deployer_acr" {
+  scope                = azurerm_container_registry.main.id
+  role_definition_name = "AcrPush"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
 # --- Container Apps Environment ---
 
 resource "azurerm_container_app_environment" "main" {
