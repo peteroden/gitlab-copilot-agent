@@ -43,6 +43,14 @@ resource "azurerm_subnet" "storage" {
   address_prefixes     = [var.storage_subnet_prefix]
 }
 
+# Monitoring (AMPLS) private endpoint subnet
+resource "azurerm_subnet" "monitoring" {
+  name                 = "snet-monitoring"
+  resource_group_name  = azurerm_resource_group.main.name
+  virtual_network_name = azurerm_virtual_network.main.name
+  address_prefixes     = [var.monitoring_subnet_prefix]
+}
+
 # --- NSGs ---
 
 resource "azurerm_network_security_group" "infra" {
@@ -87,6 +95,19 @@ resource "azurerm_network_security_group" "infra" {
     destination_port_range     = "443"
     source_address_prefix      = var.infra_subnet_prefix
     destination_address_prefix = var.storage_subnet_prefix
+  }
+
+  # Allow outbound to Monitoring (AMPLS) via private endpoint
+  security_rule {
+    name                       = "AllowMonitoringOutbound"
+    priority                   = 140
+    direction                  = "Outbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = var.infra_subnet_prefix
+    destination_address_prefix = var.monitoring_subnet_prefix
   }
 
   # Deny all other outbound

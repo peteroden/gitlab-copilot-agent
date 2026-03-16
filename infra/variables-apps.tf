@@ -26,6 +26,12 @@ variable "storage_subnet_prefix" {
   default     = "10.0.4.0/24"
 }
 
+variable "monitoring_subnet_prefix" {
+  description = "CIDR for the monitoring (AMPLS) private endpoint subnet"
+  type        = string
+  default     = "10.0.5.0/24"
+}
+
 # --- Container Apps ---
 
 variable "image_tag" {
