@@ -76,13 +76,13 @@ resource "azapi_update_resource" "cae_otlp" {
 
 # S1: Key Vault secret refs — base set shared by all workloads, plus controller-only
 locals {
-  kv_secrets_base = {
-    "gitlab-token"    = "gitlab-token"
+  kv_secrets_runner = {
     "github-token"    = "github-token"
     "copilot-api-key" = "copilot-api-key"
   }
   kv_secrets_controller = merge(
-    local.kv_secrets_base,
+    local.kv_secrets_runner,
+    { "gitlab-token" = "gitlab-token" },
     var.jira_url != "" ? { "jira-api-token" = "jira-api-token" } : {}
   )
 }
@@ -275,10 +275,6 @@ resource "azurerm_container_app_job" "task_runner" {
       command = [".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]
 
       env {
-        name  = "GITLAB_URL"
-        value = var.gitlab_url
-      }
-      env {
         name  = "COPILOT_MODEL"
         value = var.copilot_model
       }
@@ -309,7 +305,7 @@ resource "azurerm_container_app_job" "task_runner" {
 
       # S1: Secrets via Key Vault references
       dynamic "env" {
-        for_each = local.kv_secrets_base
+        for_each = local.kv_secrets_runner
         content {
           name        = upper(replace(env.key, "-", "_"))
           secret_name = env.key
@@ -319,7 +315,7 @@ resource "azurerm_container_app_job" "task_runner" {
   }
 
   dynamic "secret" {
-    for_each = local.kv_secrets_base
+    for_each = local.kv_secrets_runner
     content {
       name                = secret.key
       key_vault_secret_id = "${azurerm_key_vault.main.vault_uri}secrets/${secret.value}"
