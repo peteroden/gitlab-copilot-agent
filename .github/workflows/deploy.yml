@@ -18,6 +18,7 @@ on:
 permissions:
   id-token: write
   contents: read
+  packages: write
 
 env:
   TERRAFORM_VERSION: "1.9.x"
@@ -35,6 +36,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Step 1: Build and push image to GHCR (no infra dependency)
+      - name: GHCR login
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push to GHCR
+        run: |
+          IMAGE="ghcr.io/${{ github.repository }}:${{ inputs.image_tag }}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "✓ Pushed $IMAGE"
+
+      # Step 2: Provision infrastructure (single terraform apply)
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -88,46 +105,14 @@ jobs:
             -e 's|__JIRA_EMAIL__|${{ vars.JIRA_EMAIL }}|g' \
             "${{ inputs.environment }}.tfvars"
 
-      # Step 1: Provision all infra with a temporary public image.
-      # ACA validates images at creation time, so we use an MCR image
-      # that is publicly pullable. The real image is swapped in step 3.
-      - name: Terraform apply — provision infra
+      - name: Terraform apply
         working-directory: infra
         env:
           TF_VAR_kv_bootstrap_secrets: '{"gitlab-token":"${{ secrets.GITLAB_TOKEN }}","github-token":"${{ secrets.GH_PAT_FOR_COPILOT }}","jira-api-token":"${{ secrets.JIRA_API_TOKEN }}"}'
         run: |
           terraform apply -auto-approve \
             -var-file="${{ inputs.environment }}.tfvars" \
-            -var="controller_image=mcr.microsoft.com/k8se/quickstart:latest" \
-            -var="job_image=mcr.microsoft.com/k8se/quickstart:latest"
-
-      - name: Get ACR login server
-        id: acr
-        working-directory: infra
-        run: |
-          echo "login_server=$(terraform output -raw acr_login_server)" >> "$GITHUB_OUTPUT"
-
-      # Step 2: Build and push the real application image
-      - name: ACR login
-        run: az acr login --name ${{ vars.ACR_NAME }}
-
-      - name: Build and push image
-        run: |
-          IMAGE="${{ steps.acr.outputs.login_server }}/gitlab-copilot-agent:${{ inputs.image_tag }}"
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
-
-      # Step 3: Update container apps to use the real image
-      - name: Terraform apply — deploy real image
-        working-directory: infra
-        env:
-          TF_VAR_kv_bootstrap_secrets: '{"gitlab-token":"${{ secrets.GITLAB_TOKEN }}","github-token":"${{ secrets.GH_PAT_FOR_COPILOT }}","jira-api-token":"${{ secrets.JIRA_API_TOKEN }}"}'
-        run: |
-          terraform apply -auto-approve \
-            -var-file="${{ inputs.environment }}.tfvars" \
-            -var="controller_image=${{ env.IMAGE }}" \
-            -var="job_image=${{ env.IMAGE }}"
+            -var="image_tag=${{ inputs.image_tag }}"
 
       - name: Disable TF state storage public access
         if: always()

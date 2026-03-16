@@ -1,11 +1,84 @@
 resource "azurerm_container_registry" "main" {
-  name                = replace("acr${var.resource_group_name}", "-", "")
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  sku                 = "Basic"
-  admin_enabled       = false
+  name                          = replace("acr${var.resource_group_name}", "-", "")
+  resource_group_name           = azurerm_resource_group.main.name
+  location                      = azurerm_resource_group.main.location
+  sku                           = "Premium"
+  admin_enabled                 = false
+  public_network_access_enabled = false
 
   tags = var.tags
+}
+
+# ACR private DNS + endpoint
+resource "azurerm_private_dns_zone" "acr" {
+  name                = "privatelink.azurecr.io"
+  resource_group_name = azurerm_resource_group.main.name
+  tags                = var.tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "acr" {
+  name                  = "acr-vnet-link"
+  resource_group_name   = azurerm_resource_group.main.name
+  private_dns_zone_name = azurerm_private_dns_zone.acr.name
+  virtual_network_id    = azurerm_virtual_network.main.id
+}
+
+resource "azurerm_private_endpoint" "acr" {
+  name                = "pe-acr-${var.resource_group_name}"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  subnet_id           = azurerm_subnet.storage.id
+
+  private_service_connection {
+    name                           = "acr-connection"
+    private_connection_resource_id = azurerm_container_registry.main.id
+    subresource_names              = ["registry"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "acr-dns"
+    private_dns_zone_ids = [azurerm_private_dns_zone.acr.id]
+  }
+
+  tags = var.tags
+}
+
+# Import image from GHCR into ACR. Runs after ACR is created.
+# ACR import is a server-side copy — no Docker daemon needed.
+resource "null_resource" "acr_import" {
+  triggers = {
+    image_tag = var.image_tag
+    acr_name  = azurerm_container_registry.main.name
+  }
+
+  provisioner "local-exec" {
+    command     = <<-EOT
+      # Temporarily enable public access for the import
+      az acr update -n "$ACR_NAME" --public-network-access Enabled -o none
+      echo "Waiting for ACR public access..."
+      sleep 10
+      az acr import -n "$ACR_NAME" \
+        --source "ghcr.io/$GHCR_IMAGE:$IMAGE_TAG" \
+        --image "gitlab-copilot-agent:$IMAGE_TAG" \
+        --force
+      echo "Imported ghcr.io/$GHCR_IMAGE:$IMAGE_TAG"
+      az acr update -n "$ACR_NAME" --public-network-access Disabled -o none
+      echo "ACR public access disabled"
+    EOT
+    interpreter = ["bash", "-c"]
+    environment = {
+      ACR_NAME   = azurerm_container_registry.main.name
+      GHCR_IMAGE = var.ghcr_image
+      IMAGE_TAG  = var.image_tag
+    }
+  }
+
+  depends_on = [
+    azurerm_container_registry.main,
+    azurerm_private_endpoint.acr,
+    azurerm_role_assignment.deployer_acr,
+  ]
 }
 
 # Controller identity: ACR pull
@@ -27,6 +100,10 @@ resource "azurerm_role_assignment" "deployer_acr" {
   scope                = azurerm_container_registry.main.id
   role_definition_name = "AcrPush"
   principal_id         = data.azurerm_client_config.current.object_id
+}
+
+locals {
+  acr_image = "${azurerm_container_registry.main.login_server}/gitlab-copilot-agent:${var.image_tag}"
 }
 
 # --- Container Apps Environment ---
@@ -118,7 +195,7 @@ resource "azurerm_container_app" "controller" {
 
     container {
       name   = "controller"
-      image  = var.controller_image
+      image  = local.acr_image
       cpu    = 0.5
       memory = "1Gi"
 
@@ -244,7 +321,7 @@ resource "azurerm_container_app" "controller" {
     }
   }
 
-  depends_on = [null_resource.kv_seed_secrets]
+  depends_on = [null_resource.kv_seed_secrets, null_resource.acr_import]
 
   tags = var.tags
 }
@@ -294,7 +371,7 @@ resource "azurerm_container_app_job" "task_runner" {
   template {
     container {
       name    = "task"
-      image   = var.job_image
+      image   = local.acr_image
       cpu     = var.job_cpu
       memory  = var.job_memory
       command = [".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]
@@ -364,7 +441,7 @@ resource "azurerm_container_app_job" "task_runner" {
     }
   }
 
-  depends_on = [null_resource.kv_seed_secrets]
+  depends_on = [null_resource.kv_seed_secrets, null_resource.acr_import]
 
   tags = var.tags
 }

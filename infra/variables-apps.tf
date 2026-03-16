@@ -28,14 +28,15 @@ variable "storage_subnet_prefix" {
 
 # --- Container Apps ---
 
-variable "controller_image" {
-  description = "Container image for the controller"
+variable "image_tag" {
+  description = "Image tag to deploy (must exist in GHCR)"
   type        = string
 }
 
-variable "job_image" {
-  description = "Container image for the task runner job"
+variable "ghcr_image" {
+  description = "GHCR image path (without tag), e.g. peteroden/gitlab-copilot-agent"
   type        = string
+  default     = "peteroden/gitlab-copilot-agent"
 }
 
 variable "job_cpu" {
