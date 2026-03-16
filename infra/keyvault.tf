@@ -167,9 +167,16 @@ resource "azurerm_role_assignment" "controller_kv" {
   principal_id         = azurerm_user_assigned_identity.controller.principal_id
 }
 
-# Job: Key Vault Secrets User (scoped to vault; per-secret RBAC is not yet GA)
-resource "azurerm_role_assignment" "job_kv" {
-  scope                = azurerm_key_vault.main.id
+# Job: Key Vault Secrets User — scoped to task-runner secrets only.
+# The job identity must NOT read controller-only secrets (gitlab-token, jira-api-token).
+resource "azurerm_role_assignment" "job_kv_github_token" {
+  scope                = "${azurerm_key_vault.main.id}/secrets/github-token"
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_user_assigned_identity.job.principal_id
+}
+
+resource "azurerm_role_assignment" "job_kv_copilot_api_key" {
+  scope                = "${azurerm_key_vault.main.id}/secrets/copilot-api-key"
   role_definition_name = "Key Vault Secrets User"
   principal_id         = azurerm_user_assigned_identity.job.principal_id
 }
