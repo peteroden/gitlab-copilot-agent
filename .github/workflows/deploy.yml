@@ -45,13 +45,20 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push to GHCR
+        id: ghcr_push
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
         run: |
           IMAGE="ghcr.io/${{ github.repository }}:${IMAGE_TAG}"
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
-          echo "✓ Pushed $IMAGE"
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE" | cut -d'@' -f2)
+          if [[ ! "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "::error::Failed to extract valid digest. Got: ${DIGEST}"
+            exit 1
+          fi
+          echo "image_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "✓ Pushed $IMAGE (${DIGEST})"
 
       # Step 2: Provision infrastructure (single terraform apply)
       - name: Azure login (OIDC)
@@ -120,11 +127,13 @@ jobs:
         env:
           TF_VAR_kv_bootstrap_secrets: '{"gitlab-token":"${{ secrets.GITLAB_TOKEN }}","github-token":"${{ secrets.GH_PAT_FOR_COPILOT }}","jira-api-token":"${{ secrets.JIRA_API_TOKEN }}"}'
           TF_VAR_image_tag: ${{ inputs.image_tag }}
+          TF_VAR_image_digest: ${{ steps.ghcr_push.outputs.image_digest }}
           TFVARS_FILE: ${{ inputs.environment }}.tfvars
         run: |
           terraform apply -auto-approve \
             -var-file="${TFVARS_FILE}" \
-            -var="image_tag=${TF_VAR_image_tag}"
+            -var="image_tag=${TF_VAR_image_tag}" \
+            -var="image_digest=${TF_VAR_image_digest}"
 
       - name: Disable TF state storage public access
         if: always()
