@@ -71,31 +71,28 @@ jobs:
             -g ${{ vars.TF_STATE_RESOURCE_GROUP }} \
             --public-network-access Enabled \
             -o none
-          echo "Waiting for public access to propagate..."
-          for i in $(seq 1 24); do
-            if az storage container list \
-                 --account-name ${{ vars.TF_STATE_STORAGE_ACCOUNT }} \
-                 --auth-mode login --only-show-errors -o none 2>/dev/null; then
-              echo "Storage accessible after $((i * 5))s"
-              break
-            fi
-            if [ "$i" -eq 24 ]; then
-              echo "::error::Timeout waiting for storage access (120s)"
-              exit 1
-            fi
-            sleep 5
-          done
 
-      - name: Terraform init
+      - name: Terraform init (with retry for propagation)
         working-directory: infra
         run: |
-          terraform init \
-            -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
-            -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
-            -backend-config="container_name=tfstate" \
-            -backend-config="key=${{ inputs.environment }}.terraform.tfstate" \
-            -backend-config="use_azuread_auth=true" \
-            -backend-config="use_oidc=true"
+          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if terraform init \
+                 -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
+                 -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
+                 -backend-config="container_name=tfstate" \
+                 -backend-config="key=${{ inputs.environment }}.terraform.tfstate" \
+                 -backend-config="use_azuread_auth=true" \
+                 -backend-config="use_oidc=true" 2>&1; then
+              echo "Terraform init succeeded on attempt $attempt"
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "::error::Terraform init failed after 12 attempts (120s)"
+              exit 1
+            fi
+            echo "Attempt $attempt failed, retrying in 10s..."
+            sleep 10
+          done
 
       - name: Substitute tfvars placeholders
         working-directory: infra
