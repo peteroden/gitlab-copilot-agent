@@ -52,6 +52,12 @@ jobs:
     needs: build-push
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -66,6 +72,14 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
+      - name: Enable TF state storage public access
+        run: |
+          az storage account update \
+            -n ${{ vars.TF_STATE_STORAGE_ACCOUNT }} \
+            -g ${{ vars.TF_STATE_RESOURCE_GROUP }} \
+            --public-network-access Enabled \
+            -o none
+
       - name: Terraform init
         working-directory: infra
         run: |
@@ -73,7 +87,9 @@ jobs:
             -backend-config="resource_group_name=${{ vars.TF_STATE_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}" \
             -backend-config="container_name=tfstate" \
-            -backend-config="key=${{ inputs.environment }}.terraform.tfstate"
+            -backend-config="key=${{ inputs.environment }}.terraform.tfstate" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="use_oidc=true"
 
       - name: Terraform apply
         working-directory: infra
@@ -82,3 +98,12 @@ jobs:
             -var-file="${{ inputs.environment }}.tfvars" \
             -var="controller_image=${{ needs.build-push.outputs.acr_image }}" \
             -var="job_image=${{ needs.build-push.outputs.acr_image }}"
+
+      - name: Disable TF state storage public access
+        if: always()
+        run: |
+          az storage account update \
+            -n ${{ vars.TF_STATE_STORAGE_ACCOUNT }} \
+            -g ${{ vars.TF_STATE_RESOURCE_GROUP }} \
+            --public-network-access Disabled \
+            -o none

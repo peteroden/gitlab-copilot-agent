@@ -13,6 +13,7 @@ build/
 .ruff_cache/
 .coverage
 .env.k3d
+.env.aca
 demo.env
 
 # Terraform (S2: state must never be committed)
