@@ -33,6 +33,16 @@ variable "image_tag" {
   type        = string
 }
 
+variable "image_digest" {
+  description = "Image digest (sha256:...) from GHCR push. Used for immutable ACR import and ACA deployment."
+  type        = string
+
+  validation {
+    condition     = can(regex("^sha256:[a-f0-9]{64}$", var.image_digest))
+    error_message = "image_digest must be a sha256 digest (sha256:<64 hex chars>)."
+  }
+}
+
 variable "ghcr_image" {
   description = "GHCR image path (without tag), e.g. peteroden/gitlab-copilot-agent"
   type        = string

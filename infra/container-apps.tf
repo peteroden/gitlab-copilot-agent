@@ -48,8 +48,8 @@ resource "azurerm_private_endpoint" "acr" {
 # ACR import is a server-side copy — no Docker daemon needed.
 resource "null_resource" "acr_import" {
   triggers = {
-    image_tag = var.image_tag
-    acr_name  = azurerm_container_registry.main.name
+    image_digest = var.image_digest
+    acr_name     = azurerm_container_registry.main.name
   }
 
   provisioner "local-exec" {
@@ -57,16 +57,17 @@ resource "null_resource" "acr_import" {
     command     = <<-EOT
       set -euo pipefail
       az acr import -n "$ACR_NAME" \
-        --source "ghcr.io/$GHCR_IMAGE:$IMAGE_TAG" \
+        --source "ghcr.io/$GHCR_IMAGE@$IMAGE_DIGEST" \
         --image "gitlab-copilot-agent:$IMAGE_TAG" \
         --force
-      echo "Imported ghcr.io/$GHCR_IMAGE:$IMAGE_TAG"
+      echo "Imported ghcr.io/$GHCR_IMAGE@$IMAGE_DIGEST → gitlab-copilot-agent:$IMAGE_TAG"
     EOT
     interpreter = ["bash", "-c"]
     environment = {
-      ACR_NAME   = azurerm_container_registry.main.name
-      GHCR_IMAGE = var.ghcr_image
-      IMAGE_TAG  = var.image_tag
+      ACR_NAME     = azurerm_container_registry.main.name
+      GHCR_IMAGE   = var.ghcr_image
+      IMAGE_TAG    = var.image_tag
+      IMAGE_DIGEST = var.image_digest
     }
   }
 
@@ -99,7 +100,7 @@ resource "azurerm_role_assignment" "deployer_acr" {
 }
 
 locals {
-  acr_image = "${azurerm_container_registry.main.login_server}/gitlab-copilot-agent:${var.image_tag}"
+  acr_image = "${azurerm_container_registry.main.login_server}/gitlab-copilot-agent:${var.image_tag}@${var.image_digest}"
 }
 
 # --- Container Apps Environment ---
