@@ -20,6 +20,12 @@ variable "kv_subnet_prefix" {
   default     = "10.0.3.0/24"
 }
 
+variable "storage_subnet_prefix" {
+  description = "CIDR for the Storage private endpoint subnet"
+  type        = string
+  default     = "10.0.4.0/24"
+}
+
 # --- Container Apps ---
 
 variable "controller_image" {

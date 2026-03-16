@@ -271,9 +271,11 @@ resource "azurerm_container_app_job" "task_runner" {
         name             = "queue-trigger"
         custom_rule_type = "azure-queue"
         metadata = {
-          queueName   = "task-queue"
-          queueLength = "1"
-          accountName = azurerm_storage_account.tasks.name
+          queueName      = "task-queue"
+          queueLength    = "1"
+          accountName    = azurerm_storage_account.tasks.name
+          cloud          = "Private"
+          endpointSuffix = "privatelink.queue.core.windows.net"
         }
       }
     }
