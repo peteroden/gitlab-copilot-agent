@@ -34,11 +34,11 @@ jobs:
       ARM_USE_OIDC: "true"
       ARM_USE_AZUREAD: "true"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       # Step 1: Build and push image to GHCR (no infra dependency)
       - name: GHCR login
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -55,13 +55,13 @@ jobs:
 
       # Step 2: Provision infrastructure (single terraform apply)
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
           terraform_wrapper: false

@@ -10,11 +10,11 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: "0.6.x"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -29,11 +29,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           version: "0.6.x"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -44,15 +44,15 @@ jobs:
   helm-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
       - name: Helm lint
         run: helm lint helm/gitlab-copilot-agent/ --set gitlab.url=https://ci.test --set gitlab.token=ci --set gitlab.webhookSecret=ci
 
   docker-digest-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Verify FROM lines are digest-pinned
         run: |
           bad_lines=$(grep -E '^FROM ' Dockerfile | grep -v '@sha256:' || true)
@@ -65,7 +65,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Build Docker image
         run: docker build -t gitlab-copilot-agent:ci .
 
@@ -73,8 +73,8 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'pull_request' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: "1.9.x"
       - name: Terraform fmt
@@ -85,7 +85,7 @@ jobs:
         run: |
           terraform init -backend=false
           terraform validate
-      - uses: terraform-linters/setup-tflint@v4
+      - uses: terraform-linters/setup-tflint@90f302c255ef959cbfb4bd10581afecdb7ece3e6 # v4
         with:
           tflint_version: "v0.53.0"
       - name: TFLint
