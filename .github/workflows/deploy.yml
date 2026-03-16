@@ -66,6 +66,14 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
+      - name: Enable TF state storage public access
+        run: |
+          az storage account update \
+            -n ${{ vars.TF_STATE_STORAGE_ACCOUNT }} \
+            -g ${{ vars.TF_STATE_RESOURCE_GROUP }} \
+            --public-network-access Enabled \
+            -o none
+
       - name: Terraform init
         working-directory: infra
         run: |
@@ -82,3 +90,12 @@ jobs:
             -var-file="${{ inputs.environment }}.tfvars" \
             -var="controller_image=${{ needs.build-push.outputs.acr_image }}" \
             -var="job_image=${{ needs.build-push.outputs.acr_image }}"
+
+      - name: Disable TF state storage public access
+        if: always()
+        run: |
+          az storage account update \
+            -n ${{ vars.TF_STATE_STORAGE_ACCOUNT }} \
+            -g ${{ vars.TF_STATE_RESOURCE_GROUP }} \
+            --public-network-access Disabled \
+            -o none
