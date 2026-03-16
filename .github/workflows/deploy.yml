@@ -92,6 +92,8 @@ jobs:
 
       - name: Terraform apply (infra only — placeholder image)
         working-directory: infra
+        env:
+          TF_VAR_kv_bootstrap_secrets: '{"gitlab-token":"${{ secrets.GITLAB_TOKEN }}","github-token":"${{ secrets.GH_PAT_FOR_COPILOT }}","jira-api-token":"${{ secrets.JIRA_API_TOKEN }}"}'
         run: |
           terraform apply -auto-approve \
             -var-file="${{ inputs.environment }}.tfvars" \
@@ -206,6 +208,8 @@ jobs:
 
       - name: Terraform apply (with real image)
         working-directory: infra
+        env:
+          TF_VAR_kv_bootstrap_secrets: '{"gitlab-token":"${{ secrets.GITLAB_TOKEN }}","github-token":"${{ secrets.GH_PAT_FOR_COPILOT }}","jira-api-token":"${{ secrets.JIRA_API_TOKEN }}"}'
         run: |
           terraform apply -auto-approve \
             -var-file="${{ inputs.environment }}.tfvars" \
