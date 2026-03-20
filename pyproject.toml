@@ -9,9 +9,9 @@ description = "Automated GitLab MR reviews powered by GitHub Copilot SDK"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.135.1",
-    "uvicorn[standard]==0.41.0",
+    "uvicorn[standard]==0.42.0",
     "python-gitlab==8.1.0",
-    "github-copilot-sdk==0.1.32",
+    "github-copilot-sdk==0.2.0",
     "pydantic==2.12.5",
     "pydantic-settings==2.13.1",
     "structlog==25.5.0",
