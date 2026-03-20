@@ -41,7 +41,7 @@ dev = [
     "pytest==9.0.2",
     "pytest-asyncio==1.3.0",
     "httpx==0.28.1",
-    "ruff==0.15.6",
+    "ruff==0.15.7",
     "pyright>=1.1.400",
     "playwright>=1.48.0",
 ]
