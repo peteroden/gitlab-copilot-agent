@@ -8,8 +8,8 @@ version = "0.1.0"
 description = "Automated GitLab MR reviews powered by GitHub Copilot SDK"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi==0.135.1",
-    "uvicorn[standard]==0.41.0",
+    "fastapi==0.135.2",
+    "uvicorn[standard]==0.42.0",
     "python-gitlab==8.1.0",
     "github-copilot-sdk==0.1.32",
     "pydantic==2.12.5",
