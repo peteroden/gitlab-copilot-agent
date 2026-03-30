@@ -9,6 +9,7 @@ from gitlab_copilot_agent.task_runner import (
     ENV_TASK_ID,
     ENV_TASK_PAYLOAD,
     ENV_TASK_TYPE,
+    QueueTaskPayload,
     _build_coding_result,
     _coding_response_validator,
     _dequeue_task,
@@ -20,6 +21,7 @@ from gitlab_copilot_agent.task_runner import (
 
 TASK_ID = "task-001"
 PAYLOAD = json.dumps({"prompt": "Review this"})
+PLUGIN_SPEC = "copilot-plugin-a"
 _M = "gitlab_copilot_agent.task_runner"
 
 
@@ -52,23 +54,28 @@ class TestHelpers:
 
 
 REPO_BLOB_KEY = "repos/task-001.tar.gz"
-QUEUE_PARAMS = {
-    "task_type": "review",
-    "task_id": TASK_ID,
-    "repo_blob_key": REPO_BLOB_KEY,
-    "user_prompt": "Review this",
-}
+QUEUE_PAYLOAD = QueueTaskPayload(
+    task_type="review",
+    task_id=TASK_ID,
+    repo_blob_key=REPO_BLOB_KEY,
+    system_prompt="",
+    user_prompt="Review this",
+)
 
 
 def _make_queue_result(
-    params: dict[str, str] | None = None,
-) -> tuple[dict[str, str], MagicMock, MagicMock]:
-    """Build a (params, queue_msg, task_queue) tuple for _dequeue_task mocks."""
+    payload: QueueTaskPayload | None = None,
+) -> tuple[QueueTaskPayload, MagicMock, MagicMock]:
+    """Build a (payload, queue_msg, task_queue) tuple for _dequeue_task mocks."""
     from gitlab_copilot_agent.concurrency import QueueMessage
 
-    p = params or QUEUE_PARAMS
+    p = payload or QUEUE_PAYLOAD
     msg = QueueMessage(
-        message_id="m1", receipt="r1", task_id=p["task_id"], payload=json.dumps(p), dequeue_count=1
+        message_id="m1",
+        receipt="r1",
+        task_id=p.task_id,
+        payload=p.model_dump_json(),
+        dequeue_count=1,
     )
     queue = MagicMock()
     queue.complete = AsyncMock()
@@ -104,9 +111,9 @@ class TestRunTask:
 
     async def test_missing_blob_key_returns_error(self, task_env: None) -> None:
         """Review/coding tasks without repo_blob_key return error and close queue."""
-        params = {**QUEUE_PARAMS, "repo_blob_key": None}
-        _, msg, queue = _make_queue_result(params)
-        qr = (params, msg, queue)
+        payload = QUEUE_PAYLOAD.model_copy(update={"repo_blob_key": None})
+        _, msg, queue = _make_queue_result(payload)
+        qr = (payload, msg, queue)
         with patch(f"{_M}._dequeue_task", AsyncMock(return_value=qr)):
             assert await run_task() == 1
         queue.aclose.assert_awaited_once()
@@ -118,9 +125,9 @@ class TestRunTask:
 
     async def test_invalid_blob_key_prefix_returns_error(self, task_env: None) -> None:
         """Blob keys must start with 'repos/' prefix; queue is closed."""
-        params = {**QUEUE_PARAMS, "repo_blob_key": "evil/path.tar.gz"}
-        _, msg, queue = _make_queue_result(params)
-        qr = (params, msg, queue)
+        payload = QUEUE_PAYLOAD.model_copy(update={"repo_blob_key": "evil/path.tar.gz"})
+        _, msg, queue = _make_queue_result(payload)
+        qr = (payload, msg, queue)
         with patch(f"{_M}._dequeue_task", AsyncMock(return_value=qr)):
             assert await run_task() == 1
         queue.aclose.assert_awaited_once()
@@ -129,8 +136,8 @@ class TestRunTask:
         coding_json = json.dumps(
             {"result_type": "coding", "summary": "x", "patch": "p", "base_sha": "abc"}
         )
-        params = {**QUEUE_PARAMS, "task_type": "coding"}
-        qr = _make_queue_result(params)
+        payload = QUEUE_PAYLOAD.model_copy(update={"task_type": "coding"})
+        qr = _make_queue_result(payload)
         with (
             patch(f"{_M}._dequeue_task", AsyncMock(return_value=qr)),
             patch(f"{_M}.extract_repo_tarball", AsyncMock(return_value=Path("/tmp/r"))),
@@ -344,17 +351,18 @@ class TestDequeueTask:
     async def test_returns_params_and_queue_on_success(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Returns parsed params, message, and queue on successful dequeue."""
+        """Returns parsed payload, message, and queue on successful dequeue."""
         monkeypatch.setenv("GITHUB_TOKEN", "g")
         monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", "conn")
 
         from gitlab_copilot_agent.concurrency import QueueMessage
 
+        payload_data = {"task_type": "review", "task_id": "task-1", "user_prompt": "Review this"}
         fake_msg = QueueMessage(
             message_id="m1",
             receipt="r1",
             task_id="task-1",
-            payload=json.dumps({"task_type": "review", "task_id": "task-1"}),
+            payload=json.dumps(payload_data),
             dequeue_count=1,
         )
         mock_queue = MagicMock()
@@ -362,7 +370,38 @@ class TestDequeueTask:
         with patch(f"{_STATE_MOD}.create_task_queue", return_value=mock_queue):
             result = await _dequeue_task()
         assert result is not None
-        params, msg, queue = result
-        assert params == {"task_type": "review", "task_id": "task-1"}
+        payload, msg, queue = result
+        assert isinstance(payload, QueueTaskPayload)
+        assert payload.task_type == "review"
+        assert payload.task_id == "task-1"
         assert msg.message_id == "m1"
         assert queue is mock_queue
+
+
+class TestPluginThreading:
+    async def test_plugins_passed_from_queue_to_session(self, task_env: None) -> None:
+        """Plugins from queue payload are passed to run_copilot_session."""
+        payload = QUEUE_PAYLOAD.model_copy(update={"plugins": [PLUGIN_SPEC]})
+        qr = _make_queue_result(payload)
+        with (
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=qr)),
+            patch(f"{_M}.extract_repo_tarball", AsyncMock(return_value=Path("/tmp/r"))),
+            patch(f"{_M}.run_copilot_session", AsyncMock(return_value="done")) as ms,
+            patch(f"{_M}._store_result", AsyncMock()),
+            patch(f"{_M}.shutil.rmtree"),
+        ):
+            assert await run_task() == 0
+            assert ms.call_args[1]["plugins"] == [PLUGIN_SPEC]
+
+    async def test_no_plugins_in_payload(self, task_env: None) -> None:
+        """Missing plugins field in queue payload passes None to session."""
+        qr = _make_queue_result()
+        with (
+            patch(f"{_M}._dequeue_task", AsyncMock(return_value=qr)),
+            patch(f"{_M}.extract_repo_tarball", AsyncMock(return_value=Path("/tmp/r"))),
+            patch(f"{_M}.run_copilot_session", AsyncMock(return_value="done")) as ms,
+            patch(f"{_M}._store_result", AsyncMock()),
+            patch(f"{_M}.shutil.rmtree"),
+        ):
+            assert await run_task() == 0
+            assert ms.call_args[1]["plugins"] is None

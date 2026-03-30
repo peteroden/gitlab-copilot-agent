@@ -77,6 +77,7 @@ class KubernetesTaskExecutor:
                 "repo_blob_key": repo_blob_key,
                 "system_prompt": task.system_prompt,
                 "user_prompt": task.user_prompt,
+                "plugins": task.plugins,
             }
         )
         await self._task_queue.enqueue(task.task_id, payload)

@@ -105,6 +105,8 @@ make k3d-deploy                 # deploy via Helm
 | `K8S_SECRET_NAME` | `None` | K8s Secret for Job pod credentials (auto-set by Helm) |
 | `K8S_CONFIGMAP_NAME` | `None` | K8s ConfigMap for Job pod config (auto-set by Helm) |
 | `K8S_JOB_INSTANCE_LABEL` | `""` | Helm release label for NetworkPolicy scoping (auto-set by Helm) |
+| `COPILOT_PLUGINS` | — | Comma-separated Copilot CLI plugins to install per session |
+| `COPILOT_PLUGIN_MARKETPLACES` | — | Comma-separated plugin marketplace URLs or paths |
 
 ### Azure Storage (Dispatch)
 

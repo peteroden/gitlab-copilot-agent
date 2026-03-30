@@ -349,8 +349,15 @@ if repo_config.skill_directories:
 
 **Steps**:
 1. **Resolve CLI Path**: `_get_real_cli_path()` → find bundled Copilot CLI binary
-2. **Build SDK Env**: `build_sdk_env(github_token)` → minimal env dict (excludes service secrets)
-3. **Create Client**:
+2. **Create Session HOME**: `tempfile.mkdtemp(prefix="copilot-session-")` → isolated HOME per session
+3. **Install Plugins** (if configured):
+   - Merge service-level plugins (`settings.copilot_plugins`) with repo-level plugins (from mapping schema)
+   - Register custom marketplaces via `copilot plugin marketplace add`
+   - Install plugins via `copilot plugin install` into session HOME
+   - Minimal env: only `HOME` + `PATH` passed to subprocess (no service secrets)
+   - On timeout (120s): subprocess killed and reaped
+4. **Build SDK Env**: `build_sdk_env(github_token)` → minimal env dict (excludes service secrets)
+5. **Create Client**:
    ```python
    client_opts: CopilotClientOptions = {
        "cli_path": cli_path,
@@ -361,9 +368,9 @@ if repo_config.skill_directories:
    client = CopilotClient(client_opts)
    await client.start()
    ```
-4. **Discover Repo Config**: `discover_repo_config(repo_path)` → skills, agents, instructions
-5. **Inject Instructions**: Append to system prompt
-6. **Build Session Options**:
+6. **Discover Repo Config**: `discover_repo_config(repo_path)` → skills, agents, instructions
+7. **Inject Instructions**: Append to system prompt
+8. **Build Session Options**:
    ```python
    session_opts: SessionConfig = {
        "system_message": {"content": system_content},
@@ -374,7 +381,7 @@ if repo_config.skill_directories:
    if repo_config.custom_agents:
        session_opts["custom_agents"] = [...]
    ```
-7. **BYOK Provider** (if configured):
+9. **BYOK Provider** (if configured):
    ```python
    if settings.copilot_provider_type:
        provider: ProviderConfig = {
@@ -387,9 +394,9 @@ if repo_config.skill_directories:
        session_opts["provider"] = provider
        session_opts["model"] = settings.copilot_model
    ```
-8. **Create Session**: `await client.create_session(session_opts)`
-9. **Send Prompt**: `await session.send({"prompt": user_prompt})`
-10. **Wait for Idle**:
+10. **Create Session**: `await client.create_session(session_opts)`
+11. **Send Prompt**: `await session.send({"prompt": user_prompt})`
+12. **Wait for Idle**:
     ```python
     done = asyncio.Event()
     messages: list[str] = []
@@ -406,14 +413,14 @@ if repo_config.skill_directories:
     session.on(on_event)
     await asyncio.wait_for(done.wait(), timeout=timeout)
     ```
-11. **Extract Result**: `result = messages[-1] if messages else ""`
-12. **Destroy Session**: `await session.destroy()` (in finally)
-13. **Stop Client**: `await client.stop()` (in finally)
-14. **Emit Metric**: `copilot_session_duration.record(elapsed, {"task_type": task_type})`
+13. **Extract Result**: `result = messages[-1] if messages else ""`
+14. **Destroy Session**: `await session.destroy()` (in finally)
+15. **Stop Client**: `await client.stop()` (in finally)
+16. **Emit Metric**: `copilot_session_duration.record(elapsed, {"task_type": task_type})`
 
 **Timeout**: Default 300s (5 minutes), enforced by `asyncio.wait_for()`.
 
-**Error Handling**: Session and client destroyed in finally blocks, exceptions propagate.
+**Error Handling**: Session HOME cleaned up in finally block (`shutil.rmtree`). Session and client destroyed in finally blocks. Plugin install failures propagate as `RuntimeError`.
 
 ---
 

@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     copilot_provider_api_key: str | None = Field(default=None, description="BYOK provider API key")
     github_token: str | None = Field(
         default=None, description="GitHub token for Copilot auth (if not using BYOK)"
+    )
+    copilot_plugins: str | list[str] = Field(
+        default_factory=list,
+        description="Service-level Copilot CLI plugins to install at runtime",
+    )
+    copilot_plugin_marketplaces: str | list[str] = Field(
+        default_factory=list, description="Custom plugin marketplace URLs"
     )
 
     # System prompts (override or append to built-in defaults)
@@ -193,6 +200,19 @@ class Settings(BaseSettings):
         default=None, description="JSON: Jira project key → GitLab project config"
     )
 
+    @field_validator("copilot_plugins", "copilot_plugin_marketplaces", mode="before")
+    @classmethod
+    def _parse_comma_list(cls, v: object) -> object:
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
+            # Try JSON first, fall back to comma-separated
+            if v.startswith("["):
+                return v  # let pydantic handle JSON
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
+
     @property
     def jira(self) -> JiraSettings | None:
         """Return JiraSettings if all required Jira fields are set, else None."""
@@ -281,6 +301,13 @@ class TaskRunnerSettings(BaseSettings):
     copilot_provider_base_url: str | None = Field(default=None, description="BYOK provider URL")
     copilot_provider_api_key: str | None = Field(default=None, description="BYOK provider API key")
     github_token: str | None = Field(default=None, description="GitHub token for Copilot auth")
+    copilot_plugins: str | list[str] = Field(
+        default_factory=list,
+        description="Service-level Copilot CLI plugins to install at runtime",
+    )
+    copilot_plugin_marketplaces: str | list[str] = Field(
+        default_factory=list, description="Custom plugin marketplace URLs"
+    )
 
     # System prompts
     system_prompt: str | None = Field(default=None, description="Global base prompt")
@@ -319,6 +346,19 @@ class TaskRunnerSettings(BaseSettings):
     queue_visibility_buffer: int = Field(
         default=60, description="Extra seconds added to job timeout for queue visibility"
     )
+
+    @field_validator("copilot_plugins", "copilot_plugin_marketplaces", mode="before")
+    @classmethod
+    def _parse_comma_list(cls, v: object) -> object:
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
+            # Try JSON first, fall back to comma-separated
+            if v.startswith("["):
+                return v  # let pydantic handle JSON
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
 
     @model_validator(mode="after")
     def _check_auth(self) -> "TaskRunnerSettings":

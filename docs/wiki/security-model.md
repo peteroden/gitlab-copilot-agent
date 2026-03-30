@@ -347,6 +347,14 @@ Only the secrets needed by Job pods are mounted. **GITLAB_TOKEN is never passed 
 
 **Code**: `aca_executor.py` → `_start_execution()`
 
+### Plugin Isolation
+- Per-session HOME directory (`tempfile.mkdtemp()`) prevents plugin state leakage between sessions/repos
+- Plugin install subprocess receives minimal env: `HOME` + `PATH` only
+- Service secrets (`GITLAB_TOKEN`, `AZURE_STORAGE_CONNECTION_STRING`, etc.) excluded from plugin process
+- Marketplace URLs sanitized before logging (credentials/query params stripped)
+- Session HOME cleaned up in `finally` block after session completes
+- Plugin install timeout (120s) with subprocess kill to prevent orphaned processes
+
 ---
 
 ## Secret Handling

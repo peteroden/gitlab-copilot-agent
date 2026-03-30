@@ -108,6 +108,7 @@ class CodingOrchestrator:
                         issue.key,
                         issue.fields.summary,
                         description,
+                        plugins=project_mapping.plugins,
                     )
                     await bound_log.ainfo("coding_complete", summary=result.summary[:200])
                     await apply_coding_result(result, repo_path)

@@ -33,6 +33,7 @@ def _build_dispatch_payload(task: TaskParams, repo_blob_key: str | None) -> str:
             "repo_blob_key": repo_blob_key,
             "system_prompt": task.system_prompt,
             "user_prompt": task.user_prompt,
+            "plugins": task.plugins,
         }
     )
 

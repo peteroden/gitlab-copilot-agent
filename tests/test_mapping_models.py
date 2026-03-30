@@ -25,6 +25,8 @@ DEFAULT_BRANCH = "main"
 DEVELOP_BRANCH = "develop"
 DEFAULT_CRED = "default"
 PLATFORM_CRED = "platform_team"
+PLUGIN_A = "copilot-plugin-a"
+PLUGIN_B = "copilot-plugin-b"
 
 
 # ---------------------------------------------------------------------------
@@ -203,3 +205,61 @@ class TestRendering:
         json_str = rendered.model_dump_json()
         reloaded = RenderedMap.model_validate_json(json_str)
         assert reloaded == rendered
+
+
+class TestPlugins:
+    def test_defaults_plugins_empty(self) -> None:
+        d = Defaults()
+        assert d.plugins == []
+
+    def test_defaults_with_plugins(self) -> None:
+        d = Defaults(plugins=[PLUGIN_A, PLUGIN_B])
+        assert d.plugins == [PLUGIN_A, PLUGIN_B]
+
+    def test_binding_plugins_none_by_default(self) -> None:
+        b = Binding(**_minimal_binding())
+        assert b.plugins is None
+
+    def test_binding_with_plugins(self) -> None:
+        b = Binding(**_minimal_binding(plugins=[PLUGIN_A]))
+        assert b.plugins == [PLUGIN_A]
+
+    def test_render_uses_default_plugins(self) -> None:
+        data = _minimal_mapping(defaults={"plugins": [PLUGIN_A]})
+        m = MappingFile(**data)
+        rendered = m.render()
+        assert rendered.mappings[JIRA_KEY_PROJ].plugins == [PLUGIN_A]
+
+    def test_render_binding_overrides_default_plugins(self) -> None:
+        data = _minimal_mapping(
+            defaults={"plugins": [PLUGIN_A]},
+            bindings=[_minimal_binding(plugins=[PLUGIN_B])],
+        )
+        m = MappingFile(**data)
+        rendered = m.render()
+        assert rendered.mappings[JIRA_KEY_PROJ].plugins == [PLUGIN_B]
+
+    def test_render_binding_empty_plugins_overrides_defaults(self) -> None:
+        """Explicitly setting empty list on binding clears default plugins."""
+        data = _minimal_mapping(
+            defaults={"plugins": [PLUGIN_A]},
+            bindings=[_minimal_binding(plugins=[])],
+        )
+        m = MappingFile(**data)
+        rendered = m.render()
+        assert rendered.mappings[JIRA_KEY_PROJ].plugins == []
+
+    def test_render_binding_none_inherits_defaults(self) -> None:
+        """When binding.plugins is None, defaults apply."""
+        data = _minimal_mapping(defaults={"plugins": [PLUGIN_A, PLUGIN_B]})
+        m = MappingFile(**data)
+        rendered = m.render()
+        assert rendered.mappings[JIRA_KEY_PROJ].plugins == [PLUGIN_A, PLUGIN_B]
+
+    def test_rendered_json_round_trip_with_plugins(self) -> None:
+        data = _minimal_mapping(defaults={"plugins": [PLUGIN_A]})
+        m = MappingFile(**data)
+        rendered = m.render()
+        json_str = rendered.model_dump_json()
+        reloaded = RenderedMap.model_validate_json(json_str)
+        assert reloaded.mappings[JIRA_KEY_PROJ].plugins == [PLUGIN_A]

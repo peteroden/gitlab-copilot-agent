@@ -21,6 +21,9 @@ class TaskParams(BaseModel):
     user_prompt: str = Field(description="User prompt for the Copilot session")
     settings: Settings = Field(description="Application settings")
     repo_path: str | None = Field(default=None, description="Local path to cloned repo")
+    plugins: list[str] = Field(
+        default_factory=list, description="Effective Copilot CLI plugins for this task"
+    )
 
 
 class ReviewResult(BaseModel):
@@ -70,6 +73,7 @@ class LocalTaskExecutor:
             system_prompt=task.system_prompt,
             user_prompt=task.user_prompt,
             task_type=task.task_type,
+            plugins=task.plugins or None,
         )
         if task.task_type == "review":
             return ReviewResult(summary=summary)
