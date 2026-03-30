@@ -98,6 +98,7 @@ async def run_coding_task(
     issue_key: str,
     summary: str,
     description: str | None,
+    plugins: list[str] | None = None,
 ) -> TaskResult:
     """Run a Copilot agent session to implement changes from a Jira issue."""
     ensure_git_exclude(repo_path)
@@ -110,5 +111,6 @@ async def run_coding_task(
         user_prompt=build_jira_coding_prompt(issue_key, summary, description),
         settings=settings,
         repo_path=repo_path,
+        plugins=plugins or [],
     )
     return await executor.execute(task)

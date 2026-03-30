@@ -68,6 +68,7 @@ class TestLocalTaskExecutor:
             system_prompt=SYSTEM_PROMPT,
             user_prompt=USER_PROMPT,
             task_type="review",
+            plugins=None,
         )
 
     async def test_requires_repo_path(self) -> None:
@@ -75,3 +76,21 @@ class TestLocalTaskExecutor:
         task = _make_task(repo_path=None)
         with pytest.raises(ValueError, match="repo_path"):
             await executor.execute(task)
+
+
+class TestTaskParamsPlugins:
+    def test_plugins_default_empty(self) -> None:
+        task = _make_task()
+        assert task.plugins == []
+
+    def test_plugins_set(self) -> None:
+        task = _make_task(plugins=["plugin-a", "plugin-b"])
+        assert task.plugins == ["plugin-a", "plugin-b"]
+
+    @patch("gitlab_copilot_agent.copilot_session.run_copilot_session", new_callable=AsyncMock)
+    async def test_local_executor_passes_plugins(self, mock_session: AsyncMock) -> None:
+        mock_session.return_value = "ok"
+        executor = LocalTaskExecutor()
+        task = _make_task(plugins=["plugin-a"])
+        await executor.execute(task)
+        assert mock_session.call_args[1]["plugins"] == ["plugin-a"]

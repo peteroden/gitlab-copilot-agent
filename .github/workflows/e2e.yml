@@ -7,9 +7,6 @@ on:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    # Non-blocking: k8s executor has known bugs (see issues). Failures are
-    # expected until hostAliases, writable volumes, and env propagation are fixed.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 

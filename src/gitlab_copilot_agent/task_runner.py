@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import structlog
+from pydantic import BaseModel, ConfigDict, Field
 
 from gitlab_copilot_agent.coding_engine import parse_agent_output
 from gitlab_copilot_agent.concurrency import QueueMessage, TaskQueue
@@ -26,6 +27,20 @@ ENV_TASK_TYPE, ENV_TASK_ID = "TASK_TYPE", "TASK_ID"
 ENV_TASK_PAYLOAD = "TASK_PAYLOAD"
 VALID_TASK_TYPES: frozenset[str] = frozenset({"review", "coding", "echo"})
 _RESULT_TTL = 3600  # 1 hour
+
+
+class QueueTaskPayload(BaseModel):
+    """Typed representation of a task dequeued from Azure Storage Queue."""
+
+    model_config = ConfigDict(strict=True)
+
+    task_type: str = Field(description="Task type: review, coding, or echo")
+    task_id: str = Field(description="Unique task identifier for idempotency")
+    repo_blob_key: str | None = Field(default=None, description="Blob key for repo tarball")
+    system_prompt: str = Field(default="", description="System prompt for Copilot session")
+    user_prompt: str = Field(description="User prompt for Copilot session")
+    plugins: list[str] | None = Field(default=None, description="Per-repo plugin specs")
+
 
 _RETRY_PROMPT = (
     "Your response did not include the required JSON output block. "
@@ -63,7 +78,7 @@ async def _store_result(
         await store.aclose()
 
 
-async def _dequeue_task() -> tuple[dict[str, str], QueueMessage, TaskQueue] | None:
+async def _dequeue_task() -> tuple[QueueTaskPayload, QueueMessage, TaskQueue] | None:
     """Dequeue a task from Azure Storage Queue (if configured).
 
     Creates TaskRunnerSettings internally; returns None if settings
@@ -97,8 +112,8 @@ async def _dequeue_task() -> tuple[dict[str, str], QueueMessage, TaskQueue] | No
         await queue.aclose()
         return None
 
-    params: dict[str, str] = json.loads(msg.payload)
-    return params, msg, queue
+    payload = QueueTaskPayload.model_validate_json(msg.payload)
+    return payload, msg, queue
 
 
 def _get_required_env(name: str) -> str:
@@ -190,11 +205,12 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
 
     queue_result = await _dequeue_task()
     if queue_result is not None:
-        params_dict, queue_msg, task_queue = queue_result
-        task_type = params_dict["task_type"]
-        task_id = params_dict["task_id"]
-        repo_blob_key = params_dict.get("repo_blob_key")
-        user_prompt = params_dict["user_prompt"]
+        payload, queue_msg, task_queue = queue_result
+        task_type = payload.task_type
+        task_id = payload.task_id
+        repo_blob_key = payload.repo_blob_key
+        user_prompt = payload.user_prompt
+        plugins = payload.plugins
     else:
         try:
             task_type = _get_required_env(ENV_TASK_TYPE)
@@ -202,6 +218,7 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
             payload_raw = _get_required_env(ENV_TASK_PAYLOAD)
             user_prompt = str(_parse_task_payload(payload_raw).get("prompt", payload_raw))
             repo_blob_key = None
+            plugins = None
         except RuntimeError as exc:
             await log.aerror("missing_env_var", error=str(exc))
             return 1
@@ -257,6 +274,7 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
             user_prompt,
             task_type=task_type,
             validate_response=_coding_response_validator if task_type == "coding" else None,
+            plugins=plugins,
         )
         if task_type == "coding":
             assert pre_session_sha is not None

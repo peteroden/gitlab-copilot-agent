@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import structlog
+from pydantic import BaseModel, ConfigDict, Field
 
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
 from gitlab_copilot_agent.gitlab_client import GitLabClient
@@ -13,24 +12,19 @@ from gitlab_copilot_agent.mapping_models import RenderedMap
 log = structlog.get_logger()
 
 
-@dataclass(frozen=True, repr=False)
-class ResolvedProject:
+class ResolvedProject(BaseModel):
     """Fully resolved project context ready for runtime use."""
 
-    jira_project: str
-    repo: str
-    gitlab_project_id: int
-    clone_url: str
-    target_branch: str
-    credential_ref: str
-    token: str
+    model_config = ConfigDict(frozen=True)
 
-    def __repr__(self) -> str:
-        return (
-            f"ResolvedProject(jira_project={self.jira_project!r}, "
-            f"repo={self.repo!r}, gitlab_project_id={self.gitlab_project_id}, "
-            f"credential_ref={self.credential_ref!r}, token='***')"
-        )
+    jira_project: str = Field(description="Jira project key")
+    repo: str = Field(description="GitLab repo path_with_namespace")
+    gitlab_project_id: int = Field(description="Numeric GitLab project ID")
+    clone_url: str = Field(description="Git HTTP clone URL")
+    target_branch: str = Field(description="Default target branch")
+    credential_ref: str = Field(description="Credential registry key")
+    token: str = Field(description="Resolved GitLab token", repr=False)
+    plugins: list[str] = Field(default_factory=list, description="Copilot CLI plugin specs")
 
 
 class ProjectRegistry:
@@ -79,6 +73,7 @@ class ProjectRegistry:
                     target_branch=binding.target_branch,
                     credential_ref=binding.credential_ref,
                     token=token,
+                    plugins=binding.plugins,
                 )
             )
         registry = cls(projects)

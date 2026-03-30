@@ -29,7 +29,8 @@ spec:
         containers:
           - name: task
             image: "{{ .Values.jobRunner.image | default (printf "%s:%s" .Values.image.repository (.Values.image.tag | default "latest")) }}"
-            command: [".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]
+            command: ["/opt/entrypoint.sh"]
+            args: [".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]
             envFrom:
               - configMapRef:
                   name: {{ include "app.fullname" . }}

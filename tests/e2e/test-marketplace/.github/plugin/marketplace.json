@@ -1,0 +1,19 @@
+{
+  "name": "e2e-test-marketplace",
+  "owner": {
+    "name": "E2E Tests",
+    "email": "e2e@test.local"
+  },
+  "metadata": {
+    "description": "Self-contained test marketplace for E2E plugin verification",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "e2e-greeter",
+      "description": "Minimal test plugin that adds a greeting skill",
+      "version": "1.0.0",
+      "source": "./plugins/e2e-greeter"
+    }
+  ]
+}

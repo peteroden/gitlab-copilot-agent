@@ -26,6 +26,7 @@ COPY --chown=app:app src/ src/
 RUN uv sync --no-dev --extra kubernetes --extra azure --frozen
 
 COPY --chown=app:app scripts/entrypoint.sh /opt/entrypoint.sh
+COPY --chown=app:app tests/e2e/test-marketplace/ /opt/test-marketplace/
 EXPOSE 8000
 ENTRYPOINT ["/opt/entrypoint.sh"]
 CMD ["uv", "run", "python", "-m", "gitlab_copilot_agent.main"]

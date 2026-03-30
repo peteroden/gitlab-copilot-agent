@@ -28,6 +28,9 @@ class Defaults(BaseModel):
         default="default",
         description="Default credential alias; maps to GITLAB_TOKEN",
     )
+    plugins: list[str] = Field(
+        default_factory=list, description="Default Copilot CLI plugins for all bindings"
+    )
 
 
 class Binding(BaseModel):
@@ -50,6 +53,10 @@ class Binding(BaseModel):
     credential_ref: str | None = Field(
         default=None,
         description="Override the default credential alias for this binding",
+    )
+    plugins: list[str] | None = Field(
+        default=None,
+        description="Repo-specific Copilot CLI plugins (overrides defaults when set)",
     )
 
     @model_validator(mode="after")
@@ -118,6 +125,7 @@ class MappingFile(BaseModel):
                 repo=b.repo,
                 target_branch=b.target_branch or self.defaults.target_branch,
                 credential_ref=b.credential_ref or self.defaults.credential_ref,
+                plugins=b.plugins if b.plugins is not None else self.defaults.plugins,
             )
         return RenderedMap(mappings=rendered_bindings)
 
@@ -130,6 +138,9 @@ class RenderedBinding(BaseModel):
     repo: str = Field(description="GitLab repo path")
     target_branch: str = Field(description="Resolved MR target branch")
     credential_ref: str = Field(description="Resolved credential alias")
+    plugins: list[str] = Field(
+        default_factory=list, description="Effective Copilot CLI plugins for this binding"
+    )
 
 
 class RenderedMap(BaseModel):
