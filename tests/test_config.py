@@ -204,3 +204,66 @@ class TestPrintConfigErrors:
         assert "No LLM authentication configured" in err
         assert "GITHUB_TOKEN" in err
         assert "COPILOT_PROVIDER_TYPE" in err
+
+
+# -- Plugin config tests --
+
+
+def test_plugin_defaults_empty() -> None:
+    """Plugin fields default to empty lists."""
+    settings = make_settings()
+    assert settings.copilot_plugins == []
+    assert settings.copilot_plugin_marketplaces == []
+
+
+def test_plugins_from_comma_separated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """COPILOT_PLUGINS accepts comma-separated values."""
+    monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
+    monkeypatch.setenv("GITLAB_TOKEN", GITLAB_TOKEN)
+    monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    monkeypatch.setenv("GITHUB_TOKEN", GITHUB_TOKEN)
+    monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", AZURITE_CONNECTION_STRING)
+    monkeypatch.setenv("COPILOT_PLUGINS", "plugin-a, plugin-b")
+    settings = Settings()
+    assert settings.copilot_plugins == ["plugin-a", "plugin-b"]
+
+
+def test_plugins_from_json_array(monkeypatch: pytest.MonkeyPatch) -> None:
+    """COPILOT_PLUGINS accepts JSON array format."""
+    monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
+    monkeypatch.setenv("GITLAB_TOKEN", GITLAB_TOKEN)
+    monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    monkeypatch.setenv("GITHUB_TOKEN", GITHUB_TOKEN)
+    monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", AZURITE_CONNECTION_STRING)
+    monkeypatch.setenv("COPILOT_PLUGINS", '["plugin-a","plugin-b"]')
+    settings = Settings()
+    assert settings.copilot_plugins == ["plugin-a", "plugin-b"]
+
+
+def test_empty_plugins_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Empty COPILOT_PLUGINS env var yields empty list."""
+    monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
+    monkeypatch.setenv("GITLAB_TOKEN", GITLAB_TOKEN)
+    monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    monkeypatch.setenv("GITHUB_TOKEN", GITHUB_TOKEN)
+    monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", AZURITE_CONNECTION_STRING)
+    monkeypatch.setenv("COPILOT_PLUGINS", "")
+    settings = Settings()
+    assert settings.copilot_plugins == []
+
+
+def test_marketplaces_from_comma_separated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """COPILOT_PLUGIN_MARKETPLACES accepts comma-separated values."""
+    monkeypatch.setenv("GITLAB_URL", GITLAB_URL)
+    monkeypatch.setenv("GITLAB_TOKEN", GITLAB_TOKEN)
+    monkeypatch.setenv("GITLAB_WEBHOOK_SECRET", WEBHOOK_SECRET)
+    monkeypatch.setenv("GITHUB_TOKEN", GITHUB_TOKEN)
+    monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", AZURITE_CONNECTION_STRING)
+    monkeypatch.setenv(
+        "COPILOT_PLUGIN_MARKETPLACES", "https://mp1.example.com,https://mp2.example.com"
+    )
+    settings = Settings()
+    assert settings.copilot_plugin_marketplaces == [
+        "https://mp1.example.com",
+        "https://mp2.example.com",
+    ]

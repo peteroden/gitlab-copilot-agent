@@ -115,6 +115,24 @@ At least one of these must be set:
 
 ---
 
+## Copilot CLI Plugins
+
+### `COPILOT_PLUGINS`
+- **Type**: `str | list[str]`
+- **Required**: ❌ No
+- **Default**: `[]`
+- **Description**: Copilot CLI plugins to install at runtime. Accepts comma-separated string (`"plugin-a, plugin-b"`) or JSON array (`'["plugin-a", "plugin-b"]'`). Each spec can be a marketplace plugin name (`name@marketplace`), GitHub repo (`owner/repo`), Git URL, or local path (`./my-plugin`).
+- **Example**: `"my-jira-plugin@awesome-copilot, ./local-plugin"`
+
+### `COPILOT_PLUGIN_MARKETPLACES`
+- **Type**: `str | list[str]`
+- **Required**: ❌ No
+- **Default**: `[]`
+- **Description**: Custom plugin marketplace URLs or paths to register before plugin installation. Accepts comma-separated string or JSON array. Each entry can be a GitHub repo (`owner/repo`), Git URL, or local filesystem path.
+- **Example**: `"my-org/our-plugins, /opt/local-marketplace"`
+
+---
+
 ## Dispatch Backend
 
 All remote executors (`kubernetes`, `container_apps`) use Azure Storage Queue + Blob for dispatch (Claim Check pattern). KEDA ScaledJob watches the queue and triggers Job pods automatically.
@@ -594,6 +612,8 @@ Helm `values.yaml` maps to env vars via `configmap.yaml` and `secret.yaml`:
 | `controller.copilotProviderType` | `COPILOT_PROVIDER_TYPE` | ❌ |
 | `controller.copilotProviderBaseUrl` | `COPILOT_PROVIDER_BASE_URL` | ❌ |
 | `controller.copilotProviderApiKey` | `COPILOT_PROVIDER_API_KEY` | ✅ |
+| `controller.copilotPlugins` | `COPILOT_PLUGINS` | ❌ |
+| `controller.copilotPluginMarketplaces` | `COPILOT_PLUGIN_MARKETPLACES` | ❌ |
 | `controller.copilotModel` | `COPILOT_MODEL` | ❌ |
 | `controller.taskExecutor` | `TASK_EXECUTOR` | ❌ |
 | `controller.dispatchBackend` | `DISPATCH_BACKEND` | ❌ |

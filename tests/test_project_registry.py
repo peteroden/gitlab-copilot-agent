@@ -76,7 +76,8 @@ class TestLookup:
 
     def test_repr_hides_token(self) -> None:
         r = repr(_proj())
-        assert DEFAULT_TOKEN not in r and "***" in r
+        assert DEFAULT_TOKEN not in r
+        assert "token" not in r
 
 
 def _binding(repo: str = REPO_A, branch: str = "main", cred: str = "default") -> RenderedBinding:

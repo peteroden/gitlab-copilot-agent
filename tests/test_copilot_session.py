@@ -12,6 +12,9 @@ from gitlab_copilot_agent.copilot_session import build_sdk_env, run_copilot_sess
 from gitlab_copilot_agent.repo_config import AgentConfig, RepoConfig
 from tests.conftest import make_settings
 
+PLUGIN_A = "copilot-plugin-a"
+PLUGIN_B = "copilot-plugin-b"
+
 
 def _make_event(event_type: str, content: str = "") -> SimpleNamespace:
     """Create a mock SDK event."""
@@ -141,3 +144,113 @@ def test_build_sdk_env_includes_only_allowed_vars(monkeypatch: pytest.MonkeyPatc
     assert "GITLAB_TOKEN" not in env
     assert "GITLAB_WEBHOOK_SECRET" not in env
     assert "JIRA_API_TOKEN" not in env
+
+
+def test_merge_plugins_deduplicates() -> None:
+    from gitlab_copilot_agent.copilot_session import _merge_plugins
+
+    result = _merge_plugins(["a", "b"], ["b", "c"])
+    assert result == ["a", "b", "c"]
+
+
+def test_merge_plugins_empty_inputs() -> None:
+    from gitlab_copilot_agent.copilot_session import _merge_plugins
+
+    assert _merge_plugins([], None) == []
+    assert _merge_plugins([], []) == []
+
+
+def test_merge_plugins_service_only() -> None:
+    from gitlab_copilot_agent.copilot_session import _merge_plugins
+
+    assert _merge_plugins(["a", "b"], None) == ["a", "b"]
+
+
+def test_merge_plugins_repo_only() -> None:
+    from gitlab_copilot_agent.copilot_session import _merge_plugins
+
+    assert _merge_plugins([], ["x", "y"]) == ["x", "y"]
+
+
+@patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
+@patch("gitlab_copilot_agent.copilot_session.CopilotClient")
+async def test_session_creates_isolated_home(
+    mock_client_class: MagicMock,
+    mock_discover: MagicMock,
+    _run: Any,
+) -> None:
+    """Each session gets a fresh temp HOME that is cleaned up."""
+    mock_discover.return_value = RepoConfig()
+    _setup_mock_session(
+        mock_client_class,
+        [_make_event("assistant.message", "done"), _make_event("session.idle")],
+    )
+
+    await _run()
+
+    # Verify the SDK env got a custom HOME (not the process HOME)
+    client_opts = mock_client_class.call_args[0][0]
+    sdk_home = client_opts["env"]["HOME"]
+    assert "copilot-session-" in sdk_home
+    # Temp dir should be cleaned up after session
+    assert not Path(sdk_home).exists()
+
+
+@patch("gitlab_copilot_agent.plugin_manager.setup_plugins", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
+@patch("gitlab_copilot_agent.copilot_session.CopilotClient")
+async def test_session_installs_plugins(
+    mock_client_class: MagicMock,
+    mock_discover: MagicMock,
+    mock_setup: AsyncMock,
+    tmp_path: Path,
+) -> None:
+    """Plugins are installed into the session HOME."""
+    mock_discover.return_value = RepoConfig()
+    _setup_mock_session(
+        mock_client_class,
+        [_make_event("assistant.message", "done"), _make_event("session.idle")],
+    )
+
+    settings = make_settings(
+        copilot_plugins=["svc-plugin"],
+        copilot_plugin_marketplaces=["https://mp.example.com"],
+    )
+    await run_copilot_session(
+        settings=settings,
+        repo_path=str(tmp_path),
+        system_prompt="System",
+        user_prompt="User",
+        plugins=["repo-plugin"],
+    )
+
+    mock_setup.assert_awaited_once()
+    call_args = mock_setup.call_args
+    home_dir = call_args[0][0]
+    plugins = call_args[0][1]
+    marketplaces = call_args[0][2]
+    assert "copilot-session-" in home_dir
+    assert "svc-plugin" in plugins
+    assert "repo-plugin" in plugins
+    assert marketplaces == ["https://mp.example.com"]
+
+
+@patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
+@patch("gitlab_copilot_agent.copilot_session.CopilotClient")
+async def test_session_no_plugins_skips_setup(
+    mock_client_class: MagicMock,
+    mock_discover: MagicMock,
+    _run: Any,
+) -> None:
+    """No plugins configured means setup_plugins is not called."""
+    mock_discover.return_value = RepoConfig()
+    _setup_mock_session(
+        mock_client_class,
+        [_make_event("assistant.message", "done"), _make_event("session.idle")],
+    )
+
+    with patch(
+        "gitlab_copilot_agent.plugin_manager.setup_plugins", new_callable=AsyncMock
+    ) as mock_setup:
+        await _run()
+        mock_setup.assert_not_awaited()

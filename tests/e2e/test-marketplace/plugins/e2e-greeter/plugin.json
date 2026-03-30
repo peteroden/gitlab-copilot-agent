@@ -1,0 +1,10 @@
+{
+  "name": "e2e-greeter",
+  "description": "Minimal test plugin for E2E verification",
+  "version": "1.0.0",
+  "author": {
+    "name": "E2E Tests",
+    "email": "e2e@test.local"
+  },
+  "skills": ["skills/"]
+}

@@ -93,6 +93,7 @@ class TestDispatchPayload:
             "repo_blob_key",
             "system_prompt",
             "user_prompt",
+            "plugins",
         }
         assert keys == expected_keys
 

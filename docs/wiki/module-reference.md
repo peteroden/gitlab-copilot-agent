@@ -672,6 +672,21 @@ All use `extra="ignore"` config.
 
 ---
 
+### `plugin_manager.py`
+**Purpose**: Runtime plugin installation into isolated per-session HOME directories.
+
+**Key Functions**:
+- `setup_plugins(home_dir, plugins, marketplaces)`: Install marketplaces and plugins into an isolated HOME
+- `add_marketplace(home_dir, marketplace_url)`: Register a custom plugin marketplace
+- `install_plugin(home_dir, plugin_spec)`: Install a single Copilot CLI plugin
+- `_run_cli(args, home_dir, timeout)`: Execute a copilot CLI command with timeout and kill-on-timeout
+- `_sanitize_url(url)`: Strip credentials and query params from URLs for safe logging
+
+**Internal Imports**: `process_sandbox.get_real_cli_path`
+**Depended On By**: `copilot_session.py`
+
+---
+
 ## Summary Table
 
 | Module | Layer | LOC (approx) | Key Responsibility |
@@ -705,5 +720,6 @@ All use `extra="ignore"` config.
 | `telemetry.py` | Telemetry | 130 | OTEL setup |
 | `metrics.py` | Telemetry | 52 | Metrics instruments |
 | `process_sandbox.py` | Utils | 20 | CLI path resolution |
+| `plugin_manager.py` | Utils | 88 | Plugin installation |
 
-**Total: 30 modules, ~3,430 lines of code**
+**Total: 31 modules, ~3,518 lines of code**

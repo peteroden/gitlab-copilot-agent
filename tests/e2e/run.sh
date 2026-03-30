@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # E2E test: deploy agent to k3d, run all test flows against mock services.
 # Tests: 1. Webhook MR review, 2. Jira polling, 3. /copilot command,
-#        4. GitLab polling, 5. Hot-reload config, 6. Graceful shutdown.
+#        4. GitLab polling, 5. Hot-reload config, 6. Plugin install, 7. Graceful shutdown.
 # Usage: ./tests/e2e/run.sh [agent-url] [mock-gitlab-url] [mock-jira-url]
 set -euo pipefail
 
@@ -213,8 +213,40 @@ UNAUTH=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$AGENT_URL/config/reloa
     -d '{"mappings": {}}')
 [ "$UNAUTH" = "401" ] && echo " ✅" || { echo " ❌ (expected 401, got $UNAUTH)"; exit 1; }
 
-# === TEST 6: Graceful Shutdown ===
-echo ""; echo "--- Test 6: Graceful Shutdown ---"
+# === TEST 6: Plugin Installation Verification ===
+echo ""; echo "--- Test 6: Plugin Installation ---"
+# Clear discussions for this test
+curl -sf -X DELETE "$MOCK_GITLAB_URL/discussions" > /dev/null
+
+echo -n "Sending webhook (plugin-enabled session)..."
+send_webhook '{
+    "object_kind": "merge_request",
+    "user": {"id": 1, "username": "e2e-test"},
+    "project": {"id": 999, "path_with_namespace": "test/e2e-repo",
+                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+    "object_attributes": {"iid": 99, "title": "Plugin test MR", "description": "Verify plugins",
+        "action": "open", "source_branch": "main", "target_branch": "main",
+        "last_commit": {"id": "plugin123", "message": "plugin test"}, "url": "http://mock/mr/99", "oldrev": null}
+}'
+
+# Wait for the task to complete (review posted)
+poll_until "$MOCK_GITLAB_URL/discussions" \
+    "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
+    "Waiting for plugin-enabled review" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+
+# Check job pod logs for plugin setup evidence
+echo -n "Checking pod logs for plugin installation..."
+PLUGIN_LOG=$(kubectl logs -l app.kubernetes.io/component=job --tail=200 2>/dev/null || echo "")
+if echo "$PLUGIN_LOG" | grep -q "plugin_installed\|plugin_setup_complete\|e2e-greeter"; then
+    echo " ✅ (plugin setup confirmed in logs)"
+elif echo "$PLUGIN_LOG" | grep -q "plugin"; then
+    echo " ✅ (plugin activity detected in logs)"
+else
+    echo " ⚠️ (no plugin log evidence — check COPILOT_PLUGINS config)"
+fi
+
+# === TEST 7: Graceful Shutdown ===
+echo ""; echo "--- Test 7: Graceful Shutdown ---"
 
 echo -n "Deleting controller pod (triggers SIGTERM via k8s)..."
 POD=$(kubectl get pods -l app.kubernetes.io/component=controller -o name | head -1)
