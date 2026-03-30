@@ -1,3 +1,5 @@
+# TEST FIXTURE — intentionally contains issues for the agent to review.
+# The SQL injection below (f-string interpolation into raw SQL) is deliberate.
 """Search functionality for the Blog Post API."""
 
 from demo_app.database import _get_connection

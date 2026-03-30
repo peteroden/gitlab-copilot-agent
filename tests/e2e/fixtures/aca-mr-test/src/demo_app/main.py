@@ -1,3 +1,4 @@
+# TEST FIXTURE — intentionally contains issues (missing types, no auth) for the agent to review.
 """Blog Post API — main application."""
 
 from fastapi import FastAPI, HTTPException
