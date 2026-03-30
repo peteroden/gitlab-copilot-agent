@@ -11,11 +11,11 @@ from typing import Any, cast
 import structlog
 from copilot import CopilotClient
 from copilot.types import (
-    CopilotClientOptions,
     CustomAgentConfig,
     PermissionHandler,
     ProviderConfig,
-    SessionConfig,
+    SubprocessConfig,
+    SystemMessageAppendConfig,
 )
 
 from gitlab_copilot_agent.config import Settings, TaskRunnerSettings
@@ -110,14 +110,13 @@ async def run_copilot_session(
                 sdk_env = build_sdk_env(settings.github_token)
                 sdk_env["HOME"] = session_home
 
-                client_opts: CopilotClientOptions = {
-                    "cli_path": cli_path,
-                    "env": sdk_env,
-                }
-                if settings.github_token:
-                    client_opts["github_token"] = settings.github_token
-
-                client = CopilotClient(client_opts)
+                client = CopilotClient(
+                    SubprocessConfig(
+                        cli_path=cli_path,
+                        env=sdk_env,
+                        github_token=settings.github_token or None,
+                    ),
+                )
                 await client.start()
 
                 try:
@@ -129,16 +128,19 @@ async def run_copilot_session(
                             f"\n\n## Project-Specific Instructions\n\n{repo_config.instructions}\n"
                         )
 
-                    session_opts: SessionConfig = {
-                        "system_message": {"content": system_content},
+                    system_msg: SystemMessageAppendConfig = {"content": system_content}
+
+                    session_kwargs: dict[str, object] = {
+                        "system_message": system_msg,
                         "working_directory": repo_path,
+                        "on_permission_request": PermissionHandler.approve_all,
                     }
 
                     if repo_config.skill_directories:
-                        session_opts["skill_directories"] = repo_config.skill_directories
+                        session_kwargs["skill_directories"] = repo_config.skill_directories
                         await log.ainfo("skills_loaded", directories=repo_config.skill_directories)
                     if repo_config.custom_agents:
-                        session_opts["custom_agents"] = [
+                        session_kwargs["custom_agents"] = [
                             cast(CustomAgentConfig, a.model_dump(exclude_none=True))
                             for a in repo_config.custom_agents
                         ]
@@ -159,11 +161,12 @@ async def run_copilot_session(
                             provider["api_key"] = settings.copilot_provider_api_key
                         if settings.copilot_provider_type == "azure":
                             provider["azure"] = {"api_version": "2024-10-21"}
-                        session_opts["provider"] = provider
-                        session_opts["model"] = settings.copilot_model
+                        session_kwargs["provider"] = provider
+                        session_kwargs["model"] = settings.copilot_model
 
-                    session_opts["on_permission_request"] = PermissionHandler.approve_all
-                    session = await client.create_session(session_opts)
+                    session = await client.create_session(
+                        **session_kwargs,  # type: ignore[arg-type]
+                    )
                     try:
                         done = asyncio.Event()
                         messages: list[str] = []
@@ -180,7 +183,7 @@ async def run_copilot_session(
                                     pass
 
                         session.on(on_event)
-                        await session.send({"prompt": user_prompt})
+                        await session.send(user_prompt)
                         await asyncio.wait_for(done.wait(), timeout=timeout)
 
                         result = messages[-1] if messages else ""
@@ -193,7 +196,7 @@ async def run_copilot_session(
                                 )
                                 done.clear()
                                 messages.clear()
-                                await session.send({"prompt": follow_up})
+                                await session.send(follow_up)
                                 await asyncio.wait_for(done.wait(), timeout=timeout)
                                 result = messages[-1] if messages else result
                     finally:

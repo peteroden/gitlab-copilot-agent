@@ -42,7 +42,7 @@ def _setup_mock_session(
 
     mock_session.on.side_effect = capture_on
 
-    async def fake_send(msg: object) -> None:
+    async def fake_send(prompt: str, **_kwargs: object) -> None:
         assert captured["handler"] is not None
         for event in events:
             captured["handler"](event)
@@ -124,10 +124,10 @@ async def test_passes_repo_config_to_session(
 
     await _run()
 
-    session_opts = mock_client.create_session.call_args[0][0]
-    assert session_opts["skill_directories"] == ["/tmp/skills"]
-    assert len(session_opts["custom_agents"]) == 1
-    assert "Use strict typing." in session_opts["system_message"]["content"]
+    session_kwargs = mock_client.create_session.call_args.kwargs
+    assert session_kwargs["skill_directories"] == ["/tmp/skills"]
+    assert len(session_kwargs["custom_agents"]) == 1
+    assert "Use strict typing." in session_kwargs["system_message"]["content"]
 
 
 def test_build_sdk_env_includes_only_allowed_vars(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -189,8 +189,8 @@ async def test_session_creates_isolated_home(
     await _run()
 
     # Verify the SDK env got a custom HOME (not the process HOME)
-    client_opts = mock_client_class.call_args[0][0]
-    sdk_home = client_opts["env"]["HOME"]
+    subprocess_config = mock_client_class.call_args[0][0]
+    sdk_home = subprocess_config.env["HOME"]
     assert "copilot-session-" in sdk_home
     # Temp dir should be cleaned up after session
     assert not Path(sdk_home).exists()

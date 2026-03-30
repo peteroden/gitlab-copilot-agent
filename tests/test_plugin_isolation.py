@@ -51,7 +51,7 @@ def _setup_mock_client(mock_client_class: MagicMock) -> None:
 
     mock_session.on.side_effect = capture_on
 
-    async def fake_send(msg: object) -> None:
+    async def fake_send(prompt: str, **_kwargs: object) -> None:
         assert captured["handler"] is not None
         captured["handler"](_make_event("assistant.message", "done"))
         captured["handler"](_make_event("session.idle"))
