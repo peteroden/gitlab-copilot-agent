@@ -1,0 +1,82 @@
+name: CD Dev
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: cd-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: dev
+      image_tag: pr-${{ github.event.pull_request.number || github.run_number }}-${{ github.sha }}
+    secrets: inherit
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+
+  smoke-test:
+    needs: deploy
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Health check
+        run: |
+          FQDN="${{ needs.deploy.outputs.controller_fqdn }}"
+          for i in $(seq 1 30); do
+            if curl -sf "https://${FQDN}/health"; then
+              echo "✓ Controller healthy"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Controller health check failed after 5 minutes"
+          exit 1
+
+  integration-test:
+    needs: [deploy, smoke-test]
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - name: Run ACA integration tests
+        env:
+          CONTROLLER_FQDN: ${{ needs.deploy.outputs.controller_fqdn }}
+          GITLAB_URL: https://gitlab.com
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_PROJECT: peteroden/e2e-aca-test
+          JIRA_URL: ${{ vars.JIRA_URL }}
+          JIRA_EMAIL: ${{ vars.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_ISSUE_KEY: E2EACA-1
+        run: uv run python tests/e2e/aca_integration.py
+
+      - name: Azure login (for log collection)
+        if: failure()
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Collect ACA logs
+        if: failure()
+        run: |
+          mkdir -p /tmp/aca-logs
+          az containerapp logs show -n ca-controller -g rg-copilot-dev --type console > /tmp/aca-logs/controller.log 2>&1 || true
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aca-e2e-logs
+          path: /tmp/aca-logs/
