@@ -7,8 +7,9 @@ gitlab_projects       = "peteroden/copilot-demo,peteroden/e2e-storage-test,peter
 jira_url              = "https://peteroden.atlassian.net"
 jira_email            = "__JIRA_EMAIL__"
 jira_project_map      = "{\"mappings\":{\"DEMO\":{\"repo\":\"peteroden/copilot-demo\",\"target_branch\":\"main\",\"credential_ref\":\"default\"},\"E2ETEST\":{\"repo\":\"peteroden/e2e-storage-test\",\"target_branch\":\"main\",\"credential_ref\":\"default\"},\"E2EACA\":{\"repo\":\"peteroden/e2e-aca-test\",\"target_branch\":\"main\",\"credential_ref\":\"default\"}}}"
-jira_trigger_status   = "To Do"    # use default Jira statuses (no "AI Ready" custom status needed for E2E)
-jira_in_review_status = "Done"     # "In Review" doesn't exist in default Jira workflows; "Done" closes the loop
+# Use default Jira statuses (no custom "AI Ready" workflow needed for E2E)
+jira_trigger_status   = "To Do"
+jira_in_review_status = "Done"
 kv_bootstrap          = true
 # kv_bootstrap_secrets: omitted here — pipeline injects via TF_VAR_kv_bootstrap_secrets
 # to avoid var-file precedence overriding the env var.

@@ -246,15 +246,48 @@ terraform apply -var-file="dev.tfvars"
 
 ### CI/CD
 
-Deploy via GitHub Actions workflow dispatch:
+Deploy via GitHub Actions. Three workflows handle ACA deployments:
 
+| Workflow | Trigger | Target | Purpose |
+|----------|---------|--------|---------|
+| `deploy.yml` | `workflow_dispatch` | any | Manual deploy to dev or staging |
+| `cd-dev.yml` | Pull request | dev | Auto-deploy PRs to shared dev; runs smoke + integration tests |
+| `cd-staging.yml` | Push to `main` | staging | Auto-deploy merged code to staging |
+
+**Manual deploy** (workflow_dispatch):
 ```bash
 gh workflow run deploy.yml \
   -f environment=dev \
   -f image_tag=$(git rev-parse --short HEAD)
 ```
 
-Requires GitHub environment secrets: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `ACR_NAME`, `TF_STATE_RESOURCE_GROUP`, `TF_STATE_STORAGE_ACCOUNT`.
+**CD Dev** runs on every PR (serialized — no cancellation):
+1. Builds and pushes image to GHCR tagged `pr-<number>-<sha>`
+2. Runs `terraform apply` with `dev.tfvars`
+3. Smoke-tests `/health` on the controller FQDN
+4. Runs `tests/e2e/aca_integration.py` against real GitLab/Jira/Copilot
+
+**CD Staging** runs on every push to `main`:
+1. Builds image tagged `main-<sha>`
+2. Deploys to `rg-copilot-staging`
+3. Smoke-tests the staging controller
+
+**Required GitHub environments** (`dev` and `staging`), each with:
+
+| Variable | Description |
+|----------|-------------|
+| `AZURE_CLIENT_ID` | Service principal for OIDC |
+| `AZURE_TENANT_ID` | Azure tenant |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription |
+| `TF_STATE_STORAGE_ACCOUNT` | Storage account for Terraform state |
+| `TF_STATE_RESOURCE_GROUP` | Resource group for Terraform state |
+| `JIRA_EMAIL` | Jira user for integration tests (`dev` only) |
+
+Secrets: `GITLAB_TOKEN`, `GH_PAT_FOR_COPILOT`, `JIRA_API_TOKEN`
+
+OIDC federation subjects required:
+- `repo:peteroden/gitlab-copilot-agent:environment:dev`
+- `repo:peteroden/gitlab-copilot-agent:environment:staging`
 
 ---
 

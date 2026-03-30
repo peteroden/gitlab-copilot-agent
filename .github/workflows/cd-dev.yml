@@ -29,6 +29,10 @@ jobs:
       - name: Health check
         run: |
           FQDN="${{ needs.deploy.outputs.controller_fqdn }}"
+          if [[ -z "$FQDN" ]]; then
+            echo "::warning::controller_fqdn is empty — dev environment may not be provisioned yet"
+            exit 0
+          fi
           for i in $(seq 1 30); do
             if curl -sf "https://${FQDN}/health"; then
               echo "✓ Controller healthy"

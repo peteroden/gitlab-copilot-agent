@@ -6,10 +6,11 @@ from __future__ import annotations
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
-import httpx
 import gitlab
+import httpx
 import structlog
 
 log = structlog.get_logger()
@@ -25,6 +26,7 @@ JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
 JIRA_ISSUE_KEY = os.environ["JIRA_ISSUE_KEY"]
 
 BRANCH_NAME = "feature/add-search-endpoint"
+_FIXTURES = Path(__file__).parent / "fixtures" / "aca-mr-test"
 
 
 # ---------------------------------------------------------------------------
@@ -87,37 +89,8 @@ def reset_gitlab_state(project: Any) -> int:
     tree = project.repository_tree(ref=BRANCH_NAME, recursive=True, get_all=True)
     existing = {item["path"] for item in tree}
 
-    search_py = '''\
-"""Search functionality for the Blog Post API."""
-
-from demo_app.database import _get_connection
-
-
-def search_posts(query):
-    conn = _get_connection()
-    results = conn.execute(
-        f"SELECT * FROM posts WHERE title LIKE \'%{query}%\'"
-        f" OR content LIKE \'%{query}%\'"
-    ).fetchall()
-    conn.close()
-    return [dict(row) for row in results]
-'''
-
-    main_py = '''\
-"""Blog Post API — main application."""
-
-from fastapi import FastAPI, HTTPException
-
-from demo_app import database
-from demo_app.search import search_posts
-
-app = FastAPI(title="Blog Post API")
-
-
-@app.get("/search")
-def search(q: str):
-    return search_posts(q)
-'''
+    search_py = (_FIXTURES / "src/demo_app/search.py").read_text()
+    main_py = (_FIXTURES / "src/demo_app/main.py").read_text()
 
     project.commits.create(
         {
