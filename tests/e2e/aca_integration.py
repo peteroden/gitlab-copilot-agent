@@ -178,7 +178,7 @@ def search_by_date(start, end):
         },
     ]
     if "src/demo_app/main.py" in existing:
-        actions[0]["action"] = "update"  # type: ignore[index]
+        actions[0]["action"] = "update"  # update if search.py already exists
 
     client.post(
         f"{GITLAB_URL}/api/v4/projects/{project_id}/repository/commits",
