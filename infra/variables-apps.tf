@@ -146,6 +146,29 @@ variable "jira_project_map" {
   default     = ""
 }
 
+# --- Deployment Environment ---
+
+variable "deployment_env" {
+  description = "Deployment environment label (dev, staging)"
+  type        = string
+  validation {
+    condition     = contains(["dev", "staging"], var.deployment_env)
+    error_message = "deployment_env must be 'dev' or 'staging'"
+  }
+}
+
+variable "jira_trigger_status" {
+  description = "Jira status that triggers the agent to pick up an issue"
+  type        = string
+  default     = "AI Ready"
+}
+
+variable "jira_in_review_status" {
+  description = "Jira status set when agent creates a merge request"
+  type        = string
+  default     = "In Review"
+}
+
 # --- Key Vault Bootstrap ---
 
 variable "kv_bootstrap" {
