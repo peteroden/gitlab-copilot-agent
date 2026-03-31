@@ -145,8 +145,7 @@ def reset_jira_state() -> None:
         if to_do_id is None:
             available = [t["to"]["name"] for t in transitions]
             raise RuntimeError(
-                f"No 'To Do' transition found for {JIRA_ISSUE_KEY}. "
-                f"Available: {available}"
+                f"No 'To Do' transition found for {JIRA_ISSUE_KEY}. Available: {available}"
             )
         resp = client.post(
             f"/rest/api/3/issue/{JIRA_ISSUE_KEY}/transitions",
@@ -207,9 +206,7 @@ def test_jira_coding_flow(project: Any) -> None:
     _poll("Jira issue reaches Done", _reached_done, timeout_s=480)
 
     # Verify a new MR was created on GitLab
-    mrs = project.mergerequests.list(
-        state="opened", source_branch=BRANCH_NAME, get_all=True
-    )
+    mrs = project.mergerequests.list(state="opened", source_branch=BRANCH_NAME, get_all=True)
     assert mrs, (
         f"Expected an open MR on branch '{BRANCH_NAME}' in project '{GITLAB_PROJECT}' "
         f"after Jira issue '{JIRA_ISSUE_KEY}' reached Done, but found none"
