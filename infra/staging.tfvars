@@ -7,7 +7,7 @@ gitlab_projects       = "peteroden/gitlab-copilot-staging"
 jira_url              = "https://peteroden.atlassian.net"
 jira_email            = "__JIRA_EMAIL__"
 jira_project_map      = "{\"mappings\":{\"STAGING\":{\"repo\":\"peteroden/gitlab-copilot-staging\",\"target_branch\":\"main\",\"credential_ref\":\"default\"}}}"
-jira_trigger_status   = "To Do"
+jira_trigger_status   = "Selected for Development"
 jira_in_review_status = "Done"
 kv_bootstrap          = true
 # kv_bootstrap_secrets: omitted here — pipeline injects via TF_VAR_kv_bootstrap_secrets
