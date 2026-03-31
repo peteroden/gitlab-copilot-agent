@@ -43,6 +43,8 @@ _TEST_MAPPING = ResolvedProject(
     target_branch="main",
     credential_ref="default",
     token="test-token",
+    in_progress_status="In Progress",
+    in_review_status="In Review",
 )
 
 
@@ -121,16 +123,25 @@ async def test_custom_in_review_status_used(
     mock_coding: AsyncMock,
     tmp_path: Path,
 ) -> None:
-    """Custom JIRA_IN_REVIEW_STATUS is used for the transition."""
+    """Per-project in_review_status on ResolvedProject is used for the transition."""
     mock_clone.return_value = tmp_path
     mock_branch.return_value = "agent/proj-42"
     mock_coding.return_value = CodingResult(summary="Changes made")
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
     mock_gitlab.create_merge_request.return_value = 1
 
-    settings = make_settings(**_JIRA_SETTINGS, jira_in_review_status="QA Review")
-    orch = CodingOrchestrator(settings, mock_gitlab, mock_jira, AsyncMock())
-    await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
+    custom_mapping = ResolvedProject(
+        jira_project="PROJ",
+        repo="group/project",
+        gitlab_project_id=99,
+        clone_url=EXAMPLE_CLONE_URL,
+        target_branch="main",
+        credential_ref="default",
+        token="test-token",
+        in_review_status="QA Review",
+    )
+    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+    await orch.handle(_TEST_ISSUE, custom_mapping)
 
     mock_jira.transition_issue.assert_any_await("PROJ-42", "QA Review")
 

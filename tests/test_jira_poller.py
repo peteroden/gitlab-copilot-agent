@@ -242,3 +242,95 @@ async def test_poll_once_allowlist_enforcement(
         mock_handler.handle.assert_called_once()
     else:
         mock_handler.handle.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Grouped JQL tests
+# ---------------------------------------------------------------------------
+
+OPS_PROJECT_ID = 999
+OPS_CLONE_URL = "https://gitlab.example.com/group/platform-tools.git"
+CUSTOM_TRIGGER_STATUS = "Ready for Dev"
+
+
+def _two_project_registry(
+    proj_trigger: str = "AI Ready",
+    ops_trigger: str = CUSTOM_TRIGGER_STATUS,
+) -> ProjectRegistry:
+    return ProjectRegistry(
+        [
+            ResolvedProject(
+                jira_project="PROJ",
+                repo="group/project",
+                gitlab_project_id=PROJECT_ID,
+                clone_url=EXAMPLE_CLONE_URL,
+                target_branch="main",
+                credential_ref="default",
+                token=GITLAB_TOKEN,
+                trigger_status=proj_trigger,
+            ),
+            ResolvedProject(
+                jira_project="OPS",
+                repo="group/platform-tools",
+                gitlab_project_id=OPS_PROJECT_ID,
+                clone_url=OPS_CLONE_URL,
+                target_branch="develop",
+                credential_ref="default",
+                token=GITLAB_TOKEN,
+                trigger_status=ops_trigger,
+            ),
+        ]
+    )
+
+
+class TestGroupedJQL:
+    @pytest.mark.asyncio
+    async def test_grouped_jql_two_statuses(
+        self, mock_jira_client: AsyncMock, mock_handler: AsyncMock
+    ) -> None:
+        """Two projects with different trigger statuses produce two JQL queries."""
+        mock_jira_client.search_issues.return_value = []
+        registry = _two_project_registry()
+        settings = make_jira_settings()
+        poller = JiraPoller(mock_jira_client, settings, registry, mock_handler)
+
+        await poller._poll_once()
+
+        assert mock_jira_client.search_issues.call_count == 2
+        all_jqls = [call[0][0] for call in mock_jira_client.search_issues.call_args_list]
+        statuses_queried = {jql.split('"')[1] for jql in all_jqls}
+        assert statuses_queried == {"AI Ready", CUSTOM_TRIGGER_STATUS}
+
+    @pytest.mark.asyncio
+    async def test_grouped_jql_same_status(
+        self, mock_jira_client: AsyncMock, mock_handler: AsyncMock
+    ) -> None:
+        """Two projects sharing the same trigger status produce a single JQL query."""
+        mock_jira_client.search_issues.return_value = []
+        registry = _two_project_registry(proj_trigger="AI Ready", ops_trigger="AI Ready")
+        settings = make_jira_settings()
+        poller = JiraPoller(mock_jira_client, settings, registry, mock_handler)
+
+        await poller._poll_once()
+
+        assert mock_jira_client.search_issues.call_count == 1
+        jql = mock_jira_client.search_issues.call_args[0][0]
+        assert 'status = "AI Ready"' in jql
+        assert "PROJ" in jql
+        assert "OPS" in jql
+
+    @pytest.mark.asyncio
+    async def test_grouped_jql_single_project_default_status(
+        self, mock_jira_client: AsyncMock, project_map: ProjectRegistry, mock_handler: AsyncMock
+    ) -> None:
+        """Single project with default status produces JQL with default status."""
+        mock_jira_client.search_issues.return_value = []
+        settings = make_jira_settings()
+        poller = JiraPoller(mock_jira_client, settings, project_map, mock_handler)
+
+        await poller._poll_once()
+
+        assert mock_jira_client.search_issues.call_count == 1
+        jql = mock_jira_client.search_issues.call_args[0][0]
+        assert 'status = "AI Ready"' in jql
+        assert 'project IN ("PROJ")' in jql
