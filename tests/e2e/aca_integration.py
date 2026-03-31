@@ -220,6 +220,10 @@ def test_jira_coding_flow(project: Any) -> None:
 
 
 def main() -> None:
+    if not CONTROLLER_FQDN:
+        log.warning("CONTROLLER_FQDN is empty — dev environment not provisioned, skipping")
+        return
+
     log.info(
         "starting ACA integration tests",
         controller=CONTROLLER_FQDN,
