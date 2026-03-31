@@ -14,6 +14,18 @@ on:
         description: "Container image tag to deploy"
         required: true
         type: string
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+      image_tag:
+        required: true
+        type: string
+    outputs:
+      controller_fqdn:
+        description: "FQDN of the deployed controller Container App"
+        value: ${{ jobs.deploy.outputs.controller_fqdn }}
 
 permissions:
   id-token: write
@@ -27,6 +39,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    outputs:
+      controller_fqdn: ${{ steps.tf_output.outputs.fqdn }}
     env:
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
@@ -134,6 +148,11 @@ jobs:
             -var-file="${TFVARS_FILE}" \
             -var="image_tag=${TF_VAR_image_tag}" \
             -var="image_digest=${TF_VAR_image_digest}"
+
+      - name: Get controller FQDN
+        id: tf_output
+        working-directory: infra
+        run: echo "fqdn=$(terraform output -raw controller_fqdn)" >> "$GITHUB_OUTPUT"
 
       - name: Disable TF state storage public access
         if: always()

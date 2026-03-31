@@ -1,0 +1,42 @@
+name: CD Staging
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: staging
+      image_tag: main-${{ github.sha }}
+    secrets: inherit
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+
+  smoke-test:
+    needs: deploy
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Health check
+        run: |
+          FQDN="${{ needs.deploy.outputs.controller_fqdn }}"
+          if [[ -z "$FQDN" ]]; then
+            echo "::warning::controller_fqdn is empty — staging environment may not be provisioned yet"
+            exit 0
+          fi
+          for i in $(seq 1 30); do
+            if curl -sf "https://${FQDN}/health"; then
+              echo "✓ Staging controller healthy"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Staging controller health check failed after 5 minutes"
+          exit 1
