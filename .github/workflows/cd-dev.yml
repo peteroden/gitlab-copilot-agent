@@ -11,6 +11,9 @@ concurrency:
 
 jobs:
   deploy:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/deploy.yml
     with:
       environment: dev
@@ -23,6 +26,9 @@ jobs:
 
   smoke-test:
     needs: deploy
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     environment: dev
     permissions:
@@ -63,6 +69,9 @@ jobs:
 
   integration-test:
     needs: [deploy, smoke-test]
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     environment: dev
     permissions:
@@ -79,7 +88,8 @@ jobs:
           JIRA_URL: ${{ vars.JIRA_URL }}
           JIRA_EMAIL: ${{ vars.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          JIRA_ISSUE_KEY: E2EACA-1
+          JIRA_PROJECT_KEY: E2EACA
+          JIRA_TRIGGER_STATUS: Selected for Development
         run: uv run python tests/e2e/aca_integration.py
 
       - name: Azure login (for log collection)
