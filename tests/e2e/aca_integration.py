@@ -1,53 +1,32 @@
 #!/usr/bin/env python3
-"""ACA integration tests — runs against a live dev ACA environment.
-
-Tests:
-  1. MR review flow: reset GitLab state, wait for agent to post review discussion.
-  2. Jira → coding flow: reset Jira issue to "To Do", wait for agent to
-     transition to "In Progress" then "Done" and create a GitLab MR.
-
-Environment variables:
-  CONTROLLER_FQDN   FQDN of the deployed ACA controller (no scheme)
-  GITLAB_URL        GitLab instance base URL
-  GITLAB_TOKEN      GitLab personal access token
-  GITLAB_PROJECT    GitLab project path (e.g. peteroden/e2e-aca-test)
-  JIRA_URL          Jira instance base URL
-  JIRA_EMAIL        Jira user email
-  JIRA_API_TOKEN    Jira API token
-  JIRA_ISSUE_KEY    Jira issue key to use for the coding flow test (e.g. E2EACA-1)
-"""
+"""ACA integration tests — verify MR review and Jira→coding flows against real services."""
 
 from __future__ import annotations
 
-import base64
 import os
 import sys
 import time
-from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
+import gitlab
 import httpx
 import structlog
 
 log = structlog.get_logger()
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
+# --- Environment ---
 CONTROLLER_FQDN = os.environ["CONTROLLER_FQDN"]
-GITLAB_URL = os.environ["GITLAB_URL"].rstrip("/")
+GITLAB_URL = os.environ.get("GITLAB_URL", "https://gitlab.com")
 GITLAB_TOKEN = os.environ["GITLAB_TOKEN"]
 GITLAB_PROJECT = os.environ["GITLAB_PROJECT"]
-JIRA_URL = os.environ["JIRA_URL"].rstrip("/")
+JIRA_URL = os.environ["JIRA_URL"]
 JIRA_EMAIL = os.environ["JIRA_EMAIL"]
 JIRA_API_TOKEN = os.environ["JIRA_API_TOKEN"]
 JIRA_ISSUE_KEY = os.environ["JIRA_ISSUE_KEY"]
 
 BRANCH_NAME = "feature/add-search-endpoint"
-
-MR_REVIEW_TIMEOUT = 300  # seconds
-JIRA_FLOW_TIMEOUT = 480  # seconds
-POLL_INTERVAL = 10  # seconds
+_FIXTURES = Path(__file__).parent / "fixtures" / "aca-mr-test"
 
 
 # ---------------------------------------------------------------------------
@@ -55,291 +34,238 @@ POLL_INTERVAL = 10  # seconds
 # ---------------------------------------------------------------------------
 
 
-def _gitlab_headers() -> dict[str, str]:
-    return {"PRIVATE-TOKEN": GITLAB_TOKEN}
+def _jira_client() -> httpx.Client:
+    return httpx.Client(
+        base_url=JIRA_URL,
+        auth=(JIRA_EMAIL, JIRA_API_TOKEN),
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        timeout=30,
+    )
 
 
-def _jira_headers() -> dict[str, str]:
-    credentials = base64.b64encode(f"{JIRA_EMAIL}:{JIRA_API_TOKEN}".encode()).decode()
-    return {
-        "Authorization": f"Basic {credentials}",
-        "Content-Type": "application/json",
-    }
-
-
-def poll_until(
-    check: Callable[[], bool],
-    label: str,
-    timeout: int = MR_REVIEW_TIMEOUT,
-    interval: int = POLL_INTERVAL,
-) -> None:
-    """Poll until *check* returns True or *timeout* seconds elapse."""
-    deadline = time.monotonic() + timeout
+def _poll(
+    description: str,
+    check_fn: Any,
+    timeout_s: int,
+    interval_s: int = 15,
+) -> Any:
+    """Poll `check_fn()` until it returns a truthy value or timeout expires."""
+    deadline = time.monotonic() + timeout_s
     attempt = 0
     while time.monotonic() < deadline:
         attempt += 1
-        if check():
-            log.info(f"{label} ✓ (attempt {attempt})")
-            return
-        remaining = deadline - time.monotonic()
-        log.debug(f"{label} — waiting ({remaining:.0f}s remaining)")
-        time.sleep(interval)
-    raise TimeoutError(f"{label}: timed out after {timeout}s")
+        log.info("polling", description=description, attempt=attempt)
+        result = check_fn()
+        if result:
+            return result
+        time.sleep(interval_s)
+    raise TimeoutError(f"Timed out after {timeout_s}s waiting for: {description}")
 
 
 # ---------------------------------------------------------------------------
-# GitLab helpers
+# GitLab state reset
 # ---------------------------------------------------------------------------
 
 
-def gitlab_get_project_id(client: httpx.Client) -> int:
-    encoded = GITLAB_PROJECT.replace("/", "%2F")
-    resp = client.get(
-        f"{GITLAB_URL}/api/v4/projects/{encoded}",
-        headers=_gitlab_headers(),
-    )
-    resp.raise_for_status()
-    return resp.json()["id"]
+def reset_gitlab_state(project: Any) -> int:
+    """Close existing MRs, recreate branch with buggy code, open fresh MR. Returns new MR iid."""
+    log.info("resetting GitLab state", project=GITLAB_PROJECT, branch=BRANCH_NAME)
 
+    for mr in project.mergerequests.list(state="opened", get_all=True):
+        if mr.source_branch == BRANCH_NAME:
+            mr.state_event = "close"
+            mr.save()
+            log.info("closed MR", iid=mr.iid)
 
-def reset_gitlab_state(client: httpx.Client, project_id: int) -> int:
-    """Close existing MRs on the branch, delete and recreate branch with buggy code.
-    Returns the new MR iid."""
-    # Close open MRs
-    resp = client.get(
-        f"{GITLAB_URL}/api/v4/projects/{project_id}/merge_requests",
-        headers=_gitlab_headers(),
-        params={"state": "opened", "source_branch": BRANCH_NAME},
-    )
-    resp.raise_for_status()
-    for mr in resp.json():
-        client.put(
-            f"{GITLAB_URL}/api/v4/projects/{project_id}/merge_requests/{mr['iid']}",
-            headers=_gitlab_headers(),
-            json={"state_event": "close"},
-        ).raise_for_status()
-        log.info("closed MR", iid=mr["iid"])
+    try:
+        project.branches.delete(BRANCH_NAME)
+        log.info("deleted branch", branch=BRANCH_NAME)
+    except Exception:
+        log.info("branch not found (already deleted)", branch=BRANCH_NAME)
 
-    # Delete branch (ignore 404)
-    del_resp = client.delete(
-        f"{GITLAB_URL}/api/v4/projects/{project_id}/repository/branches/{BRANCH_NAME}",
-        headers=_gitlab_headers(),
-    )
-    if del_resp.status_code not in (200, 204, 404):
-        del_resp.raise_for_status()
+    project.branches.create({"branch": BRANCH_NAME, "ref": "main"})
+    log.info("created fresh branch", branch=BRANCH_NAME)
 
-    # Recreate branch from main
-    client.post(
-        f"{GITLAB_URL}/api/v4/projects/{project_id}/repository/branches",
-        headers=_gitlab_headers(),
-        json={"branch": BRANCH_NAME, "ref": "main"},
-    ).raise_for_status()
-    log.info("created branch", branch=BRANCH_NAME)
+    tree = project.repository_tree(ref=BRANCH_NAME, recursive=True, get_all=True)
+    existing = {item["path"] for item in tree}
 
-    # Check existing files
-    resp = client.get(
-        f"{GITLAB_URL}/api/v4/projects/{project_id}/repository/tree",
-        headers=_gitlab_headers(),
-        params={"ref": BRANCH_NAME, "recursive": True, "per_page": 100},
-    )
-    resp.raise_for_status()
-    existing = {item["path"] for item in resp.json()}
+    search_py = (_FIXTURES / "src/demo_app/search.py").read_text()
+    main_py = (_FIXTURES / "src/demo_app/main.py").read_text()
 
-    search_py = '''\
-"""Search functionality for the Blog Post API."""
-
-from demo_app.database import _get_connection
-
-
-def search_posts(query):
-    conn = _get_connection()
-    results = conn.execute(
-        f"SELECT * FROM posts WHERE title LIKE \'%{query}%\'"
-        f" OR content LIKE \'%{query}%\'"
-    ).fetchall()
-    conn.close()
-    return [dict(row) for row in results]
-
-
-def search_by_date(start, end):
-    conn = _get_connection()
-    results = conn.execute(
-        f"SELECT * FROM posts WHERE created_at BETWEEN \'{start}\' AND \'{end}\'"
-    ).fetchall()
-    conn.close()
-    return results
-'''
-
-    actions = [
+    project.commits.create(
         {
-            "action": "create",
-            "file_path": "src/demo_app/search.py",
-            "content": search_py,
-        },
-    ]
-    if "src/demo_app/main.py" in existing:
-        actions[0]["action"] = "update"  # update if search.py already exists
-
-    client.post(
-        f"{GITLAB_URL}/api/v4/projects/{project_id}/repository/commits",
-        headers=_gitlab_headers(),
-        json={
             "branch": BRANCH_NAME,
             "commit_message": "Add search endpoint with keyword matching",
-            "actions": actions,
-        },
-    ).raise_for_status()
-    log.info("pushed buggy code")
+            "actions": [
+                {
+                    "action": "create",
+                    "file_path": "src/demo_app/search.py",
+                    "content": search_py,
+                },
+                {
+                    "action": "update" if "src/demo_app/main.py" in existing else "create",
+                    "file_path": "src/demo_app/main.py",
+                    "content": main_py,
+                },
+            ],
+        }
+    )
+    log.info("pushed buggy files to branch")
 
-    mr_resp = client.post(
-        f"{GITLAB_URL}/api/v4/projects/{project_id}/merge_requests",
-        headers=_gitlab_headers(),
-        json={
+    mr = project.mergerequests.create(
+        {
             "source_branch": BRANCH_NAME,
             "target_branch": "main",
             "title": "Add post search endpoint",
             "description": (
-                "Adds a search endpoint to find posts by keyword.\n\n"
-                "This MR has intentional issues for the agent to review."
+                "Adds a search endpoint. Has intentional issues for the agent to review."
             ),
-        },
+        }
     )
-    mr_resp.raise_for_status()
-    iid: int = mr_resp.json()["iid"]
-    log.info("created MR", iid=iid)
-    return iid
+    log.info("created MR", iid=mr.iid, url=mr.web_url)
+    return mr.iid
 
 
 # ---------------------------------------------------------------------------
-# Jira helpers
+# Jira state reset
 # ---------------------------------------------------------------------------
 
 
-def reset_jira_issue(client: httpx.Client) -> None:
-    """Transition the Jira issue back to 'To Do'."""
-    resp = client.get(
-        f"{JIRA_URL}/rest/api/3/issue/{JIRA_ISSUE_KEY}/transitions",
-        headers=_jira_headers(),
-    )
-    resp.raise_for_status()
-    transitions = resp.json().get("transitions", [])
-    todo_id = next(
-        (t["id"] for t in transitions if t["to"]["name"].lower() == "to do"),
-        None,
-    )
-    if todo_id is None:
-        raise RuntimeError(
-            f"Could not find 'To Do' transition for {JIRA_ISSUE_KEY}. "
-            f"Available: {[t['to']['name'] for t in transitions]}"
+def reset_jira_state() -> None:
+    """Transition the test issue back to 'To Do'."""
+    log.info("resetting Jira issue state", key=JIRA_ISSUE_KEY)
+    with _jira_client() as client:
+        resp = client.get(f"/rest/api/3/issue/{JIRA_ISSUE_KEY}/transitions")
+        resp.raise_for_status()
+        transitions = resp.json()["transitions"]
+        to_do_id = next(
+            (t["id"] for t in transitions if t["to"]["name"] == "To Do"),
+            None,
         )
-    client.post(
-        f"{JIRA_URL}/rest/api/3/issue/{JIRA_ISSUE_KEY}/transitions",
-        headers=_jira_headers(),
-        json={"transition": {"id": todo_id}},
-    ).raise_for_status()
-    log.info("reset Jira issue to To Do", key=JIRA_ISSUE_KEY)
+        if to_do_id is None:
+            available = [t["to"]["name"] for t in transitions]
+            raise RuntimeError(
+                f"No 'To Do' transition found for {JIRA_ISSUE_KEY}. Available: {available}"
+            )
+        resp = client.post(
+            f"/rest/api/3/issue/{JIRA_ISSUE_KEY}/transitions",
+            json={"transition": {"id": to_do_id}},
+        )
+        resp.raise_for_status()
+    log.info("Jira issue reset to 'To Do'", key=JIRA_ISSUE_KEY)
 
 
-def get_jira_status(client: httpx.Client) -> str:
-    resp = client.get(
-        f"{JIRA_URL}/rest/api/3/issue/{JIRA_ISSUE_KEY}",
-        headers=_jira_headers(),
-        params={"fields": "status"},
+# ---------------------------------------------------------------------------
+# Test: MR review
+# ---------------------------------------------------------------------------
+
+
+def test_mr_review(project: Any, mr_iid: int) -> None:
+    """Verify the agent posts at least one review comment on the MR."""
+    log.info("test: MR review", mr_iid=mr_iid)
+
+    def _has_discussions() -> bool:
+        discussions = project.mergerequests.get(mr_iid).discussions.list(get_all=True)
+        non_system = [d for d in discussions if not d.attributes.get("individual_note")]
+        if non_system:
+            log.info("found review discussions", count=len(non_system))
+            return True
+        return False
+
+    _poll("MR review comment appears", _has_discussions, timeout_s=300, interval_s=15)
+    log.info("✓ MR review test passed", mr_iid=mr_iid)
+
+
+# ---------------------------------------------------------------------------
+# Test: Jira → coding flow
+# ---------------------------------------------------------------------------
+
+
+def test_jira_coding_flow(project: Any) -> None:
+    """Verify the agent picks up the Jira issue and eventually creates an MR."""
+    log.info("test: Jira→coding flow", issue=JIRA_ISSUE_KEY)
+
+    with _jira_client() as client:
+
+        def _issue_status() -> str:
+            resp = client.get(f"/rest/api/3/issue/{JIRA_ISSUE_KEY}")
+            resp.raise_for_status()
+            return resp.json()["fields"]["status"]["name"]
+
+        def _reached_in_progress() -> bool:
+            status = _issue_status()
+            log.info("Jira issue status", status=status)
+            return status in ("In Progress", "Done")
+
+        def _reached_done() -> bool:
+            status = _issue_status()
+            log.info("Jira issue status", status=status)
+            return status == "Done"
+
+    _poll("Jira issue reaches In Progress", _reached_in_progress, timeout_s=300)
+    _poll("Jira issue reaches Done", _reached_done, timeout_s=480)
+
+    # Verify a new MR was created on GitLab
+    mrs = project.mergerequests.list(state="opened", source_branch=BRANCH_NAME, get_all=True)
+    assert mrs, (
+        f"Expected an open MR on branch '{BRANCH_NAME}' in project '{GITLAB_PROJECT}' "
+        f"after Jira issue '{JIRA_ISSUE_KEY}' reached Done, but found none"
     )
-    resp.raise_for_status()
-    return resp.json()["fields"]["status"]["name"]
+    log.info("✓ Jira coding flow test passed", mr_iid=mrs[0].iid)
 
 
 # ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
-def test_mr_review(gl_client: httpx.Client, project_id: int) -> None:
-    """Verify the agent posts at least one review discussion on the new MR."""
-    log.info("=== Test 1: MR review flow ===")
-    mr_iid = reset_gitlab_state(gl_client, project_id)
-    log.info("waiting for agent to review MR", iid=mr_iid)
-
-    def has_discussions() -> bool:
-        resp = gl_client.get(
-            f"{GITLAB_URL}/api/v4/projects/{project_id}/merge_requests/{mr_iid}/discussions",
-            headers=_gitlab_headers(),
-        )
-        if resp.status_code != 200:
-            return False
-        discussions = [d for d in resp.json() if not d.get("individual_note")]
-        return len(discussions) > 0
-
-    poll_until(has_discussions, "MR review discussion", timeout=MR_REVIEW_TIMEOUT)
-    log.info("✅ Test 1 passed: agent posted MR review discussion")
-
-
-def test_jira_coding_flow(
-    gl_client: httpx.Client, jira_client: httpx.Client, project_id: int
-) -> None:
-    """Verify the agent picks up the Jira issue and creates a GitLab MR."""
-    log.info("=== Test 2: Jira → coding flow ===")
-    reset_jira_issue(jira_client)
-    log.info("waiting for agent to pick up Jira issue and create MR")
-
-    def reached_in_progress() -> bool:
-        return get_jira_status(jira_client).lower() in ("in progress", "done")
-
-    def reached_done_with_mr() -> bool:
-        status = get_jira_status(jira_client)
-        if status.lower() != "done":
-            return False
-        # Verify a new MR was created
-        resp = gl_client.get(
-            f"{GITLAB_URL}/api/v4/projects/{project_id}/merge_requests",
-            headers=_gitlab_headers(),
-            params={"state": "opened", "order_by": "created_at", "sort": "desc", "per_page": 5},
-        )
-        return resp.status_code == 200 and len(resp.json()) > 0
-
-    poll_until(reached_in_progress, "Jira In Progress", timeout=JIRA_FLOW_TIMEOUT // 2)
-    poll_until(reached_done_with_mr, "Jira Done + MR created", timeout=JIRA_FLOW_TIMEOUT)
-    log.info("✅ Test 2 passed: Jira issue reached Done and MR was created")
-
-
-# ---------------------------------------------------------------------------
-# Entry point
+# Main
 # ---------------------------------------------------------------------------
 
 
 def main() -> None:
+    if not CONTROLLER_FQDN:
+        log.warning("CONTROLLER_FQDN is empty — dev environment not provisioned, skipping")
+        return
+
     log.info(
-        "ACA integration tests starting",
+        "starting ACA integration tests",
         controller=CONTROLLER_FQDN,
         project=GITLAB_PROJECT,
         jira_issue=JIRA_ISSUE_KEY,
     )
 
-    with (
-        httpx.Client(timeout=30) as gl_client,
-        httpx.Client(timeout=30) as jira_client,
-    ):
-        project_id = gitlab_get_project_id(gl_client)
-        log.info("resolved project", project_id=project_id)
+    gl = gitlab.Gitlab(GITLAB_URL, private_token=GITLAB_TOKEN)
+    gl.auth()
+    project = gl.projects.get(GITLAB_PROJECT)
 
-        failures: list[str] = []
+    failures: list[str] = []
 
-        for test_fn, args in [
-            (test_mr_review, (gl_client, project_id)),
-            (test_jira_coding_flow, (gl_client, jira_client, project_id)),
-        ]:
-            try:
-                test_fn(*args)
-            except Exception as exc:
-                log.error(f"{test_fn.__name__} FAILED", error=str(exc))
-                failures.append(test_fn.__name__)
+    # --- Test 1: MR review ---
+    try:
+        mr_iid = reset_gitlab_state(project)
+        test_mr_review(project, mr_iid)
+    except Exception as exc:
+        log.error("MR review test failed", error=str(exc))
+        failures.append(f"MR review: {exc}")
+
+    # --- Test 2: Jira → coding ---
+    try:
+        reset_jira_state()
+        reset_gitlab_state(project)
+        test_jira_coding_flow(project)
+    except Exception as exc:
+        log.error("Jira coding flow test failed", error=str(exc))
+        failures.append(f"Jira coding flow: {exc}")
+
+    # --- Cleanup ---
+    try:
+        reset_gitlab_state(project)
+        reset_jira_state()
+    except Exception as exc:
+        log.warning("cleanup failed (non-fatal)", error=str(exc))
 
     if failures:
-        log.error("ACA integration tests FAILED", failed=failures)
+        log.error("integration tests FAILED", failures=failures)
         sys.exit(1)
 
-    log.info("✅ All ACA integration tests passed")
+    log.info("✓ all ACA integration tests passed")
 
 
 if __name__ == "__main__":

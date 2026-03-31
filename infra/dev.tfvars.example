@@ -1,7 +1,7 @@
-subscription_id       = "00000000-0000-0000-0000-000000000000"
-resource_group_name   = "rg-copilot-dev"
-location              = "eastus2"
-deployment_env        = "dev"
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+resource_group_name = "rg-copilot-dev"
+location            = "eastus2"
+deployment_env      = "dev"
 
 # GitLab
 gitlab_url      = "https://gitlab.example.com"

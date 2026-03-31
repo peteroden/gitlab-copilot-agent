@@ -146,7 +146,7 @@ variable "jira_project_map" {
   default     = ""
 }
 
-# --- Deployment Environment ---
+# --- Environment ---
 
 variable "deployment_env" {
   description = "Deployment environment label (dev, staging)"

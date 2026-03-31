@@ -31,6 +31,7 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           query-suite: default
+          config-file: .github/codeql/codeql-config.yml
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@9792ccaef0455e446c567163589397e8c3ac2e0d # v3

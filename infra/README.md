@@ -38,12 +38,23 @@ terraform apply -var-file=dev.tfvars
 | `main.tf` | Provider config, resource group, backend |
 | `backend.tf` | Remote state backend documentation |
 | `variables.tf` | Input variables with defaults |
+| `variables-apps.tf` | App-specific variables (images, GitLab, Jira, environment) |
 | `outputs.tf` | Resource outputs (FQDN, ACR URL, etc.) |
 | `networking.tf` | VNet, subnets, NSGs |
 | `redis.tf` | Azure Cache for Redis |
 | `keyvault.tf` | Key Vault + access policies |
 | `container-apps.tf` | Environment, Controller App, Job |
 | `monitoring.tf` | Log Analytics workspace |
+| `dev.tfvars` | Dev environment values |
+| `staging.tfvars` | Staging environment values |
+
+## Key Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `deployment_env` | ✓ | Environment label injected into containers (`dev` or `staging`) |
+| `jira_trigger_status` | — | Jira status that triggers the agent (default: `AI Ready`) |
+| `jira_in_review_status` | — | Jira status set when agent creates an MR (default: `In Review`) |
 
 ## Security
 

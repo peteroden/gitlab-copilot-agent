@@ -24,7 +24,7 @@ on:
         type: string
     outputs:
       controller_fqdn:
-        description: "FQDN of the deployed controller"
+        description: "FQDN of the deployed controller Container App"
         value: ${{ jobs.deploy.outputs.controller_fqdn }}
 
 permissions:
