@@ -117,7 +117,9 @@ def reset_gitlab_state(project: Any) -> int:
             "source_branch": BRANCH_NAME,
             "target_branch": "main",
             "title": "Add post search endpoint",
-            "description": "Adds a search endpoint. Has intentional issues for the agent to review.",
+            "description": (
+                "Adds a search endpoint. Has intentional issues for the agent to review."
+            ),
         }
     )
     log.info("created MR", iid=mr.iid, url=mr.web_url)
