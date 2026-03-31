@@ -128,4 +128,13 @@ resource "azurerm_private_endpoint" "ampls" {
   }
 
   tags = var.tags
+
+  depends_on = [
+    azurerm_monitor_private_link_scoped_service.law,
+    azurerm_monitor_private_link_scoped_service.ai,
+    azurerm_private_dns_zone_virtual_network_link.monitor,
+    azurerm_private_dns_zone_virtual_network_link.oms,
+    azurerm_private_dns_zone_virtual_network_link.ods,
+    azurerm_private_dns_zone_virtual_network_link.agentsvc,
+  ]
 }
