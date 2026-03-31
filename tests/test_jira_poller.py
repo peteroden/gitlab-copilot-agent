@@ -298,8 +298,8 @@ class TestGroupedJQL:
 
         assert mock_jira_client.search_issues.call_count == 2
         all_jqls = [call[0][0] for call in mock_jira_client.search_issues.call_args_list]
-        statuses_queried = {jql.split('"')[1] for jql in all_jqls}
-        assert statuses_queried == {"AI Ready", CUSTOM_TRIGGER_STATUS}
+        assert any('status = "AI Ready"' in jql for jql in all_jqls)
+        assert any(f'status = "{CUSTOM_TRIGGER_STATUS}"' in jql for jql in all_jqls)
 
     @pytest.mark.asyncio
     async def test_grouped_jql_same_status(
