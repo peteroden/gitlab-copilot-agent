@@ -337,8 +337,8 @@ def test_jira_coding_flow(project: Any, issue_key: str, existing_mr_ids: set[int
             log.info("Jira issue status", status=status)
             return status == "Done"
 
-    _poll("Jira issue reaches In Progress", _reached_in_progress, timeout_s=300)
-    _poll("Jira issue reaches Done", _reached_done, timeout_s=480)
+        _poll("Jira issue reaches In Progress", _reached_in_progress, timeout_s=300)
+        _poll("Jira issue reaches Done", _reached_done, timeout_s=480)
 
     def _new_coding_mr() -> Any:
         for mr in _list_open_coding_mrs(project, issue_key):
