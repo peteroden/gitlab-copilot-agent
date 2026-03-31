@@ -16,7 +16,6 @@ import structlog
 log = structlog.get_logger()
 
 # --- Environment ---
-CONTROLLER_FQDN = os.environ["CONTROLLER_FQDN"]
 GITLAB_URL = os.environ.get("GITLAB_URL", "https://gitlab.com")
 GITLAB_TOKEN = os.environ["GITLAB_TOKEN"]
 GITLAB_PROJECT = os.environ["GITLAB_PROJECT"]
@@ -220,13 +219,8 @@ def test_jira_coding_flow(project: Any) -> None:
 
 
 def main() -> None:
-    if not CONTROLLER_FQDN:
-        log.warning("CONTROLLER_FQDN is empty — dev environment not provisioned, skipping")
-        return
-
     log.info(
         "starting ACA integration tests",
-        controller=CONTROLLER_FQDN,
         project=GITLAB_PROJECT,
         jira_issue=JIRA_ISSUE_KEY,
     )

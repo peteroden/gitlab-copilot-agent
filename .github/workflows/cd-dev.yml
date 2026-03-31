@@ -24,23 +24,40 @@ jobs:
   smoke-test:
     needs: deploy
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      id-token: write
     steps:
-      - name: Health check
+      - name: Azure login
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Wait for controller revision health
         run: |
-          FQDN="${{ needs.deploy.outputs.controller_fqdn }}"
-          if [[ -z "$FQDN" ]]; then
-            echo "::warning::controller_fqdn is empty — dev environment may not be provisioned yet"
-            exit 0
-          fi
           for i in $(seq 1 30); do
-            if curl -sf "https://${FQDN}/health"; then
-              echo "✓ Controller healthy"
+            revision=$(az containerapp show \
+              -g rg-copilot-dev \
+              -n ca-controller \
+              --query 'properties.latestRevisionName' \
+              -o tsv)
+            state=$(az containerapp revision list \
+              -g rg-copilot-dev \
+              -n ca-controller \
+              --query "[?name=='${revision}'].properties | [0].{revisionName: '${revision}', provisioningState: provisioningState, healthState: healthState, replicas: replicas, runningState: runningState}" \
+              -o json)
+            echo "$state"
+            if [[ -n "$revision" \
+               && $(echo "$state" | jq -r '.revisionName // empty') == "$revision" \
+               && $(echo "$state" | jq -r '.provisioningState // empty') == "Provisioned" \
+              && $(echo "$state" | jq -r '.healthState // empty') == "Healthy" ]]; then
+              echo "✓ Controller revision healthy"
               exit 0
             fi
             sleep 10
           done
-          echo "::error::Controller health check failed after 5 minutes"
+          echo "::error::Controller revision did not become healthy after 5 minutes"
           exit 1
 
   integration-test:
@@ -55,7 +72,6 @@ jobs:
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
       - name: Run ACA integration tests
         env:
-          CONTROLLER_FQDN: ${{ needs.deploy.outputs.controller_fqdn }}
           GITLAB_URL: https://gitlab.com
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           GITLAB_PROJECT: peteroden/e2e-aca-test
