@@ -11,6 +11,7 @@ from gitlab_copilot_agent.concurrency import MemoryDedup
 from gitlab_copilot_agent.gitlab_client import MRAuthor, MRListItem, NoteListItem
 from gitlab_copilot_agent.gitlab_poller import GitLabPoller
 from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
+from gitlab_copilot_agent.task_executor import TaskExecutionError
 from tests.conftest import GITLAB_URL, MR_IID, PROJECT_ID, make_settings
 
 # -- Constants --
@@ -86,6 +87,31 @@ async def test_dedup_skips_seen(mock_hr: AsyncMock) -> None:
     await poller._poll_once()
     await poller._poll_once()
     assert mock_hr.call_count == 1
+
+
+@pytest.mark.asyncio
+@patch(_HANDLE_REVIEW, new_callable=AsyncMock)
+async def test_task_execution_failure_marks_review_seen(mock_hr: AsyncMock) -> None:
+    poller, cl, _ = _poller()
+    cl.list_project_mrs.return_value = [_mr_item()]
+    mock_hr.side_effect = TaskExecutionError("runner error")
+
+    await poller._poll_once()
+    await poller._poll_once()
+
+    assert mock_hr.call_count == 1
+
+
+@pytest.mark.asyncio
+@patch(_HANDLE_REVIEW, new_callable=AsyncMock)
+async def test_task_execution_failure_does_not_abort_other_reviews(mock_hr: AsyncMock) -> None:
+    poller, cl, _ = _poller()
+    cl.list_project_mrs.return_value = [_mr_item(iid=1), _mr_item(iid=2, sha="beadfeed")]
+    mock_hr.side_effect = [TaskExecutionError("runner error"), None]
+
+    await poller._poll_once()
+
+    assert mock_hr.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -206,6 +232,39 @@ async def test_note_dedup_skips_seen(mock_hr: AsyncMock, mock_hc: AsyncMock) -> 
     await poller._poll_once()
     await poller._poll_once()
     assert mock_hc.call_count == 1
+
+
+@pytest.mark.asyncio
+@patch(_HANDLE_COMMENT, new_callable=AsyncMock)
+@patch(_HANDLE_REVIEW, new_callable=AsyncMock)
+async def test_task_execution_failure_marks_note_seen(
+    mock_hr: AsyncMock, mock_hc: AsyncMock
+) -> None:
+    poller, cl, _ = _poller()
+    cl.list_project_mrs.return_value = [_mr_item()]
+    cl.list_mr_notes.return_value = [_note_item()]
+    mock_hc.side_effect = TaskExecutionError("runner error")
+
+    await poller._poll_once()
+    await poller._poll_once()
+
+    assert mock_hc.call_count == 1
+
+
+@pytest.mark.asyncio
+@patch(_HANDLE_COMMENT, new_callable=AsyncMock)
+@patch(_HANDLE_REVIEW, new_callable=AsyncMock)
+async def test_task_execution_failure_does_not_abort_other_notes(
+    mock_hr: AsyncMock, mock_hc: AsyncMock
+) -> None:
+    poller, cl, _ = _poller()
+    cl.list_project_mrs.return_value = [_mr_item()]
+    cl.list_mr_notes.return_value = [_note_item(id=1), _note_item(id=2)]
+    mock_hc.side_effect = [TaskExecutionError("runner error"), None]
+
+    await poller._poll_once()
+
+    assert mock_hc.call_count == 2
 
 
 @pytest.mark.asyncio

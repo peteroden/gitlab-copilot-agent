@@ -44,6 +44,10 @@ class CodingResult(BaseModel):
     base_sha: str = Field(default="", description="Commit SHA the patch is based on")
 
 
+class TaskExecutionError(RuntimeError):
+    """Raised when a remote task runner reports an execution failure."""
+
+
 TaskResult = ReviewResult | CodingResult
 
 

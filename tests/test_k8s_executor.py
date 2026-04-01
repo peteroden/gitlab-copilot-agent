@@ -13,6 +13,7 @@ from gitlab_copilot_agent.k8s_executor import _parse_result
 from gitlab_copilot_agent.task_executor import (
     CodingResult,
     ReviewResult,
+    TaskExecutionError,
     TaskExecutor,
     TaskParams,
 )
@@ -265,6 +266,5 @@ class TestParseResult:
         assert result.summary == raw
 
     def test_error_result_returns_review_with_message(self) -> None:
-        result = _parse_result(ERROR_JSON_RESULT, "coding")
-        assert isinstance(result, ReviewResult)
-        assert ERROR_MESSAGE in result.summary
+        with pytest.raises(TaskExecutionError, match=ERROR_MESSAGE):
+            _parse_result(ERROR_JSON_RESULT, "coding")

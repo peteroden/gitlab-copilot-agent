@@ -15,7 +15,7 @@ from gitlab_copilot_agent.git_operations import git_clone, git_commit, git_push
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.models import NoteWebhookPayload
 from gitlab_copilot_agent.prompt_defaults import get_prompt
-from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams
+from gitlab_copilot_agent.task_executor import TaskExecutionError, TaskExecutor, TaskParams
 from gitlab_copilot_agent.telemetry import get_tracer
 
 log = structlog.get_logger()
@@ -111,6 +111,18 @@ async def handle_copilot_comment(
                     )
 
                 await bound_log.ainfo("copilot_command_complete")
+            except TaskExecutionError as exc:
+                await bound_log.aexception("copilot_command_task_failed")
+                try:
+                    await gl_client.post_mr_comment(
+                        project.id,
+                        mr.iid,
+                        "❌ Agent encountered an error processing your request.\n\n"
+                        f"**Error:** {exc}",
+                    )
+                except Exception:
+                    await bound_log.aexception("error_comment_failed")
+                raise
             except Exception:
                 await bound_log.aexception("copilot_command_failed")
                 try:

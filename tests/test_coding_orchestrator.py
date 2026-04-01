@@ -9,7 +9,7 @@ from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
 from gitlab_copilot_agent.git_operations import TransientCloneError
 from gitlab_copilot_agent.jira_models import JiraIssue, JiraIssueFields, JiraStatus
 from gitlab_copilot_agent.project_registry import ResolvedProject
-from gitlab_copilot_agent.task_executor import CodingResult
+from gitlab_copilot_agent.task_executor import CodingResult, TaskExecutionError
 from tests.conftest import (
     EXAMPLE_CLONE_URL,
     JIRA_EMAIL,
@@ -167,6 +167,30 @@ async def test_coding_failure_comment_posting_failure_is_logged(
         await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
 
     mock_jira.add_comment.assert_awaited_once()
+
+
+@patch("gitlab_copilot_agent.coding_orchestrator.run_coding_task")
+@patch("gitlab_copilot_agent.coding_orchestrator.git_unique_branch")
+@patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
+async def test_task_execution_failure_posts_error_details(
+    mock_clone: AsyncMock,
+    mock_branch: AsyncMock,
+    mock_coding: AsyncMock,
+    tmp_path: Path,
+) -> None:
+    mock_clone.return_value = tmp_path
+    mock_branch.return_value = "agent/proj-42"
+    mock_coding.side_effect = TaskExecutionError("Task failed: missing files_changed")
+    mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
+    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+
+    with pytest.raises(TaskExecutionError, match="missing files_changed"):
+        await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
+
+    mock_jira.add_comment.assert_awaited_once()
+    comment = mock_jira.add_comment.call_args[0][1]
+    assert "Automated implementation failed" in comment
+    assert "missing files_changed" in comment
 
 
 @patch("gitlab_copilot_agent.coding_orchestrator.git_clone")

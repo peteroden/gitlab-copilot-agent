@@ -29,7 +29,7 @@ from gitlab_copilot_agent.models import (
 from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
 from gitlab_copilot_agent.orchestrator import handle_review
 from gitlab_copilot_agent.project_registry import ProjectRegistry
-from gitlab_copilot_agent.task_executor import TaskExecutor
+from gitlab_copilot_agent.task_executor import TaskExecutionError, TaskExecutor
 
 log = structlog.get_logger()
 _DEDUP_TTL = 86400
@@ -158,12 +158,17 @@ class GitLabPoller:
                 oldrev=None,
             ),
         )
-        await handle_review(
-            self._settings,
-            payload,
-            self._executor,
-            project_token=self._resolve_token(project_id),
-        )
+        try:
+            await handle_review(
+                self._settings,
+                payload,
+                self._executor,
+                project_token=self._resolve_token(project_id),
+            )
+        except TaskExecutionError:
+            await log.awarning("gitlab_review_task_failed", project_id=project_id, mr_iid=mr.iid)
+            await self._dedup.mark_seen(key, ttl_seconds=_DEDUP_TTL)
+            return
         await self._dedup.mark_seen(key, ttl_seconds=_DEDUP_TTL)
 
     async def _process_notes(
@@ -186,13 +191,23 @@ class GitLabPoller:
                 if await self._dedup.is_seen(note_key):
                     continue
                 payload = _build_note_payload(note, mr, project_id, self._settings)
-                await handle_copilot_comment(
-                    self._settings,
-                    payload,
-                    self._executor,
-                    self._repo_locks,
-                    project_token=self._resolve_token(project_id),
-                )
+                try:
+                    await handle_copilot_comment(
+                        self._settings,
+                        payload,
+                        self._executor,
+                        self._repo_locks,
+                        project_token=self._resolve_token(project_id),
+                    )
+                except TaskExecutionError:
+                    await log.awarning(
+                        "gitlab_copilot_note_task_failed",
+                        note_id=note.id,
+                        project_id=project_id,
+                        mr_iid=mr.iid,
+                    )
+                    await self._dedup.mark_seen(note_key, ttl_seconds=_DEDUP_TTL)
+                    continue
                 await self._dedup.mark_seen(note_key, ttl_seconds=_DEDUP_TTL)
 
 
