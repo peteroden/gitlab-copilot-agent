@@ -176,6 +176,7 @@ async def run_copilot_session(
                     try:
                         done = asyncio.Event()
                         messages: list[str] = []
+                        session_error: dict[str, str] = {}
 
                         def on_event(event: Any) -> None:  # pyright: ignore[reportExplicitAny]
                             match getattr(event, "type", None):
@@ -183,6 +184,13 @@ async def run_copilot_session(
                                     content = getattr(event.data, "content", "")
                                     if content:
                                         messages.append(content)
+                                case t if t and t.value == "session.error":
+                                    data = getattr(event, "data", None)
+                                    session_error["type"] = str(
+                                        getattr(data, "error_type", "unknown")
+                                    )
+                                    session_error["message"] = str(getattr(data, "message", ""))
+                                    done.set()
                                 case t if t and t.value == "session.idle":
                                     done.set()
                                 case _:
@@ -191,6 +199,18 @@ async def run_copilot_session(
                         session.on(on_event)
                         await session.send(user_prompt)
                         await asyncio.wait_for(done.wait(), timeout=timeout)
+
+                        if session_error:
+                            await log.aerror(
+                                "copilot_session_error",
+                                error_type=session_error.get("type"),
+                                error_message=session_error.get("message"),
+                                task_type=task_type,
+                            )
+                            raise RuntimeError(
+                                f"Copilot session error ({session_error.get('type')}): "
+                                f"{session_error.get('message')}"
+                            )
 
                         result = messages[-1] if messages else ""
                         await log.ainfo(
@@ -209,8 +229,23 @@ async def run_copilot_session(
                                 )
                                 done.clear()
                                 messages.clear()
+                                session_error.clear()
                                 await session.send(follow_up)
                                 await asyncio.wait_for(done.wait(), timeout=timeout)
+
+                                if session_error:
+                                    await log.aerror(
+                                        "copilot_session_retry_error",
+                                        error_type=session_error.get("type"),
+                                        error_message=session_error.get("message"),
+                                        task_type=task_type,
+                                    )
+                                    raise RuntimeError(
+                                        f"Copilot session error on retry "
+                                        f"({session_error.get('type')}): "
+                                        f"{session_error.get('message')}"
+                                    )
+
                                 result = messages[-1] if messages else result
                                 await log.ainfo(
                                     "copilot_session_retry_result",
@@ -219,7 +254,7 @@ async def run_copilot_session(
                                     result_empty=not result,
                                 )
                     finally:
-                        await session.destroy()
+                        await session.disconnect()
                 finally:
                     await client.stop()
                 return result

@@ -118,7 +118,7 @@ jobs:
             az containerapp job logs show \
               -g rg-copilot-dev -n job-task-runner \
               --container task \
-              --execution "$exec_name" --tail 300 --type console \
+              --execution "$exec_name" --tail 300 \
               > "/tmp/aca-logs/job-${exec_name}.log" 2>&1 || true
           done
 
