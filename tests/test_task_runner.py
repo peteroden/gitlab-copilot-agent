@@ -318,6 +318,22 @@ class TestBuildCodingResult:
                 "abc123",
             )
 
+    async def test_failure_logs_agent_response_excerpt(self) -> None:
+        """Structured log includes raw agent response excerpt for operators."""
+        agent_response = "I tried but could not make changes to the repository."
+        mock_log = AsyncMock()
+        with (
+            patch(f"{_M}._list_changed_paths", AsyncMock(return_value=[])),
+            pytest.raises(RuntimeError, match="did not return a valid files_changed list"),
+        ):
+            await _build_coding_result(
+                Path("/repo"),
+                agent_response,
+                mock_log,
+                "abc123",
+            )
+        mock_log.awarning.assert_any_await("agent_output_parse_failed", raw_excerpt=agent_response)
+
 
 _STATE_MOD = "gitlab_copilot_agent.state"
 

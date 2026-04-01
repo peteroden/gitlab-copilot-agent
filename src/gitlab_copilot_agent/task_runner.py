@@ -151,6 +151,9 @@ async def _build_coding_result(
             await _run_git_simple(repo_path, "add", "--", f)
         await bound_log.ainfo("staged_explicit_files", count=len(agent_output.files_changed))
     else:
+        if not agent_output:
+            excerpt = summary[:500] + ("…" if len(summary) > 500 else "")
+            await bound_log.awarning("agent_output_parse_failed", raw_excerpt=excerpt)
         changed_paths = await _list_changed_paths(repo_path)
         if not changed_paths:
             raise RuntimeError(
