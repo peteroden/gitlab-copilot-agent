@@ -104,7 +104,49 @@ jobs:
         if: failure()
         run: |
           mkdir -p /tmp/aca-logs
-          az containerapp logs show -n ca-controller -g rg-copilot-dev --type console > /tmp/aca-logs/controller.log 2>&1 || true
+
+          # Controller logs — grab maximum history
+          az containerapp logs show \
+            -n ca-controller -g rg-copilot-dev \
+            --type console --tail 300 \
+            > /tmp/aca-logs/controller.log 2>&1 || true
+
+          # Task runner job execution logs — last 5 executions
+          for exec_name in $(az containerapp job execution list \
+            -g rg-copilot-dev -n job-task-runner \
+            --query "[].name" -o tsv 2>/dev/null | tail -5); do
+            az containerapp job logs show \
+              -g rg-copilot-dev -n job-task-runner \
+              --execution "$exec_name" --tail 300 --type console \
+              > "/tmp/aca-logs/job-${exec_name}.log" 2>&1 || true
+          done
+
+          # Result blobs — download recent error results for inspection
+          end_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          start_time=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+          ACCOUNT_URL=$(az containerapp show \
+            -g rg-copilot-dev -n ca-controller \
+            --query 'properties.template.containers[0].env[?name==`AZURE_STORAGE_ACCOUNT_URL`].value | [0]' \
+            -o tsv 2>/dev/null || true)
+          if [ -n "$ACCOUNT_URL" ]; then
+            az storage blob list \
+              --account-name "${ACCOUNT_URL##*//*.}" \
+              --container-name task-data \
+              --prefix results/ \
+              --auth-mode login \
+              --query "[?properties.lastModified>='${start_time}'].name" \
+              -o tsv 2>/dev/null | while read -r blob; do
+                safe_name=$(echo "$blob" | tr '/' '_')
+                az storage blob download \
+                  --account-name "${ACCOUNT_URL##*//*.}" \
+                  --container-name task-data \
+                  --name "$blob" \
+                  --auth-mode login \
+                  --file "/tmp/aca-logs/${safe_name}" 2>/dev/null || true
+            done
+          fi
+
+          ls -la /tmp/aca-logs/
 
       - name: Upload logs
         if: failure()

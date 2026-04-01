@@ -310,6 +310,11 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
             validate_response=_coding_response_validator if task_type == "coding" else None,
             plugins=plugins,
         )
+        await bound_log.ainfo(
+            "copilot_session_complete",
+            summary_length=len(summary),
+            summary_empty=not summary,
+        )
         if task_type == "coding":
             assert pre_session_sha is not None
             result = await _build_coding_result(repo_path, summary, bound_log, pre_session_sha)
@@ -324,10 +329,15 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
     except Exception as exc:
         import traceback
 
-        await bound_log.aerror("task_failed", error=str(exc), traceback=traceback.format_exc())
-        error_result = json.dumps(
-            {"result_type": "error", "error": True, "summary": f"Task failed: {exc}"}
-        )
+        tb = traceback.format_exc()
+        await bound_log.aerror("task_failed", error=str(exc), traceback=tb)
+        error_detail: dict[str, object] = {
+            "result_type": "error",
+            "error": True,
+            "summary": f"Task failed: {exc}",
+            "traceback": tb,
+        }
+        error_result = json.dumps(error_detail)
         try:
             await _store_result(task_id, error_result, settings)
             if task_queue and queue_msg:

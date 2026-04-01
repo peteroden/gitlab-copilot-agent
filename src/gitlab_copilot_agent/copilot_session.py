@@ -118,6 +118,12 @@ async def run_copilot_session(
                     ),
                 )
                 await client.start()
+                await log.ainfo(
+                    "copilot_client_started",
+                    cli_path=cli_path,
+                    working_directory=repo_path,
+                    task_type=task_type,
+                )
 
                 try:
                     repo_config = discover_repo_config(repo_path)
@@ -187,6 +193,13 @@ async def run_copilot_session(
                         await asyncio.wait_for(done.wait(), timeout=timeout)
 
                         result = messages[-1] if messages else ""
+                        await log.ainfo(
+                            "copilot_session_first_result",
+                            message_count=len(messages),
+                            result_length=len(result),
+                            result_empty=not result,
+                            task_type=task_type,
+                        )
 
                         if validate_response is not None:
                             follow_up = validate_response(result)
@@ -199,6 +212,12 @@ async def run_copilot_session(
                                 await session.send(follow_up)
                                 await asyncio.wait_for(done.wait(), timeout=timeout)
                                 result = messages[-1] if messages else result
+                                await log.ainfo(
+                                    "copilot_session_retry_result",
+                                    message_count=len(messages),
+                                    result_length=len(result),
+                                    result_empty=not result,
+                                )
                     finally:
                         await session.destroy()
                 finally:
