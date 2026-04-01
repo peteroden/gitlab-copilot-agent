@@ -28,15 +28,18 @@ JIRA_TRIGGER_STATUS = os.environ.get("JIRA_TRIGGER_STATUS", "AI Ready")
 
 REVIEW_BRANCH_NAME = "feature/add-search-endpoint"
 _FIXTURES = Path(__file__).parent / "fixtures" / "aca-mr-test"
-TEST_ISSUE_SUMMARY = "Add input validation to the blog API search endpoint"
+TEST_ISSUE_SUMMARY = "Add post search endpoint"
 TEST_ISSUE_DESCRIPTION = (
-    "Add validation for the /search endpoint so blank queries are rejected and very long "
-    "queries are bounded.\n\n"
+    "Add a search endpoint to the blog API so users can find posts by keyword.\n\n"
     "Acceptance Criteria:\n"
-    "- Reject empty or whitespace-only search queries\n"
-    "- Reject search queries longer than 100 characters\n"
-    "- Return a clear 400 response for invalid input\n"
-    "- Add or update tests for the validation behavior"
+    "- Add GET /search?q=<keyword> to the FastAPI app\n"
+    "- Search post titles and content for the requested keyword\n"
+    "- Return matching posts as JSON\n"
+    "- Return 400 when q is empty or only whitespace\n\n"
+    "Technical Notes:\n"
+    "- Update src/demo_app/main.py to register the new route\n"
+    "- Add any helper code needed under src/demo_app/\n"
+    "- Keep the implementation consistent with the existing FastAPI app structure"
 )
 
 
