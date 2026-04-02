@@ -14,6 +14,7 @@ from gitlab_copilot_agent.comment_poster import post_review
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.metrics import reviews_duration, reviews_total
 from gitlab_copilot_agent.review_engine import ReviewRequest, run_review
+from gitlab_copilot_agent.task_executor import TaskExecutionError
 from gitlab_copilot_agent.telemetry import get_tracer
 
 if TYPE_CHECKING:
@@ -91,6 +92,17 @@ async def handle_review(
             )
             bound_log.info("comments_posted")
             outcome = "success"
+        except TaskExecutionError as exc:
+            bound_log.exception("review_task_failed")
+            try:
+                await gl_client.post_mr_comment(
+                    project.id,
+                    mr.iid,
+                    f"⚠️ Automated review failed.\n\n**Error:** {exc}",
+                )
+            except Exception:
+                bound_log.exception("failure_comment_post_failed")
+            raise
         except Exception:
             bound_log.exception("review_failed")
             try:

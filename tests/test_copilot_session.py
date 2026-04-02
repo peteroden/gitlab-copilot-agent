@@ -254,3 +254,133 @@ async def test_session_no_plugins_skips_setup(
     ) as mock_setup:
         await _run()
         mock_setup.assert_not_awaited()
+
+
+@patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
+@patch("gitlab_copilot_agent.copilot_session.CopilotClient")
+async def test_auth_failure_raises_immediately(
+    mock_client_class: MagicMock,
+    mock_discover: MagicMock,
+    _run: Any,
+) -> None:
+    """Unauthenticated client raises RuntimeError before session creation."""
+    mock_discover.return_value = RepoConfig()
+    mock_client = AsyncMock()
+    mock_client_class.return_value = mock_client
+    mock_client.get_auth_status.return_value = SimpleNamespace(
+        authType=None,
+        isAuthenticated=False,
+    )
+
+    with pytest.raises(RuntimeError, match="Copilot authentication failed"):
+        await _run()
+
+    # Session should never be created
+    mock_client.create_session.assert_not_awaited()
+
+
+@patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
+@patch("gitlab_copilot_agent.copilot_session.CopilotClient")
+async def test_auth_failure_skipped_with_custom_provider(
+    mock_client_class: MagicMock,
+    mock_discover: MagicMock,
+    _run: Any,
+) -> None:
+    """Custom provider skips auth check — GitHub auth is irrelevant."""
+    mock_discover.return_value = RepoConfig()
+    events = [
+        _make_event("assistant.message", "Hello"),
+        _make_event("session.idle"),
+    ]
+    _setup_mock_session(mock_client_class, events)
+    mock_client_class.return_value.get_auth_status.return_value = SimpleNamespace(
+        authType=None,
+        isAuthenticated=False,
+    )
+
+    settings = make_settings(
+        copilot_provider_type="openai",
+        copilot_provider_base_url="http://localhost:9998/v1",
+        copilot_provider_api_key="fake-key",
+    )
+    result = await _run(settings=settings)
+    assert result == "Hello"
+
+
+@patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
+@patch("gitlab_copilot_agent.copilot_session.CopilotClient")
+async def test_session_error_raises_runtime_error(
+    mock_client_class: MagicMock,
+    mock_discover: MagicMock,
+    _run: Any,
+) -> None:
+    """session.error event raises RuntimeError with error details."""
+    mock_discover.return_value = RepoConfig()
+    error_event = SimpleNamespace(
+        type=SimpleNamespace(value="session.error"),
+        data=SimpleNamespace(
+            error_type="authentication",
+            message="Session was not created with authentication info",
+            content="",
+        ),
+    )
+    _setup_mock_session(
+        mock_client_class,
+        [error_event],
+    )
+
+    with pytest.raises(RuntimeError, match="authentication"):
+        await _run()
+
+
+@patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
+@patch("gitlab_copilot_agent.copilot_session.CopilotClient")
+async def test_session_error_on_retry_raises(
+    mock_client_class: MagicMock,
+    mock_discover: MagicMock,
+    _run: Any,
+) -> None:
+    """session.error during retry phase also raises RuntimeError."""
+    mock_discover.return_value = RepoConfig()
+
+    call_count = {"n": 0}
+
+    mock_client = AsyncMock()
+    mock_client_class.return_value = mock_client
+    mock_session = AsyncMock()
+    mock_session.on = MagicMock()
+    mock_client.create_session.return_value = mock_session
+
+    captured: dict[str, Callable[..., Any] | None] = {"handler": None}
+
+    def capture_on(handler: Callable[..., Any]) -> None:
+        captured["handler"] = handler
+
+    mock_session.on.side_effect = capture_on
+
+    async def fake_send(prompt: str, **_kwargs: object) -> None:
+        assert captured["handler"] is not None
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            # First call succeeds with a message that fails validation
+            captured["handler"](_make_event("assistant.message", "no json here"))
+            captured["handler"](_make_event("session.idle"))
+        else:
+            # Retry gets a session error
+            error_event = SimpleNamespace(
+                type=SimpleNamespace(value="session.error"),
+                data=SimpleNamespace(
+                    error_type="quota",
+                    message="Rate limit exceeded",
+                    content="",
+                ),
+            )
+            captured["handler"](error_event)
+
+    mock_session.send.side_effect = fake_send
+
+    def validator(result: str) -> str | None:
+        return "Try again" if "files_changed" not in result else None
+
+    with pytest.raises(RuntimeError, match="quota"):
+        await _run(validate_response=validator)

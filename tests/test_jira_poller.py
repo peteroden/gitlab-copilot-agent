@@ -9,6 +9,7 @@ from gitlab_copilot_agent.config import JiraSettings
 from gitlab_copilot_agent.jira_models import JiraIssue, JiraIssueFields, JiraStatus
 from gitlab_copilot_agent.jira_poller import JiraPoller
 from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
+from gitlab_copilot_agent.task_executor import TaskExecutionError
 from tests.conftest import (
     EXAMPLE_CLONE_URL,
     GITLAB_TOKEN,
@@ -169,6 +170,25 @@ async def test_poll_once_handles_errors_gracefully(
     # Should propagate — _poll_loop catches it
     with pytest.raises(Exception, match="Handler error"):
         await poller._poll_once()
+
+
+@pytest.mark.asyncio
+async def test_poll_once_task_execution_error_is_not_marked_processed(
+    mock_jira_client: AsyncMock,
+    project_map: ProjectRegistry,
+    mock_handler: AsyncMock,
+) -> None:
+    issue = make_jira_issue("PROJ-123")
+    mock_jira_client.search_issues.return_value = [issue]
+    mock_handler.handle.side_effect = TaskExecutionError("runner error")
+
+    settings = make_jira_settings()
+    poller = JiraPoller(mock_jira_client, settings, project_map, mock_handler)
+
+    await poller._poll_once()
+    await poller._poll_once()
+
+    assert mock_handler.handle.call_count == 2
 
 
 @pytest.mark.asyncio

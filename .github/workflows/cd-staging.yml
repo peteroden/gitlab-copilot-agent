@@ -22,21 +22,39 @@ jobs:
   smoke-test:
     needs: deploy
     runs-on: ubuntu-latest
-    permissions: {}
+    environment: staging
+    permissions:
+      id-token: write
     steps:
-      - name: Health check
+      - name: Azure login
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Wait for controller revision health
         run: |
-          FQDN="${{ needs.deploy.outputs.controller_fqdn }}"
-          if [[ -z "$FQDN" ]]; then
-            echo "::warning::controller_fqdn is empty — staging environment may not be provisioned yet"
-            exit 0
-          fi
           for i in $(seq 1 30); do
-            if curl -sf "https://${FQDN}/health"; then
-              echo "✓ Staging controller healthy"
+            revision=$(az containerapp show \
+              -g rg-copilot-staging \
+              -n ca-controller \
+              --query 'properties.latestRevisionName' \
+              -o tsv)
+            state=$(az containerapp revision list \
+              -g rg-copilot-staging \
+              -n ca-controller \
+              --query "[?name=='${revision}'].properties | [0].{revisionName: '${revision}', provisioningState: provisioningState, healthState: healthState, replicas: replicas, runningState: runningState}" \
+              -o json)
+            echo "$state"
+            if [[ -n "$revision" \
+               && $(echo "$state" | jq -r '.revisionName // empty') == "$revision" \
+               && $(echo "$state" | jq -r '.provisioningState // empty') == "Provisioned" \
+              && $(echo "$state" | jq -r '.healthState // empty') == "Healthy" ]]; then
+              echo "✓ Staging controller revision healthy"
               exit 0
             fi
             sleep 10
           done
-          echo "::error::Staging controller health check failed after 5 minutes"
+          echo "::error::Staging controller revision did not become healthy after 5 minutes"
           exit 1

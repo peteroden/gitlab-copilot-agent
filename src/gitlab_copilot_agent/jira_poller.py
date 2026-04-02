@@ -13,6 +13,7 @@ from gitlab_copilot_agent.config import JiraSettings
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_models import JiraIssue
 from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
+from gitlab_copilot_agent.task_executor import TaskExecutionError
 from gitlab_copilot_agent.telemetry import get_tracer
 
 log = structlog.get_logger()
@@ -112,5 +113,9 @@ class JiraPoller:
                                 reason="project_not_in_allowlist",
                             )
                             continue
-                        await self._handler.handle(issue, mapping)
+                        try:
+                            await self._handler.handle(issue, mapping)
+                        except TaskExecutionError:
+                            await log.awarning("jira_task_execution_failed", issue=issue.key)
+                            continue
                         self._processed_issues.add(issue.key)

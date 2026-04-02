@@ -243,11 +243,11 @@ class TestParseResult:
 
     def test_error_result_returns_review_with_message(self) -> None:
         from gitlab_copilot_agent.aca_executor import _parse_result
+        from gitlab_copilot_agent.task_executor import TaskExecutionError
 
         error_msg = "Copilot session timed out after 30s"
         raw = json.dumps(
             {"result_type": "error", "error": True, "summary": f"Task failed: {error_msg}"}
         )
-        result = _parse_result(raw, "coding")
-        assert isinstance(result, ReviewResult)
-        assert error_msg in result.summary
+        with pytest.raises(TaskExecutionError, match=error_msg):
+            _parse_result(raw, "coding")

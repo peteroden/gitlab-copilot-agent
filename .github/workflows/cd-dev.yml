@@ -11,6 +11,9 @@ concurrency:
 
 jobs:
   deploy:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/deploy.yml
     with:
       environment: dev
@@ -23,28 +26,52 @@ jobs:
 
   smoke-test:
     needs: deploy
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    permissions: {}
+    environment: dev
+    permissions:
+      id-token: write
     steps:
-      - name: Health check
+      - name: Azure login
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Wait for controller revision health
         run: |
-          FQDN="${{ needs.deploy.outputs.controller_fqdn }}"
-          if [[ -z "$FQDN" ]]; then
-            echo "::warning::controller_fqdn is empty — dev environment may not be provisioned yet"
-            exit 0
-          fi
           for i in $(seq 1 30); do
-            if curl -sf "https://${FQDN}/health"; then
-              echo "✓ Controller healthy"
+            revision=$(az containerapp show \
+              -g rg-copilot-dev \
+              -n ca-controller \
+              --query 'properties.latestRevisionName' \
+              -o tsv)
+            state=$(az containerapp revision list \
+              -g rg-copilot-dev \
+              -n ca-controller \
+              --query "[?name=='${revision}'].properties | [0].{revisionName: '${revision}', provisioningState: provisioningState, healthState: healthState, replicas: replicas, runningState: runningState}" \
+              -o json)
+            echo "$state"
+            if [[ -n "$revision" \
+               && $(echo "$state" | jq -r '.revisionName // empty') == "$revision" \
+               && $(echo "$state" | jq -r '.provisioningState // empty') == "Provisioned" \
+              && $(echo "$state" | jq -r '.healthState // empty') == "Healthy" ]]; then
+              echo "✓ Controller revision healthy"
               exit 0
             fi
             sleep 10
           done
-          echo "::error::Controller health check failed after 5 minutes"
+          echo "::error::Controller revision did not become healthy after 5 minutes"
           exit 1
 
   integration-test:
     needs: [deploy, smoke-test]
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     environment: dev
     permissions:
@@ -53,16 +80,20 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - name: Record test start time
+        id: test-time
+        run: echo "start=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Run ACA integration tests
         env:
-          CONTROLLER_FQDN: ${{ needs.deploy.outputs.controller_fqdn }}
           GITLAB_URL: https://gitlab.com
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           GITLAB_PROJECT: peteroden/e2e-aca-test
           JIRA_URL: ${{ vars.JIRA_URL }}
           JIRA_EMAIL: ${{ vars.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          JIRA_ISSUE_KEY: E2EACA-1
+          JIRA_PROJECT_KEY: E2EACA
+          JIRA_TRIGGER_STATUS: Selected for Development
         run: uv run python tests/e2e/aca_integration.py
 
       - name: Azure login (for log collection)
@@ -75,9 +106,73 @@ jobs:
 
       - name: Collect ACA logs
         if: failure()
+        env:
+          TEST_START: ${{ steps.test-time.outputs.start }}
         run: |
           mkdir -p /tmp/aca-logs
-          az containerapp logs show -n ca-controller -g rg-copilot-dev --type console > /tmp/aca-logs/controller.log 2>&1 || true
+          echo "Collecting logs since ${TEST_START}"
+
+          # Controller live logs (capped at 300 lines by Azure CLI)
+          az containerapp logs show \
+            -n ca-controller -g rg-copilot-dev \
+            --type console --tail 300 \
+            > /tmp/aca-logs/controller-live.log 2>&1 || true
+
+          # Task runner job execution logs — executions started during this test run
+          for exec_name in $(az containerapp job execution list \
+            -g rg-copilot-dev -n job-task-runner \
+            --query "[?properties.startTime>='${TEST_START}'].name" \
+            -o tsv 2>/dev/null); do
+            az containerapp job logs show \
+              -g rg-copilot-dev -n job-task-runner \
+              --container task \
+              --execution "$exec_name" --tail 300 \
+              > "/tmp/aca-logs/job-${exec_name}.log" 2>&1 || true
+          done
+
+          # Full logs from Log Analytics (not truncated, survives pod cleanup)
+          LA_WORKSPACE=$(az containerapp env show \
+            -g rg-copilot-dev -n cae-rg-copilot-dev \
+            --query 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId' \
+            -o tsv 2>/dev/null || true)
+          if [ -n "$LA_WORKSPACE" ]; then
+            la_filter="where TimeGenerated >= datetime('${TEST_START}')"
+            az monitor log-analytics query \
+              --workspace "$LA_WORKSPACE" \
+              --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s contains 'controller' | ${la_filter} | project TimeGenerated, Log_s | order by TimeGenerated asc" \
+              -o table \
+              > /tmp/aca-logs/controller-la.log 2>&1 || true
+            az monitor log-analytics query \
+              --workspace "$LA_WORKSPACE" \
+              --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s contains 'task-runner' | ${la_filter} | project TimeGenerated, Log_s | order by TimeGenerated asc" \
+              -o table \
+              > /tmp/aca-logs/task-runner-la.log 2>&1 || true
+          fi
+
+          # Result blobs modified during this test run
+          ACCOUNT_URL=$(az containerapp show \
+            -g rg-copilot-dev -n ca-controller \
+            --query 'properties.template.containers[0].env[?name==`AZURE_STORAGE_ACCOUNT_URL`].value | [0]' \
+            -o tsv 2>/dev/null || true)
+          if [ -n "$ACCOUNT_URL" ]; then
+            az storage blob list \
+              --account-url "$ACCOUNT_URL" \
+              --container-name task-data \
+              --prefix results/ \
+              --auth-mode login \
+              --query "[?properties.lastModified>='${TEST_START}'].name" \
+              -o tsv 2>/dev/null | while read -r blob; do
+                safe_name=$(echo "$blob" | tr '/' '_')
+                az storage blob download \
+                  --account-url "$ACCOUNT_URL" \
+                  --container-name task-data \
+                  --name "$blob" \
+                  --auth-mode login \
+                  --file "/tmp/aca-logs/${safe_name}" 2>/dev/null || true
+            done
+          fi
+
+          ls -la /tmp/aca-logs/
 
       - name: Upload logs
         if: failure()
