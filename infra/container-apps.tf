@@ -159,15 +159,15 @@ resource "azapi_update_resource" "cae_otlp" {
 # Empty values (env-scoped secrets not set for this environment) are excluded.
 # nonsensitive() is safe here — we only use the *keys* (secret names), never values.
 locals {
-  _kv_active_keys = toset([for k, v in var.kv_bootstrap_secrets : k if nonsensitive(v) != ""])
+  kv_active_keys = toset([for k, v in var.kv_bootstrap_secrets : k if nonsensitive(v) != ""])
   kv_secrets_runner = merge(
     var.copilot_auth == "github_token" ? { "github-token" = "github-token" } : {},
     var.copilot_auth == "byok" ? { "copilot-api-key" = "copilot-api-key" } : {},
   )
   kv_secrets_controller = merge(
     local.kv_secrets_runner,
-    { for k in local._kv_active_keys : k => k if startswith(k, "gitlab-token") },
-    { for k in local._kv_active_keys : k => k if k == "jira-api-token" },
+    { for k in local.kv_active_keys : k => k if startswith(k, "gitlab-token") },
+    { for k in local.kv_active_keys : k => k if k == "jira-api-token" },
   )
 }
 
