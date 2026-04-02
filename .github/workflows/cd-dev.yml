@@ -122,6 +122,19 @@ jobs:
               > "/tmp/aca-logs/job-${exec_name}.log" 2>&1 || true
           done
 
+          # Task runner logs from Log Analytics (survives pod cleanup)
+          LA_WORKSPACE=$(az containerapp env show \
+            -g rg-copilot-dev -n cae-rg-copilot-dev \
+            --query 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId' \
+            -o tsv 2>/dev/null || true)
+          if [ -n "$LA_WORKSPACE" ]; then
+            az monitor log-analytics query \
+              --workspace "$LA_WORKSPACE" \
+              --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s contains 'task-runner' | where TimeGenerated > ago(30m) | project TimeGenerated, Log_s | order by TimeGenerated asc" \
+              -o table \
+              > /tmp/aca-logs/task-runner-la.log 2>&1 || true
+          fi
+
           # Result blobs — download recent error results for inspection
           start_time=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
           ACCOUNT_URL=$(az containerapp show \

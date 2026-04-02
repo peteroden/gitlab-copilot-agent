@@ -119,13 +119,15 @@ async def run_copilot_session(
                 )
                 await client.start()
                 auth_status = await client.get_auth_status()
+                auth_type = getattr(auth_status, "authType", None)
+                is_authenticated = getattr(auth_status, "isAuthenticated", None)
                 await log.ainfo(
                     "copilot_client_started",
                     cli_path=cli_path,
                     working_directory=repo_path,
                     task_type=task_type,
-                    auth_type=getattr(auth_status, "authType", None),
-                    is_authenticated=getattr(auth_status, "isAuthenticated", None),
+                    auth_type=auth_type,
+                    is_authenticated=is_authenticated,
                     has_token=bool(settings.github_token),
                 )
 
@@ -210,10 +212,13 @@ async def run_copilot_session(
                                 error_type=session_error.get("type"),
                                 error_message=session_error.get("message"),
                                 task_type=task_type,
+                                auth_type=auth_type,
+                                is_authenticated=is_authenticated,
                             )
+                            auth_info = f"[auth={auth_type}, ok={is_authenticated}]"
                             raise RuntimeError(
                                 f"Copilot session error ({session_error.get('type')}): "
-                                f"{session_error.get('message')}"
+                                f"{session_error.get('message')} {auth_info}"
                             )
 
                         result = messages[-1] if messages else ""
@@ -243,11 +248,14 @@ async def run_copilot_session(
                                         error_type=session_error.get("type"),
                                         error_message=session_error.get("message"),
                                         task_type=task_type,
+                                        auth_type=auth_type,
+                                        is_authenticated=is_authenticated,
                                     )
+                                    auth_info = f"[auth={auth_type}, ok={is_authenticated}]"
                                     raise RuntimeError(
                                         f"Copilot session error on retry "
                                         f"({session_error.get('type')}): "
-                                        f"{session_error.get('message')}"
+                                        f"{session_error.get('message')} {auth_info}"
                                     )
 
                                 result = messages[-1] if messages else result
