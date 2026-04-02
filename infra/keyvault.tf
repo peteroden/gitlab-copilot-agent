@@ -99,6 +99,7 @@ resource "null_resource" "kv_seed_secrets" {
     vault_name   = azurerm_key_vault.main.name
     secret_names = join(",", keys(nonsensitive(var.kv_bootstrap_secrets)))
     secrets_hash = sha256(jsonencode(var.kv_bootstrap_secrets))
+    always_run   = timestamp()
   }
 
   provisioner "local-exec" {
