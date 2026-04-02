@@ -141,18 +141,35 @@ async def _build_coding_result(
 ) -> str:
     """Stage explicitly listed files, capture diff against pre-session HEAD."""
     agent_output = parse_agent_output(summary)
-    if not agent_output or not agent_output.files_changed:
-        raise RuntimeError(
-            "Agent did not return a valid files_changed list. "
-            "Cannot determine which files to commit."
+    result_summary = agent_output.summary if agent_output else "Applied coding task changes."
+    used_changed_paths_fallback = False
+    if agent_output and agent_output.files_changed:
+        for f in agent_output.files_changed:
+            if ".." in f.split("/"):
+                await bound_log.awarning("path_traversal_skipped", file=f)
+                continue
+            await _run_git_simple(repo_path, "add", "--", f)
+        await bound_log.ainfo("staged_explicit_files", count=len(agent_output.files_changed))
+    else:
+        if not agent_output:
+            excerpt = summary[:500] + ("…" if len(summary) > 500 else "")
+            await bound_log.awarning("agent_output_parse_failed", raw_excerpt=excerpt)
+        changed_paths = await _list_changed_paths(repo_path)
+        if not changed_paths:
+            raise RuntimeError(
+                "Agent did not return a valid files_changed list and no repo changes were found."
+            )
+        used_changed_paths_fallback = True
+        await bound_log.awarning(
+            "files_changed_missing_fallback",
+            changed_path_count=len(changed_paths),
+            used_changed_paths_fallback=True,
         )
-
-    for f in agent_output.files_changed:
-        if ".." in f.split("/"):
-            await bound_log.awarning("path_traversal_skipped", file=f)
-            continue
-        await _run_git_simple(repo_path, "add", "--", f)
-    await bound_log.ainfo("staged_explicit_files", count=len(agent_output.files_changed))
+        for path in changed_paths:
+            if ".." in path.split("/"):
+                await bound_log.awarning("path_traversal_skipped", file=path)
+                continue
+            await _run_git_simple(repo_path, "add", "-A", "--", path)
 
     # Capture staged diff first. If empty, the agent may have already
     # committed — fall back to diffing against the pre-session HEAD.
@@ -166,6 +183,10 @@ async def _build_coding_result(
                 current_sha=current_sha[:12],
             )
             patch = await _run_git_simple(repo_path, "diff", pre_session_sha, "HEAD", "--binary")
+        elif used_changed_paths_fallback:
+            raise RuntimeError(
+                "Agent did not return a valid files_changed list and no patch could be derived."
+            )
 
     if len(patch.encode()) > MAX_PATCH_SIZE:
         raise RuntimeError(f"Patch size {len(patch.encode())} exceeds limit {MAX_PATCH_SIZE}")
@@ -175,7 +196,7 @@ async def _build_coding_result(
     return json.dumps(
         {
             "result_type": "coding",
-            "summary": agent_output.summary,
+            "summary": result_summary,
             "patch": patch,
             "base_sha": pre_session_sha,
         }
@@ -196,6 +217,19 @@ async def _run_git_simple(repo_path: Path, *args: str) -> str:
     if proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args[:2])} failed: {stderr.decode().strip()}")
     return stdout.decode().strip()
+
+
+async def _list_changed_paths(repo_path: Path) -> list[str]:
+    """Return changed tracked and untracked paths, excluding ignored files."""
+    tracked = await _run_git_simple(repo_path, "diff", "--name-only", "--relative")
+    staged = await _run_git_simple(repo_path, "diff", "--cached", "--name-only", "--relative")
+    untracked = await _run_git_simple(repo_path, "ls-files", "--others", "--exclude-standard")
+    paths = {
+        line.strip()
+        for line in tracked.splitlines() + staged.splitlines() + untracked.splitlines()
+        if line.strip()
+    }
+    return sorted(paths)
 
 
 async def run_task() -> int:  # noqa: C901 — dispatch routing requires branching
@@ -276,6 +310,11 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
             validate_response=_coding_response_validator if task_type == "coding" else None,
             plugins=plugins,
         )
+        await bound_log.ainfo(
+            "copilot_session_complete",
+            summary_length=len(summary),
+            summary_empty=not summary,
+        )
         if task_type == "coding":
             assert pre_session_sha is not None
             result = await _build_coding_result(repo_path, summary, bound_log, pre_session_sha)
@@ -290,10 +329,15 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
     except Exception as exc:
         import traceback
 
-        await bound_log.aerror("task_failed", error=str(exc), traceback=traceback.format_exc())
-        error_result = json.dumps(
-            {"result_type": "error", "error": True, "summary": f"Task failed: {exc}"}
-        )
+        tb = traceback.format_exc()
+        await bound_log.aerror("task_failed", error=str(exc), traceback=tb)
+        error_detail: dict[str, object] = {
+            "result_type": "error",
+            "error": True,
+            "summary": f"Task failed: {exc}",
+            "traceback": tb,
+        }
+        error_result = json.dumps(error_detail)
         try:
             await _store_result(task_id, error_result, settings)
             if task_queue and queue_msg:

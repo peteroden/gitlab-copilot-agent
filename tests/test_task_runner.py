@@ -14,6 +14,7 @@ from gitlab_copilot_agent.task_runner import (
     _coding_response_validator,
     _dequeue_task,
     _get_required_env,
+    _list_changed_paths,
     _parse_task_payload,
     _store_result,
     run_task,
@@ -265,6 +266,73 @@ class TestBuildCodingResult:
         assert data["base_sha"] == "abc123"
         # Verify fallback diff was called with pre-session SHA
         git_mock.assert_any_await(Path("/repo"), "diff", "abc123", "HEAD", "--binary")
+
+    async def test_invalid_agent_output_falls_back_to_changed_paths(self) -> None:
+        """Malformed or missing files_changed falls back to staging changed paths only."""
+        git_mock = AsyncMock(return_value="")
+        with (
+            patch(f"{_M}._run_git_simple", git_mock),
+            patch(
+                f"{_M}._list_changed_paths",
+                AsyncMock(return_value=["src/app.py", "tests/test_app.py"]),
+            ),
+            patch(f"{_M}.git_head_sha", AsyncMock(return_value="abc123")),
+            patch(f"{_M}.git_diff_staged", AsyncMock(return_value="diff --git ...")),
+        ):
+            result = await _build_coding_result(
+                Path("/repo"),
+                "I updated the FastAPI app and tests.",
+                AsyncMock(),
+                "abc123",
+            )
+        data = json.loads(result)
+        assert data["summary"] == "Applied coding task changes."
+        assert data["patch"] == "diff --git ..."
+        assert git_mock.await_count == 2
+        git_mock.assert_any_await(Path("/repo"), "add", "-A", "--", "src/app.py")
+        git_mock.assert_any_await(Path("/repo"), "add", "-A", "--", "tests/test_app.py")
+
+    async def test_list_changed_paths_combines_tracked_staged_and_untracked(self) -> None:
+        """Fallback path discovery includes unstaged, staged, and untracked paths."""
+        git_mock = AsyncMock(
+            side_effect=[
+                "src/app.py\nsrc/old.py\n",
+                "src/staged.py\n",
+                "tests/test_app.py\n",
+            ]
+        )
+        with patch(f"{_M}._run_git_simple", git_mock):
+            paths = await _list_changed_paths(Path("/repo"))
+        assert paths == ["src/app.py", "src/old.py", "src/staged.py", "tests/test_app.py"]
+
+    async def test_invalid_agent_output_without_repo_changes_fails_closed(self) -> None:
+        """Malformed output still fails when no repo changes can be recovered."""
+        with (
+            patch(f"{_M}._list_changed_paths", AsyncMock(return_value=[])),
+            pytest.raises(RuntimeError, match="did not return a valid files_changed list"),
+        ):
+            await _build_coding_result(
+                Path("/repo"),
+                "I updated the FastAPI app and tests.",
+                AsyncMock(),
+                "abc123",
+            )
+
+    async def test_failure_logs_agent_response_excerpt(self) -> None:
+        """Structured log includes raw agent response excerpt for operators."""
+        agent_response = "I tried but could not make changes to the repository."
+        mock_log = AsyncMock()
+        with (
+            patch(f"{_M}._list_changed_paths", AsyncMock(return_value=[])),
+            pytest.raises(RuntimeError, match="did not return a valid files_changed list"),
+        ):
+            await _build_coding_result(
+                Path("/repo"),
+                agent_response,
+                mock_log,
+                "abc123",
+            )
+        mock_log.awarning.assert_any_await("agent_output_parse_failed", raw_excerpt=agent_response)
 
 
 _STATE_MOD = "gitlab_copilot_agent.state"

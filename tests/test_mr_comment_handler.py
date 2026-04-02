@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from gitlab_copilot_agent.models import (
     NoteMergeRequest,
     NoteObjectAttributes,
@@ -11,7 +13,7 @@ from gitlab_copilot_agent.models import (
     WebhookUser,
 )
 from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
-from gitlab_copilot_agent.task_executor import CodingResult
+from gitlab_copilot_agent.task_executor import CodingResult, TaskExecutionError
 from tests.conftest import GITLAB_TOKEN, MR_IID, PROJECT_ID, make_settings
 
 PER_PROJECT_TOKEN = "project-specific-token"
@@ -140,3 +142,25 @@ async def test_handle_falls_back_to_settings_token(
     # GitLabClient created with global token from settings
     mock_gl_class.assert_called_once()
     assert mock_gl_class.call_args[0][1] == GITLAB_TOKEN
+
+
+@patch("gitlab_copilot_agent.mr_comment_handler.GitLabClient")
+@patch("gitlab_copilot_agent.mr_comment_handler.git_clone")
+async def test_handle_task_execution_failure_posts_error_comment(
+    mock_clone: AsyncMock,
+    mock_gl_class: AsyncMock,
+    tmp_path: Path,
+) -> None:
+    mock_clone.return_value = tmp_path
+    mock_executor = AsyncMock()
+    mock_executor.execute.side_effect = TaskExecutionError("Task failed: runner error")
+    mock_gl = AsyncMock()
+    mock_gl_class.return_value = mock_gl
+
+    with pytest.raises(TaskExecutionError, match="runner error"):
+        await handle_copilot_comment(make_settings(), _make_note_payload(), executor=mock_executor)
+
+    mock_gl.post_mr_comment.assert_awaited_once()
+    comment = mock_gl.post_mr_comment.call_args[0][2]
+    assert "Agent encountered an error processing your request" in comment
+    assert "runner error" in comment

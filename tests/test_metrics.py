@@ -19,7 +19,7 @@ from gitlab_copilot_agent.models import (
     WebhookUser,
 )
 from gitlab_copilot_agent.orchestrator import handle_review
-from gitlab_copilot_agent.task_executor import ReviewResult
+from gitlab_copilot_agent.task_executor import ReviewResult, TaskExecutionError
 from tests.conftest import (
     DIFF_REFS,
     EXAMPLE_CLONE_URL,
@@ -197,6 +197,32 @@ async def test_review_pipeline_records_error_metrics(
     mock_total.add.assert_called_once_with(1, {"outcome": "error"})
     mock_duration.record.assert_called_once()
     assert mock_duration.record.call_args[0][1] == {"outcome": "error"}
+
+
+@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
+@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+async def test_review_task_execution_failure_posts_comment_without_raising(
+    _mock_gl: MagicMock,
+    mock_client_class: MagicMock,
+    mock_run_review: AsyncMock,
+) -> None:
+    mock_gl = mock_client_class.return_value
+    mock_gl.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
+    mock_gl.cleanup = AsyncMock()
+    mock_gl.get_mr_details = AsyncMock(
+        return_value=MRDetails(title="t", description=None, diff_refs=DIFF_REFS, changes=[])
+    )
+    mock_gl.post_mr_comment = AsyncMock()
+    mock_run_review.side_effect = TaskExecutionError("Task failed: runner error")
+
+    with pytest.raises(TaskExecutionError, match="runner error"):
+        await handle_review(make_settings(), _make_payload(), AsyncMock())
+
+    mock_gl.post_mr_comment.assert_awaited_once()
+    comment = mock_gl.post_mr_comment.call_args[0][2]
+    assert "Automated review failed" in comment
+    assert "runner error" in comment
 
 
 async def test_webhook_records_error_metric_on_background_failure(

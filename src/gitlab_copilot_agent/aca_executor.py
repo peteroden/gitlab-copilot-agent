@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING
 import structlog
 
 from gitlab_copilot_agent.git_operations import tar_repo_to_bytes
-from gitlab_copilot_agent.task_executor import CodingResult, ReviewResult, TaskResult
+from gitlab_copilot_agent.task_executor import (
+    CodingResult,
+    ReviewResult,
+    TaskExecutionError,
+    TaskResult,
+)
 
 if TYPE_CHECKING:
     from gitlab_copilot_agent.concurrency import ResultStore, TaskQueue
@@ -47,8 +52,9 @@ def _parse_result(raw: str, task_type: str) -> TaskResult:
                 return CodingResult.model_validate(data)
             if data["result_type"] == "error":
                 summary = str(data.get("summary", "Task failed (unknown error)"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
-                log.error("task_error_result", summary=summary)
-                return ReviewResult(summary=summary)
+                tb = data.get("traceback", "")  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+                log.error("task_error_result", summary=summary, remote_traceback=tb)
+                raise TaskExecutionError(summary)
             return ReviewResult.model_validate(data)
     except (json.JSONDecodeError, ValueError):
         pass

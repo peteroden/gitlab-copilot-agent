@@ -118,6 +118,37 @@ async def run_copilot_session(
                     ),
                 )
                 await client.start()
+                auth_status = await client.get_auth_status()
+                auth_type = getattr(auth_status, "authType", None)
+                is_authenticated = getattr(auth_status, "isAuthenticated", None)
+                await log.ainfo(
+                    "copilot_client_started",
+                    cli_path=cli_path,
+                    working_directory=repo_path,
+                    task_type=task_type,
+                    auth_type=auth_type,
+                    is_authenticated=is_authenticated,
+                    has_token=bool(settings.github_token),
+                )
+                if not is_authenticated and not settings.copilot_provider_type:
+                    await log.aerror(
+                        "copilot_auth_failed",
+                        auth_type=auth_type,
+                        has_token=bool(settings.github_token),
+                        hint=(
+                            "The GitHub token is missing or invalid. "
+                            "Rotate the GITHUB_TOKEN secret with a PAT "
+                            "that has the 'copilot' scope (classic) or "
+                            "'Copilot requests: read' permission "
+                            "(fine-grained)."
+                        ),
+                    )
+                    raise RuntimeError(
+                        "Copilot authentication failed: the configured "
+                        "GITHUB_TOKEN is missing, expired, or lacks "
+                        "required scopes. Rotate the token in Key Vault "
+                        f"[auth_type={auth_type}]"
+                    )
 
                 try:
                     repo_config = discover_repo_config(repo_path)
@@ -170,6 +201,7 @@ async def run_copilot_session(
                     try:
                         done = asyncio.Event()
                         messages: list[str] = []
+                        session_error: dict[str, str] = {}
 
                         def on_event(event: Any) -> None:  # pyright: ignore[reportExplicitAny]
                             match getattr(event, "type", None):
@@ -177,6 +209,13 @@ async def run_copilot_session(
                                     content = getattr(event.data, "content", "")
                                     if content:
                                         messages.append(content)
+                                case t if t and t.value == "session.error":
+                                    data = getattr(event, "data", None)
+                                    session_error["type"] = str(
+                                        getattr(data, "error_type", "unknown")
+                                    )
+                                    session_error["message"] = str(getattr(data, "message", ""))
+                                    done.set()
                                 case t if t and t.value == "session.idle":
                                     done.set()
                                 case _:
@@ -186,7 +225,29 @@ async def run_copilot_session(
                         await session.send(user_prompt)
                         await asyncio.wait_for(done.wait(), timeout=timeout)
 
+                        if session_error:
+                            await log.aerror(
+                                "copilot_session_error",
+                                error_type=session_error.get("type"),
+                                error_message=session_error.get("message"),
+                                task_type=task_type,
+                                auth_type=auth_type,
+                                is_authenticated=is_authenticated,
+                            )
+                            auth_info = f"[auth={auth_type}, ok={is_authenticated}]"
+                            raise RuntimeError(
+                                f"Copilot session error ({session_error.get('type')}): "
+                                f"{session_error.get('message')} {auth_info}"
+                            )
+
                         result = messages[-1] if messages else ""
+                        await log.ainfo(
+                            "copilot_session_first_result",
+                            message_count=len(messages),
+                            result_length=len(result),
+                            result_empty=not result,
+                            task_type=task_type,
+                        )
 
                         if validate_response is not None:
                             follow_up = validate_response(result)
@@ -196,11 +257,35 @@ async def run_copilot_session(
                                 )
                                 done.clear()
                                 messages.clear()
+                                session_error.clear()
                                 await session.send(follow_up)
                                 await asyncio.wait_for(done.wait(), timeout=timeout)
+
+                                if session_error:
+                                    await log.aerror(
+                                        "copilot_session_retry_error",
+                                        error_type=session_error.get("type"),
+                                        error_message=session_error.get("message"),
+                                        task_type=task_type,
+                                        auth_type=auth_type,
+                                        is_authenticated=is_authenticated,
+                                    )
+                                    auth_info = f"[auth={auth_type}, ok={is_authenticated}]"
+                                    raise RuntimeError(
+                                        f"Copilot session error on retry "
+                                        f"({session_error.get('type')}): "
+                                        f"{session_error.get('message')} {auth_info}"
+                                    )
+
                                 result = messages[-1] if messages else result
+                                await log.ainfo(
+                                    "copilot_session_retry_result",
+                                    message_count=len(messages),
+                                    result_length=len(result),
+                                    result_empty=not result,
+                                )
                     finally:
-                        await session.destroy()
+                        await session.disconnect()
                 finally:
                     await client.stop()
                 return result

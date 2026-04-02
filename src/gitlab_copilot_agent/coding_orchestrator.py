@@ -25,7 +25,7 @@ from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_models import JiraIssue
 from gitlab_copilot_agent.metrics import coding_tasks_duration, coding_tasks_total
 from gitlab_copilot_agent.project_registry import ResolvedProject
-from gitlab_copilot_agent.task_executor import TaskExecutor
+from gitlab_copilot_agent.task_executor import TaskExecutionError, TaskExecutor
 from gitlab_copilot_agent.telemetry import get_tracer
 
 log = structlog.get_logger()
@@ -161,6 +161,17 @@ class CodingOrchestrator:
                         )
                     except Exception:
                         await bound_log.aexception("failure_comment_post_failed")
+                except TaskExecutionError as exc:
+                    await bound_log.aexception("coding_task_execution_failed")
+                    outcome = "task_failure"
+                    try:
+                        await self._jira.add_comment(
+                            issue.key,
+                            f"⚠️ Automated implementation failed.\n\n**Error:** {exc}",
+                        )
+                    except Exception:
+                        await bound_log.aexception("failure_comment_post_failed")
+                    raise
                 except Exception:
                     await bound_log.aexception("coding_task_failed")
                     try:
