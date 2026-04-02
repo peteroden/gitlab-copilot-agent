@@ -500,15 +500,17 @@ Alias matching is case-insensitive. Startup fails fast if a binding references a
 
 ### Adding a Per-Project GitLab Token
 
-Create a **project access token** in GitLab (Settings → Access Tokens) with these scopes:
+Create a **project access token** in GitLab (Settings → Access Tokens) with these settings:
+
+**Role:** **Developer** (minimum). Guest and Reporter are insufficient — the agent needs Developer-level access to list merge requests, post comments, push code, and resolve threads.
+
+**Scopes:**
 
 | Scope | Required for |
 |-------|-------------|
 | `api` | MR details, discussions, posting comments, resolving threads |
 | `read_repository` | Git clone for code review and discussion context |
 | `write_repository` | Git push for coding tasks (commit changes from @mention requests) |
-
-Set the role to **Developer** or higher.
 
 When deploying to Azure Container Apps, three files need updating:
 
