@@ -365,3 +365,48 @@ async def test_health_with_poller(client: AsyncClient) -> None:
     assert data["gitlab_poller"]["watermark"] == "2026-01-01T00:00:00Z"
 
     del app.state.gl_poller
+
+
+@pytest.mark.asyncio
+async def test_jira_status_env_vars_backfill_into_rendered_bindings(
+    env_vars: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Global JIRA_*_STATUS env vars backfill into RenderedBindings missing explicit overrides."""
+    monkeypatch.setenv("JIRA_URL", JIRA_URL)
+    monkeypatch.setenv("JIRA_EMAIL", JIRA_EMAIL)
+    monkeypatch.setenv("JIRA_API_TOKEN", JIRA_TOKEN)
+    monkeypatch.setenv("JIRA_TRIGGER_STATUS", "Selected for Development")
+    monkeypatch.setenv("JIRA_IN_PROGRESS_STATUS", "Working")
+    monkeypatch.setenv("JIRA_IN_REVIEW_STATUS", "Code Review")
+    monkeypatch.setenv("JIRA_PROJECT_MAP", JIRA_PROJECT_MAP_JSON)
+
+    test_app = FastAPI()
+    captured_rendered = {}
+
+    async def capture_rendered(rendered, *_a, **_kw):
+        for key, binding in rendered.mappings.items():
+            captured_rendered[key] = {
+                "trigger_status": binding.trigger_status,
+                "in_progress_status": binding.in_progress_status,
+                "in_review_status": binding.in_review_status,
+            }
+        return AsyncMock()
+
+    with (
+        patch("gitlab_copilot_agent.main.JiraClient", return_value=AsyncMock(close=AsyncMock())),
+        patch(
+            "gitlab_copilot_agent.main.JiraPoller",
+            return_value=AsyncMock(start=AsyncMock(), stop=AsyncMock()),
+        ),
+        patch("gitlab_copilot_agent.main.CodingOrchestrator"),
+        patch("gitlab_copilot_agent.main.CredentialRegistry"),
+        patch("gitlab_copilot_agent.main.ProjectRegistry") as mock_reg_cls,
+    ):
+        mock_reg_cls.from_rendered_map = AsyncMock(side_effect=capture_rendered)
+        async with lifespan(test_app):
+            pass
+
+    assert captured_rendered["PROJ"]["trigger_status"] == "Selected for Development"
+    assert captured_rendered["PROJ"]["in_progress_status"] == "Working"
+    assert captured_rendered["PROJ"]["in_review_status"] == "Code Review"

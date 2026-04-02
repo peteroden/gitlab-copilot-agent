@@ -164,6 +164,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.jira:
         jira_client = JiraClient(settings.jira.url, settings.jira.email, settings.jira.api_token)
         rendered = RenderedMap.model_validate_json(settings.jira.project_map_json)
+        # Backfill global Jira status env vars into bindings that lack explicit
+        # overrides — preserves backward compatibility for JSON configs authored
+        # before per-project status fields were added.
+        for binding in rendered.mappings.values():
+            if binding.trigger_status == "AI Ready" and settings.jira.trigger_status != "AI Ready":
+                binding.trigger_status = settings.jira.trigger_status
+            if (
+                binding.in_progress_status == "In Progress"
+                and settings.jira.in_progress_status != "In Progress"
+            ):
+                binding.in_progress_status = settings.jira.in_progress_status
+            if (
+                binding.in_review_status == "In Review"
+                and settings.jira.in_review_status != "In Review"
+            ):
+                binding.in_review_status = settings.jira.in_review_status
         creds = CredentialRegistry.from_env()
         try:
             project_registry = await ProjectRegistry.from_rendered_map(
