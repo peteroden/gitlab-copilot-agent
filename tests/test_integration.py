@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import AsyncClient
 
-from gitlab_copilot_agent.discussion_models import AgentIdentity, DiscussionHistory
+from gitlab_copilot_agent.discussion_models import (
+    AgentIdentity,
+    Discussion,
+    DiscussionHistory,
+    DiscussionNote,
+)
 from gitlab_copilot_agent.gitlab_client import MRDetails
 from gitlab_copilot_agent.models import (
     MergeRequestWebhookPayload,
@@ -131,6 +136,43 @@ async def test_orchestrator_cleans_up_on_error(
 
 _AGENT_IDENTITY = AgentIdentity(user_id=99, username="copilot-bot")
 
+_SAMPLE_DISCUSSIONS = [
+    Discussion(
+        discussion_id="disc-001",
+        notes=[
+            DiscussionNote(
+                note_id=501,
+                author_id=_AGENT_IDENTITY.user_id,
+                author_username=_AGENT_IDENTITY.username,
+                body="Consider adding a null check here.",
+                created_at="2024-01-15T10:30:00Z",
+                is_system=False,
+                resolved=False,
+                resolvable=True,
+                position={
+                    "new_path": "src/app.py",
+                    "old_path": "src/app.py",
+                    "new_line": 42,
+                    "old_line": None,
+                },
+            ),
+            DiscussionNote(
+                note_id=502,
+                author_id=1,
+                author_username="developer",
+                body="Good catch, will fix.",
+                created_at="2024-01-15T11:00:00Z",
+                is_system=False,
+                resolved=None,
+                resolvable=False,
+                position=None,
+            ),
+        ],
+        is_resolved=False,
+        is_inline=True,
+    ),
+]
+
 
 def _make_payload() -> MergeRequestWebhookPayload:
     return MergeRequestWebhookPayload(
@@ -232,3 +274,55 @@ async def test_discussion_history_failure_is_non_fatal(
     # Review still ran, but without discussion_history
     review_kwargs = mock_run_review.call_args[1]
     assert review_kwargs["discussion_history"] is None
+
+
+@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
+@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+async def test_discussion_threads_flow_through_pipeline(
+    mock_gl_class: MagicMock,
+    mock_client_class: MagicMock,
+    mock_run_review: AsyncMock,
+    mock_post_review: AsyncMock,
+) -> None:
+    """Actual discussion data (threads, authors, positions) is preserved through the pipeline."""
+    mock_gl_instance = _setup_mocks(mock_client_class, mock_run_review)
+    mock_gl_instance.list_mr_discussions = AsyncMock(return_value=_SAMPLE_DISCUSSIONS)
+
+    mock_registry = AsyncMock()
+    mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
+
+    await handle_review(
+        make_settings(),
+        _make_payload(),
+        AsyncMock(),
+        credential_registry=mock_registry,
+    )
+
+    review_kwargs = mock_run_review.call_args[1]
+    history = review_kwargs["discussion_history"]
+    assert isinstance(history, DiscussionHistory)
+
+    # Verify discussion structure is preserved
+    assert len(history.discussions) == 1
+    disc = history.discussions[0]
+    assert disc.discussion_id == "disc-001"
+    assert disc.is_inline is True
+    assert disc.is_resolved is False
+
+    # Verify thread hierarchy — root note + reply
+    assert len(disc.notes) == 2
+    root = disc.notes[0]
+    assert root.author_id == _AGENT_IDENTITY.user_id
+    assert root.body == "Consider adding a null check here."
+    assert root.position is not None
+    assert root.position["new_line"] == 42
+
+    reply = disc.notes[1]
+    assert reply.author_id == 1
+    assert reply.author_username == "developer"
+
+    # Verify agent can distinguish own comments
+    assert root.author_id == history.agent.user_id
+    assert reply.author_id != history.agent.user_id

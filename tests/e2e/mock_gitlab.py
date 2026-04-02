@@ -93,8 +93,35 @@ async def get_mr_changes(project_id: int, mr_iid: int) -> dict:
 
 @app.get("/api/v4/projects/{project_id}/merge_requests/{mr_iid}/discussions")
 async def list_mr_discussions(project_id: int, mr_iid: int) -> list[dict]:
-    """Return empty discussion list (Feature 1, #321)."""
-    return []
+    """Return mock discussion threads for the MR (#321).
+
+    Returns any discussions previously posted via POST /discussions,
+    formatted as GitLab API discussion objects with thread structure.
+    """
+    result: list[dict] = []
+    for i, disc in enumerate(discussions):
+        if disc.get("_type") == "note":
+            continue
+        result.append(
+            {
+                "id": f"disc-{i}",
+                "individual_note": False,
+                "notes": [
+                    {
+                        "id": 1000 + i,
+                        "type": "DiffNote" if disc.get("position") else "DiscussionNote",
+                        "body": disc.get("body", ""),
+                        "author": {"id": 9999, "username": "mock-review-bot"},
+                        "created_at": "2024-01-15T10:30:00Z",
+                        "system": False,
+                        "resolvable": True,
+                        "resolved": False,
+                        "position": disc.get("position"),
+                    }
+                ],
+            }
+        )
+    return result
 
 
 @app.get("/api/v4/user")
