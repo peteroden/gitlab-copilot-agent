@@ -106,18 +106,19 @@ class GitLabPoller:
                 for mr in mrs:
                     await self._process_mr(pid, mr)
                 await self._process_notes(pid, mrs, client)
-            except Exception:
-                # Resolve credential_ref for the log message
+            except Exception as exc:
                 ref = "default"
                 if self._project_registry is not None:
                     resolved = self._project_registry.get_by_project_id(pid)
                     if resolved is not None:
                         ref = resolved.credential_ref
-                await log.aexception(
+                await log.aerror(
                     "gitlab_poll_project_error",
                     project_id=pid,
                     credential_ref=ref,
-                    hint="Check that the GitLab token for this credential_ref is valid",
+                    error=str(exc),
+                    hint="Check that the GitLab token for this credential_ref is valid "
+                    "and has api + read_repository scopes",
                 )
         self._watermark = poll_start
         self._note_watermark = poll_start
