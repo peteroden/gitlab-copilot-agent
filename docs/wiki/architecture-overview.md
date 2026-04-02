@@ -97,7 +97,6 @@ graph TB
 - **`orchestrator.py`**: MR review orchestration (clone → review → parse → post)
 - **`discussion_handler.py`**: Unified @mention/thread interaction handler (clone → fetch context → LLM → reply ± commit/push)
 - **`discussion_engine.py`**: Discussion prompt construction, structured response parsing (intent + reply + optional code changes)
-- **`mr_comment_handler.py`**: *(Deprecated — superseded by `discussion_handler.py`)* Retained in source but no longer used
 - **`coding_orchestrator.py`**: Jira issue implementation (clone → code → apply result → branch → MR)
 - **`coding_workflow.py`**: Shared helper for applying coding results (diff passback from k8s pods)
 - **`review_engine.py`**: Review prompt construction and execution

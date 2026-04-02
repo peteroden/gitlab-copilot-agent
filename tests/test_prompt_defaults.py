@@ -3,7 +3,6 @@
 from gitlab_copilot_agent.prompt_defaults import (
     DEFAULT_CODING_PROMPT,
     DEFAULT_DISCUSSION_PROMPT,
-    DEFAULT_MR_COMMENT_PROMPT,
     DEFAULT_REVIEW_PROMPT,
     get_prompt,
 )
@@ -21,13 +20,6 @@ class TestDefaults:
         result = get_prompt(make_settings(), "review")
         assert result == DEFAULT_REVIEW_PROMPT
 
-    def test_mr_comment_default(self) -> None:
-        result = get_prompt(make_settings(), "mr_comment")
-        assert result == DEFAULT_MR_COMMENT_PROMPT
-
-    def test_mr_comment_default_matches_coding(self) -> None:
-        assert DEFAULT_MR_COMMENT_PROMPT == DEFAULT_CODING_PROMPT
-
     def test_discussion_default(self) -> None:
         result = get_prompt(make_settings(), "discussion")
         assert result == DEFAULT_DISCUSSION_PROMPT
@@ -43,10 +35,6 @@ class TestOverride:
     def test_review_override(self) -> None:
         s = make_settings(review_system_prompt="custom review")
         assert get_prompt(s, "review") == "custom review"
-
-    def test_mr_comment_override(self) -> None:
-        s = make_settings(mr_comment_system_prompt="custom mr")
-        assert get_prompt(s, "mr_comment") == "custom mr"
 
     def test_discussion_override(self) -> None:
         s = make_settings(discussion_system_prompt="custom discussion")

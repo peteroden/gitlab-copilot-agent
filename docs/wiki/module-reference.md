@@ -105,12 +105,6 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 ---
 
-### `mr_comment_handler.py`
-
-> **Deprecated**: This module is superseded by `discussion_handler.py`, which handles all @mention interactions for both webhook and poller paths. `mr_comment_handler.py` is no longer imported or used.
-
----
-
 ### `discussion_handler.py`
 **Purpose**: Unified handler for @mention and thread-reply interactions on MRs.
 
@@ -216,12 +210,11 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Purpose**: Canonical source of built-in system prompts and configurable prompt resolution.
 
 **Key Types**:
-- `PromptType = Literal["coding", "review", "mr_comment"]`
+- `PromptType = Literal["coding", "review", "discussion"]`
 
 **Key Constants**:
 - `DEFAULT_CODING_PROMPT: str`: Built-in coding system prompt
 - `DEFAULT_REVIEW_PROMPT: str`: Built-in review system prompt
-- `DEFAULT_MR_COMMENT_PROMPT: str`: Built-in MR comment system prompt (same as coding)
 
 **Key Functions**:
 - `get_prompt(settings: Settings, prompt_type: PromptType) -> str`: Resolve the effective system prompt for a given type. Resolution: global base (`SYSTEM_PROMPT` + suffix) → type-specific override or built-in default + suffix → combined result.
@@ -742,7 +735,6 @@ All use `frozen=True` config.
 | `gitlab_poller.py` | Ingestion | 175 | MR/note discovery |
 | `jira_poller.py` | Ingestion | 90 | Issue discovery |
 | `orchestrator.py` | Processing | 95 | MR review pipeline |
-| `mr_comment_handler.py` | Processing | 130 | *(Deprecated — superseded by `discussion_handler.py`)* |
 | `discussion_handler.py` | Processing | 191 | Unified @mention/thread interaction handler |
 | `discussion_engine.py` | Processing | 147 | Discussion prompt construction & response parsing |
 | `coding_orchestrator.py` | Processing | 142 | Jira task implementation |

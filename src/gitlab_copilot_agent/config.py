@@ -82,12 +82,6 @@ class Settings(BaseSettings):
     review_system_prompt_suffix: str | None = Field(
         default=None, description="Appended to default review system prompt"
     )
-    mr_comment_system_prompt: str | None = Field(
-        default=None, description="Full override of MR comment system prompt"
-    )
-    mr_comment_system_prompt_suffix: str | None = Field(
-        default=None, description="Appended to default MR comment system prompt"
-    )
     discussion_system_prompt: str | None = Field(
         default=None, description="Full override of discussion system prompt"
     )
@@ -335,10 +329,6 @@ class TaskRunnerSettings(BaseSettings):
     coding_system_prompt_suffix: str | None = Field(default=None, description="Coding suffix")
     review_system_prompt: str | None = Field(default=None, description="Review prompt override")
     review_system_prompt_suffix: str | None = Field(default=None, description="Review suffix")
-    mr_comment_system_prompt: str | None = Field(default=None, description="MR comment override")
-    mr_comment_system_prompt_suffix: str | None = Field(
-        default=None, description="MR comment suffix"
-    )
     discussion_system_prompt: str | None = Field(
         default=None, description="Discussion prompt override"
     )

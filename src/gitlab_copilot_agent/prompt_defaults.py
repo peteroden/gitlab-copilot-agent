@@ -1,6 +1,6 @@
 """Default system prompts and configurable prompt resolution.
 
-Prompt resolution order for each persona (coding, review, mr_comment, discussion):
+Prompt resolution order for each persona (coding, review, discussion):
 1. Global base: SYSTEM_PROMPT + SYSTEM_PROMPT_SUFFIX (both optional, concatenated)
 2. Type-specific: <TYPE>_SYSTEM_PROMPT override or built-in default + <TYPE>_SYSTEM_PROMPT_SUFFIX
 3. Result: global base + type-specific (global omitted when empty)
@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from gitlab_copilot_agent.config import Settings, TaskRunnerSettings
 
-PromptType = Literal["coding", "review", "mr_comment", "discussion"]
+PromptType = Literal["coding", "review", "discussion"]
 
 DEFAULT_CODING_PROMPT = """\
 You are a senior software engineer implementing requested changes.
@@ -110,8 +110,6 @@ After the JSON array, add a brief summary paragraph.
 If the code looks good, return an empty array and say so in the summary.
 """
 
-DEFAULT_MR_COMMENT_PROMPT = DEFAULT_CODING_PROMPT
-
 DEFAULT_DISCUSSION_PROMPT = """\
 You are a code assistant participating in a merge request discussion.
 You have full access to the diff, discussion history, and repository.
@@ -151,21 +149,18 @@ Guidelines:
 _DEFAULTS: dict[PromptType, str] = {
     "coding": DEFAULT_CODING_PROMPT,
     "review": DEFAULT_REVIEW_PROMPT,
-    "mr_comment": DEFAULT_MR_COMMENT_PROMPT,
     "discussion": DEFAULT_DISCUSSION_PROMPT,
 }
 
 _OVERRIDE_FIELDS: dict[PromptType, str] = {
     "coding": "coding_system_prompt",
     "review": "review_system_prompt",
-    "mr_comment": "mr_comment_system_prompt",
     "discussion": "discussion_system_prompt",
 }
 
 _SUFFIX_FIELDS: dict[PromptType, str] = {
     "coding": "coding_system_prompt_suffix",
     "review": "review_system_prompt_suffix",
-    "mr_comment": "mr_comment_system_prompt_suffix",
     "discussion": "discussion_system_prompt_suffix",
 }
 
