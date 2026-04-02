@@ -105,9 +105,13 @@ resource "null_resource" "kv_seed_secrets" {
     command     = <<-EOT
       set -euo pipefail
       for name in $(echo "$SECRET_NAMES" | tr ',' ' '); do
+        value=$(echo "$SECRETS_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['$name'])")
+        if [ -z "$value" ]; then
+          echo "⊘ $name (empty — skipped)"
+          continue
+        fi
         az keyvault secret set --vault-name "$VAULT_NAME" --name "$name" \
-          --value "$(echo "$SECRETS_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['$name'])")" \
-          -o none && echo "✓ $name"
+          --value "$value" -o none && echo "✓ $name"
       done
     EOT
     interpreter = ["bash", "-c"]
