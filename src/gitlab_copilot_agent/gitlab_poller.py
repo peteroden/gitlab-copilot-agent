@@ -62,12 +62,12 @@ class GitLabPoller:
         self._project_registry = project_registry
         self._credential_registry = credential_registry
         self._project_clients: dict[str, GitLabClientProtocol] = {}
+        self._identity_cache: dict[str, AgentIdentity] = {}
         self._interval: int = 30
         self._task: asyncio.Task[None] | None = None
         self._watermark: str | None = None
         self._note_watermark: str | None = None
         self._failures: int = 0
-        self._agent_identity: AgentIdentity | None = None
 
     async def start(self) -> None:
         # MR watermark looks back to catch recently created/updated MRs
@@ -194,25 +194,34 @@ class GitLabPoller:
             return
         await self._dedup.mark_seen(key, ttl_seconds=_DEDUP_TTL)
 
-    async def _resolve_agent_identity(self) -> AgentIdentity | None:
-        """Lazily resolve the agent identity from the credential registry."""
-        if self._agent_identity is not None:
-            return self._agent_identity
+    async def _resolve_agent_identity(self, project_id: int) -> AgentIdentity | None:
+        """Resolve the agent identity for the credential used by this project."""
         if self._credential_registry is None:
             return None
+        ref = "default"
+        if self._project_registry is not None:
+            resolved = self._project_registry.get_by_project_id(project_id)
+            if resolved is not None:
+                ref = resolved.credential_ref
+        # Cache per credential_ref
+        if ref in self._identity_cache:
+            return self._identity_cache[ref]
         try:
-            self._agent_identity = await self._credential_registry.resolve_identity(
-                "default", self._settings.gitlab_url
+            identity = await self._credential_registry.resolve_identity(
+                ref, self._settings.gitlab_url
             )
+            self._identity_cache[ref] = identity
+            return identity
         except Exception:
-            await log.awarning("poller_identity_resolution_failed", exc_info=True)
+            await log.awarning(
+                "poller_identity_resolution_failed", credential_ref=ref, exc_info=True
+            )
             return None
-        return self._agent_identity
 
     async def _process_notes(
         self, project_id: int, mrs: list[MRListItem], client: GitLabClientProtocol
     ) -> None:
-        agent_identity = await self._resolve_agent_identity()
+        agent_identity = await self._resolve_agent_identity(project_id)
         if agent_identity is None:
             return
         mention_pattern = re.compile(
