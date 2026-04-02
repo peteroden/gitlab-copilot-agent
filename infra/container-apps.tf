@@ -157,9 +157,9 @@ resource "azapi_update_resource" "cae_otlp" {
 
 # S1: Key Vault secret refs — derived from kv_bootstrap_secrets keys, copilot_auth, and Jira config.
 # Empty values (env-scoped secrets not set for this environment) are excluded.
-# nonsensitive() is safe here — we only use the *keys* (secret names), never values.
+# nonsensitive() is safe — we only extract key names (e.g. "gitlab-token"), never secret values.
 locals {
-  kv_active_keys = toset([for k, v in var.kv_bootstrap_secrets : k if nonsensitive(v) != ""])
+  kv_active_keys = nonsensitive(toset([for k, v in var.kv_bootstrap_secrets : k if nonsensitive(v) != ""]))
   kv_secrets_runner = merge(
     var.copilot_auth == "github_token" ? { "github-token" = "github-token" } : {},
     var.copilot_auth == "byok" ? { "copilot-api-key" = "copilot-api-key" } : {},
