@@ -108,14 +108,17 @@ class GitLabPoller:
                 await self._process_notes(pid, mrs, client)
             except Exception as exc:
                 ref = "default"
+                token_prefix = "unknown"
                 if self._project_registry is not None:
                     resolved = self._project_registry.get_by_project_id(pid)
                     if resolved is not None:
                         ref = resolved.credential_ref
+                        token_prefix = resolved.token[:10] if resolved.token else "empty"
                 await log.aerror(
                     "gitlab_poll_project_error",
                     project_id=pid,
                     credential_ref=ref,
+                    token_prefix=token_prefix,
                     error=str(exc),
                     hint="Check that the GitLab token for this credential_ref is valid "
                     "and has api + read_repository scopes",
