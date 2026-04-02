@@ -27,6 +27,7 @@ pushes: list[dict] = []
 # GitLab poller state — controlled by test script via /mock endpoints
 _open_mrs: list[dict] = []
 _mr_notes: dict[int, list[dict]] = {}  # mr_iid → notes list
+_seeded_discussions: list[dict] = []  # pre-seeded via POST /mock/discussions
 
 # Bare git repo created at startup
 _bare_repo: Path | None = None
@@ -95,10 +96,11 @@ async def get_mr_changes(project_id: int, mr_iid: int) -> dict:
 async def list_mr_discussions(project_id: int, mr_iid: int) -> list[dict]:
     """Return mock discussion threads for the MR (#321).
 
-    Returns any discussions previously posted via POST /discussions,
-    formatted as GitLab API discussion objects with thread structure.
+    Returns pre-seeded discussions (via POST /mock/discussions) plus any
+    discussions previously posted via POST /discussions, formatted as
+    GitLab API discussion objects with thread structure.
     """
-    result: list[dict] = []
+    result: list[dict] = list(_seeded_discussions)
     for i, disc in enumerate(discussions):
         if disc.get("_type") == "note":
             continue
@@ -252,6 +254,21 @@ async def clear_open_mrs() -> dict:
 @app.delete("/mock/notes")
 async def clear_notes() -> dict:
     _mr_notes.clear()
+    return {"cleared": True}
+
+
+@app.post("/mock/discussions")
+async def seed_discussions(request: Request) -> dict:
+    """Pre-seed discussions returned by GET /discussions (#321)."""
+    body = await request.json()
+    _seeded_discussions.extend(body if isinstance(body, list) else [body])
+    return {"seeded": len(_seeded_discussions)}
+
+
+@app.delete("/mock/discussions")
+async def clear_seeded_discussions() -> dict:
+    """Clear pre-seeded discussions."""
+    _seeded_discussions.clear()
     return {"cleared": True}
 
 
