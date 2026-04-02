@@ -155,7 +155,7 @@ resource "azapi_update_resource" "cae_otlp" {
   }
 }
 
-# S1: Key Vault secret refs — derived from kv_secret_names, copilot_auth, and Jira config
+# S1: Key Vault secret refs — derived from kv_bootstrap_secrets keys, copilot_auth, and Jira config
 locals {
   kv_secrets_runner = merge(
     var.copilot_auth == "github_token" ? { "github-token" = "github-token" } : {},
@@ -163,8 +163,8 @@ locals {
   )
   kv_secrets_controller = merge(
     local.kv_secrets_runner,
-    { for name in var.kv_secret_names : name => name if startswith(name, "gitlab-token") },
-    var.jira_url != "" ? { "jira-api-token" = "jira-api-token" } : {}
+    { for k, _ in var.kv_bootstrap_secrets : k => k if startswith(k, "gitlab-token") },
+    { for k, _ in var.kv_bootstrap_secrets : k => k if k == "jira-api-token" },
   )
 }
 

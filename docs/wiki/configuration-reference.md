@@ -498,6 +498,27 @@ GITLAB_TOKEN__PLATFORM_TEAM=glpat-other  # Used by credential_ref: platform_team
 
 Alias matching is case-insensitive. Startup fails fast if a binding references an unknown alias.
 
+### Adding a Per-Project GitLab Token
+
+When deploying to Azure Container Apps, three files need updating:
+
+1. **GitHub Actions secret** — create `GITLAB_TOKEN__<ALIAS>` (double underscore) in repo settings
+2. **`deploy.yml`** — add the KV entry to `TF_VAR_kv_bootstrap_secrets`:
+   ```yaml
+   TF_VAR_kv_bootstrap_secrets: >-
+     {
+       ...existing entries...,
+       "gitlab-token--<alias>": "${{ secrets.GITLAB_TOKEN__<ALIAS> }}"
+     }
+   ```
+   The KV name uses hyphens (`gitlab-token--<alias>`). The ACA env var transform (`upper` + `replace("-","_")`) produces `GITLAB_TOKEN__<ALIAS>`.
+3. **`<env>.tfvars`** — set `credential_ref` in the project binding:
+   ```json
+   {"repo":"group/project","target_branch":"main","credential_ref":"<alias>"}
+   ```
+
+The agent auto-discovers its identity per token via `GET /user` — no username configuration needed.
+
 ### Hot-Reload
 
 Update mappings at runtime without restart:

@@ -136,63 +136,19 @@ jobs:
             -e "s|__JIRA_EMAIL__|${JIRA_EMAIL}|g" \
             "${DEPLOY_ENV}.tfvars"
 
-      - name: Build KV bootstrap secrets from tfvars
-        id: kv_secrets
-        working-directory: infra
-        env:
-          DEPLOY_ENV: ${{ inputs.environment }}
-          # All possible secret values — only those listed in kv_secret_names are used
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          GITLAB_TOKEN__E2E_ACA_TEST: ${{ secrets.GITLAB_TOKEN__E2E_ACA_TEST }}
-          GH_PAT_FOR_COPILOT: ${{ secrets.GH_PAT_FOR_COPILOT }}
-          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-        run: |
-          # Read kv_secret_names from tfvars and build the JSON map dynamically.
-          # Each KV name (e.g. gitlab-token--e2e-aca-test) maps to an env var
-          # via: uppercase + replace "-" with "_" (matching ACA transform).
-          NAMES=$(python3 -c "
-          import hcl2, json, sys
-          with open('${DEPLOY_ENV}.tfvars') as f:
-              data = hcl2.load(f)
-          print(json.dumps(data.get('kv_secret_names', [])))
-          " 2>/dev/null || \
-          python3 -c "
-          import json, re, sys
-          with open('${DEPLOY_ENV}.tfvars') as f:
-              text = f.read()
-          m = re.search(r'kv_secret_names\s*=\s*\[(.*?)\]', text, re.DOTALL)
-          if not m: print('[]'); sys.exit()
-          names = [s.strip().strip('\"') for s in m.group(1).split(',') if s.strip().strip('\"')]
-          print(json.dumps(names))
-          ")
-
-          # Map each name to its env var value
-          JSON_MAP=$(python3 -c "
-          import json, os, sys
-          names = json.loads('$NAMES')
-          result = {}
-          # Map from KV secret name to env var name convention
-          env_map = {
-              'gitlab-token': 'GITLAB_TOKEN',
-              'github-token': 'GH_PAT_FOR_COPILOT',
-              'jira-api-token': 'JIRA_API_TOKEN',
-          }
-          for name in names:
-              if name in env_map:
-                  env_name = env_map[name]
-              else:
-                  # Named tokens: gitlab-token--alias → GITLAB_TOKEN__ALIAS
-                  env_name = name.upper().replace('-', '_')
-              val = os.environ.get(env_name, '')
-              if val:
-                  result[name] = val
-          print(json.dumps(result))
-          ")
-          echo "TF_VAR_kv_bootstrap_secrets=${JSON_MAP}" >> "$GITHUB_ENV"
-
+      # KV bootstrap secrets — values from GitHub secrets, names must match
+      # kv_secret_names in the environment's tfvars file.
+      # See docs/wiki/configuration-reference.md "Adding a per-project GitLab token".
       - name: Terraform apply
         working-directory: infra
         env:
+          TF_VAR_kv_bootstrap_secrets: >-
+            {
+              "gitlab-token": "${{ secrets.GITLAB_TOKEN }}",
+              "gitlab-token--e2e-aca-test": "${{ secrets.GITLAB_TOKEN__E2E_ACA_TEST }}",
+              "github-token": "${{ secrets.GH_PAT_FOR_COPILOT }}",
+              "jira-api-token": "${{ secrets.JIRA_API_TOKEN }}"
+            }
           TF_VAR_image_tag: ${{ inputs.image_tag }}
           TF_VAR_image_digest: ${{ steps.ghcr_push.outputs.image_digest }}
           TFVARS_FILE: ${{ inputs.environment }}.tfvars

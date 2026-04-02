@@ -177,14 +177,8 @@ variable "kv_bootstrap" {
   default     = false
 }
 
-variable "kv_secret_names" {
-  description = "Secret names to wire from Key Vault to ACA env vars. Named GitLab tokens use gitlab-token--<alias> convention."
-  type        = list(string)
-  default     = ["gitlab-token", "github-token"]
-}
-
 variable "kv_bootstrap_secrets" {
-  description = "Map of secret-name → value to seed into Key Vault. Only used when kv_bootstrap=true. Keys must be a subset of kv_secret_names."
+  description = "Map of secret-name → value to seed into Key Vault. Keys starting with 'gitlab-token' are wired as ACA env vars. Only used when kv_bootstrap=true."
   type        = map(string)
   default     = {}
   sensitive   = true
