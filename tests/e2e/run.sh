@@ -283,6 +283,8 @@ fi
 
 # === TEST 8: Discussion History Capture (#321) ===
 echo ""; echo "--- Test 8: Discussion History Capture ---"
+# Agent pod was restarted by Test 7 — wait for it to be healthy again
+wait_for_health "$AGENT_URL/health" "agent (post-restart)" 40 || exit 1
 # Pre-seed a discussion thread so the agent processes non-empty history
 curl -sf -X DELETE "$MOCK_GITLAB_URL/discussions" > /dev/null
 curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/discussions" > /dev/null
