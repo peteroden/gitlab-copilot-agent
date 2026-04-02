@@ -126,8 +126,7 @@ resource "null_resource" "kv_seed_secrets" {
   depends_on = [null_resource.kv_bootstrap_open]
 }
 
-# Container Apps depend on kv_seed_secrets (see container-apps.tf).
-# Close public access immediately after seeding — apps use private endpoint.
+# Close public access AFTER apps have created new revisions (which read KV secrets).
 resource "null_resource" "kv_bootstrap_close" {
   count = var.kv_bootstrap ? 1 : 0
 
@@ -148,7 +147,12 @@ resource "null_resource" "kv_bootstrap_close" {
     }
   }
 
-  depends_on = [null_resource.kv_bootstrap_open, null_resource.kv_seed_secrets]
+  depends_on = [
+    null_resource.kv_bootstrap_open,
+    null_resource.kv_seed_secrets,
+    azurerm_container_app.controller,
+    azurerm_container_app_job.task_runner,
+  ]
 }
 
 # S4: Controller identity — ACR pull, Key Vault read (all secrets), Job trigger
