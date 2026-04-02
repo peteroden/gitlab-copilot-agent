@@ -80,6 +80,10 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      - name: Record test start time
+        id: test-time
+        run: echo "start=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Run ACA integration tests
         env:
           GITLAB_URL: https://gitlab.com
@@ -102,19 +106,23 @@ jobs:
 
       - name: Collect ACA logs
         if: failure()
+        env:
+          TEST_START: ${{ steps.test-time.outputs.start }}
         run: |
           mkdir -p /tmp/aca-logs
+          echo "Collecting logs since ${TEST_START}"
 
-          # Controller logs — grab maximum history
+          # Controller live logs (capped at 300 lines by Azure CLI)
           az containerapp logs show \
             -n ca-controller -g rg-copilot-dev \
             --type console --tail 300 \
-            > /tmp/aca-logs/controller.log 2>&1 || true
+            > /tmp/aca-logs/controller-live.log 2>&1 || true
 
-          # Task runner job execution logs — last 5 executions
+          # Task runner job execution logs — executions started during this test run
           for exec_name in $(az containerapp job execution list \
             -g rg-copilot-dev -n job-task-runner \
-            --query "[].name" -o tsv 2>/dev/null | tail -5); do
+            --query "[?properties.startTime>='${TEST_START}'].name" \
+            -o tsv 2>/dev/null); do
             az containerapp job logs show \
               -g rg-copilot-dev -n job-task-runner \
               --container task \
@@ -122,21 +130,26 @@ jobs:
               > "/tmp/aca-logs/job-${exec_name}.log" 2>&1 || true
           done
 
-          # Task runner logs from Log Analytics (survives pod cleanup)
+          # Full logs from Log Analytics (not truncated, survives pod cleanup)
           LA_WORKSPACE=$(az containerapp env show \
             -g rg-copilot-dev -n cae-rg-copilot-dev \
             --query 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId' \
             -o tsv 2>/dev/null || true)
           if [ -n "$LA_WORKSPACE" ]; then
+            la_filter="where TimeGenerated >= datetime('${TEST_START}')"
             az monitor log-analytics query \
               --workspace "$LA_WORKSPACE" \
-              --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s contains 'task-runner' | where TimeGenerated > ago(30m) | project TimeGenerated, Log_s | order by TimeGenerated asc" \
+              --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s contains 'controller' | ${la_filter} | project TimeGenerated, Log_s | order by TimeGenerated asc" \
+              -o table \
+              > /tmp/aca-logs/controller-la.log 2>&1 || true
+            az monitor log-analytics query \
+              --workspace "$LA_WORKSPACE" \
+              --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s contains 'task-runner' | ${la_filter} | project TimeGenerated, Log_s | order by TimeGenerated asc" \
               -o table \
               > /tmp/aca-logs/task-runner-la.log 2>&1 || true
           fi
 
-          # Result blobs — download recent error results for inspection
-          start_time=$(date -u -d '30 minutes ago' +%Y-%m-%dT%H:%M:%SZ)
+          # Result blobs modified during this test run
           ACCOUNT_URL=$(az containerapp show \
             -g rg-copilot-dev -n ca-controller \
             --query 'properties.template.containers[0].env[?name==`AZURE_STORAGE_ACCOUNT_URL`].value | [0]' \
@@ -147,7 +160,7 @@ jobs:
               --container-name task-data \
               --prefix results/ \
               --auth-mode login \
-              --query "[?properties.lastModified>='${start_time}'].name" \
+              --query "[?properties.lastModified>='${TEST_START}'].name" \
               -o tsv 2>/dev/null | while read -r blob; do
                 safe_name=$(echo "$blob" | tr '/' '_')
                 az storage blob download \
