@@ -34,6 +34,7 @@ class CredentialRegistry:
         for alias, token in (named_tokens or {}).items():
             self._tokens[alias.lower()] = token
         self._identities: dict[str, AgentIdentity] = {}
+        self._identity_lock = asyncio.Lock()
 
     @classmethod
     def from_env(cls) -> CredentialRegistry:
@@ -77,22 +78,31 @@ class CredentialRegistry:
 
         On the first call for a given *credential_ref* this authenticates
         against the GitLab API; subsequent calls return the cached result.
+
+        Uses an asyncio lock to prevent thundering-herd duplicate API calls
+        when multiple coroutines resolve the same credential concurrently.
         """
         ref = credential_ref.lower()
         cached = self._identities.get(ref)
         if cached is not None:
             return cached
 
-        token = self.resolve(credential_ref)
-        identity = await _fetch_identity(gitlab_url, token)
-        self._identities[ref] = identity
-        log.info(
-            "agent_identity_resolved",
-            credential_ref=ref,
-            user_id=identity.user_id,
-            username=identity.username,
-        )
-        return identity
+        async with self._identity_lock:
+            # Double-check after acquiring the lock
+            cached = self._identities.get(ref)
+            if cached is not None:
+                return cached
+
+            token = self.resolve(credential_ref)
+            identity = await _fetch_identity(gitlab_url, token)
+            self._identities[ref] = identity
+            log.info(
+                "agent_identity_resolved",
+                credential_ref=ref,
+                user_id=identity.user_id,
+                username=identity.username,
+            )
+            return identity
 
     def aliases(self) -> set[str]:
         """Return all registered credential aliases."""

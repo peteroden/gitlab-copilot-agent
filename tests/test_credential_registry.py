@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -176,3 +177,27 @@ class TestResolveIdentity:
         assert first == expected
         assert second is first
         mock_fetch.assert_awaited_once()
+
+    async def test_concurrent_calls_only_fetch_once(self) -> None:
+        """Multiple concurrent resolve_identity calls for the same ref
+        result in only one API call (lock prevents thundering herd)."""
+        reg = CredentialRegistry(default_token=DEFAULT_TOKEN)
+        expected = _make_identity()
+
+        call_count = 0
+
+        async def _slow_fetch(gitlab_url: str, token: str) -> AgentIdentity:
+            nonlocal call_count
+            call_count += 1
+            await asyncio.sleep(0.05)
+            return expected
+
+        with patch(_FETCH_PATH, side_effect=_slow_fetch):
+            results = await asyncio.gather(
+                reg.resolve_identity("default", GITLAB_URL),
+                reg.resolve_identity("default", GITLAB_URL),
+                reg.resolve_identity("default", GITLAB_URL),
+            )
+
+        assert all(r == expected for r in results)
+        assert call_count == 1
