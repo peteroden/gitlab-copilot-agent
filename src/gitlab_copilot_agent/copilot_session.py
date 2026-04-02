@@ -130,7 +130,7 @@ async def run_copilot_session(
                     is_authenticated=is_authenticated,
                     has_token=bool(settings.github_token),
                 )
-                if not is_authenticated:
+                if not is_authenticated and not settings.copilot_provider_type:
                     await log.aerror(
                         "copilot_auth_failed",
                         auth_type=auth_type,
@@ -139,7 +139,7 @@ async def run_copilot_session(
                             "The GitHub token is missing or invalid. "
                             "Rotate the GITHUB_TOKEN secret with a PAT "
                             "that has the 'copilot' scope (classic) or "
-                            "'Copilot requests: write' permission "
+                            "'Copilot requests: read' permission "
                             "(fine-grained)."
                         ),
                     )

@@ -281,6 +281,34 @@ async def test_auth_failure_raises_immediately(
 
 @patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
 @patch("gitlab_copilot_agent.copilot_session.CopilotClient")
+async def test_auth_failure_skipped_with_custom_provider(
+    mock_client_class: MagicMock,
+    mock_discover: MagicMock,
+    _run: Any,
+) -> None:
+    """Custom provider skips auth check — GitHub auth is irrelevant."""
+    mock_discover.return_value = RepoConfig()
+    events = [
+        _make_event("assistant.message", "Hello"),
+        _make_event("session.idle"),
+    ]
+    _setup_mock_session(mock_client_class, events)
+    mock_client_class.return_value.get_auth_status.return_value = SimpleNamespace(
+        authType=None,
+        isAuthenticated=False,
+    )
+
+    settings = make_settings(
+        copilot_provider_type="openai",
+        copilot_provider_base_url="http://localhost:9998/v1",
+        copilot_provider_api_key="fake-key",
+    )
+    result = await _run(settings=settings)
+    assert result == "Hello"
+
+
+@patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
+@patch("gitlab_copilot_agent.copilot_session.CopilotClient")
 async def test_session_error_raises_runtime_error(
     mock_client_class: MagicMock,
     mock_discover: MagicMock,
