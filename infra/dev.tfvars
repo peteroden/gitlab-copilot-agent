@@ -10,5 +10,6 @@ jira_project_map      = "{\"mappings\":{\"DEV\":{\"repo\":\"peteroden/gitlab-cop
 jira_trigger_status   = "Selected for Development"
 jira_in_review_status = "Done"
 kv_bootstrap          = true
+kv_secret_names       = ["gitlab-token", "gitlab-token--e2e-aca-test", "github-token", "jira-api-token"]
 # kv_bootstrap_secrets: omitted here — pipeline injects via TF_VAR_kv_bootstrap_secrets
 # to avoid var-file precedence overriding the env var.
