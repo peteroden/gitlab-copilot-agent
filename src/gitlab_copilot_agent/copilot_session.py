@@ -118,11 +118,15 @@ async def run_copilot_session(
                     ),
                 )
                 await client.start()
+                auth_status = await client.get_auth_status()
                 await log.ainfo(
                     "copilot_client_started",
                     cli_path=cli_path,
                     working_directory=repo_path,
                     task_type=task_type,
+                    auth_type=getattr(auth_status, "authType", None),
+                    is_authenticated=getattr(auth_status, "isAuthenticated", None),
+                    has_token=bool(settings.github_token),
                 )
 
                 try:
