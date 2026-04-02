@@ -91,6 +91,18 @@ async def get_mr_changes(project_id: int, mr_iid: int) -> dict:
     return mr
 
 
+@app.get("/api/v4/projects/{project_id}/merge_requests/{mr_iid}/discussions")
+async def list_mr_discussions(project_id: int, mr_iid: int) -> list[dict]:
+    """Return empty discussion list (Feature 1, #321)."""
+    return []
+
+
+@app.get("/api/v4/user")
+async def get_current_user() -> dict:
+    """Return agent identity (Feature 1, #321)."""
+    return {"id": 9999, "username": "mock-review-bot", "name": "Mock Review Bot"}
+
+
 @app.post("/api/v4/projects/{project_id}/merge_requests/{mr_iid}/discussions")
 async def create_discussion(project_id: int, mr_iid: int, request: Request) -> dict:
     body = await request.json()

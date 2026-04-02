@@ -64,13 +64,12 @@ async def handle_review(
 
             mr_details = await gl_client.get_mr_details(project.id, mr.iid)
 
-            # Fetch discussion history for context
-            discussions = await gl_client.list_mr_discussions(project.id, mr.iid)
-
-            # Resolve agent identity (cached per credential)
+            # Fetch discussion history for context (requires credential_registry
+            # to resolve agent identity — skip entirely without it)
             discussion_history: DiscussionHistory | None = None
             if credential_registry is not None:
                 try:
+                    discussions = await gl_client.list_mr_discussions(project.id, mr.iid)
                     agent_identity = await credential_registry.resolve_identity(
                         "default", settings.gitlab_url
                     )
