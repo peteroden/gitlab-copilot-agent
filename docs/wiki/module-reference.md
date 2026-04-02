@@ -520,6 +520,25 @@ All use `extra="ignore"` config.
 
 ---
 
+### `discussion_models.py`
+**Purpose**: Pydantic models for MR discussion history, shared by review and discussion flows.
+
+**Key Models**:
+- `DiscussionNote`: note_id, author_id, author_username, body, created_at, is_system, resolved, resolvable, position
+- `Discussion`: discussion_id, notes, is_resolved, is_inline
+- `AgentIdentity`: user_id, username (discovered via `GET /user`)
+- `DiscussionHistory`: discussions, agent
+
+All use `frozen=True` config.
+
+**Dependencies**: `pydantic`
+
+**Internal Imports**: None
+
+**Depended On By**: `orchestrator.py`, `credential_registry.py`
+
+---
+
 ### `project_mapping.py` *(legacy)*
 **Purpose**: Original Jira→GitLab mapping. Superseded by `mapping_models.py` + `project_registry.py` for the Jira polling path.
 
@@ -713,6 +732,7 @@ All use `extra="ignore"` config.
 | `repo_config.py` | Utils | 184 | Repo config discovery |
 | `models.py` | Data | 79 | Webhook models |
 | `jira_models.py` | Data | 87 | Jira API models |
+| `discussion_models.py` | Data | 71 | MR discussion history models |
 | `project_mapping.py` | Data | 34 | Jira→GitLab mapping |
 | `config.py` | Data | 137 | Settings |
 | `concurrency.py` | State | 208 | In-memory locks/dedup |

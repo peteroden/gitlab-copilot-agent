@@ -109,6 +109,9 @@ graph TB
 - Store in Kubernetes Secret
 - Audit GitLab API logs for suspicious activity
 
+**Per-Credential Identity Caching**:
+Each GitLab token maps to a different user. The `CredentialRegistry` lazily discovers and caches the agent's identity by calling `GET /user` on first use per credential. The returned `AgentIdentity` (immutable `user_id` + display `username`) is stored in-memory for the lifetime of the process. Identity is used for self-comment detection during review — matching on the immutable `user_id` rather than the mutable `username` prevents bypass via username changes.
+
 ---
 
 ### 3. GitHub Token (Service → Copilot API)

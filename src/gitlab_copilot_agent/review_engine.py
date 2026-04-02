@@ -1,11 +1,18 @@
 """Copilot review engine — runs an agent review session on an MR."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.prompt_defaults import DEFAULT_REVIEW_PROMPT, get_prompt
 from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams, TaskResult
+
+if TYPE_CHECKING:
+    from gitlab_copilot_agent.discussion_models import DiscussionHistory
 
 log = structlog.get_logger()
 
@@ -26,7 +33,11 @@ class ReviewRequest(BaseModel):
     target_branch: str = Field(description="Target branch name")
 
 
-def build_review_prompt(req: ReviewRequest, diff_text: str | None = None) -> str:
+def build_review_prompt(
+    req: ReviewRequest,
+    diff_text: str | None = None,
+    discussion_history: DiscussionHistory | None = None,
+) -> str:
     """Build the user prompt — includes the diff directly when available."""
     prompt = (
         f"## Merge Request\n"
@@ -60,6 +71,7 @@ async def run_review(
     repo_url: str,
     review_request: ReviewRequest,
     diff_text: str | None = None,
+    discussion_history: DiscussionHistory | None = None,
 ) -> TaskResult:
     """Run a Copilot agent review and return the structured result."""
     task = TaskParams(
@@ -68,7 +80,7 @@ async def run_review(
         repo_url=repo_url,
         branch=review_request.source_branch,
         system_prompt=get_prompt(settings, "review"),
-        user_prompt=build_review_prompt(review_request, diff_text),
+        user_prompt=build_review_prompt(review_request, diff_text, discussion_history),
         settings=settings,
         repo_path=repo_path,
     )

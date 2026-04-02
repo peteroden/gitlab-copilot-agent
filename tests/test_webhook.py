@@ -1,11 +1,12 @@
 """Tests for the webhook endpoint."""
 
 import asyncio
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
 
+from gitlab_copilot_agent.discussion_models import AgentIdentity
 from gitlab_copilot_agent.main import app
 from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
 from tests.conftest import (
@@ -305,3 +306,127 @@ async def test_webhook_review_works_without_registry(client: AsyncClient) -> Non
     mock_handle.assert_awaited_once()
     _, kwargs = mock_handle.call_args
     assert kwargs["project_token"] == GITLAB_TOKEN
+
+
+async def test_webhook_review_passes_credential_registry(client: AsyncClient) -> None:
+    """MR review forwards credential_registry from app.state."""
+    mock_registry = MagicMock()
+    app.state.credential_registry = mock_registry
+    mock_handle = AsyncMock()
+    try:
+        with patch("gitlab_copilot_agent.webhook.handle_review", mock_handle):
+            resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+            assert resp.json() == {"status": "queued"}
+            await asyncio.sleep(0.1)
+
+        mock_handle.assert_awaited_once()
+        _, kwargs = mock_handle.call_args
+        assert kwargs["credential_registry"] is mock_registry
+    finally:
+        del app.state.credential_registry
+
+
+# -- Self-comment detection tests --
+
+AGENT_USER_ID = 100
+AGENT_USERNAME = "copilot-bot"
+NOTE_AUTHOR_USER_ID = 1
+
+
+def _make_credential_registry_mock(
+    user_id: int = AGENT_USER_ID,
+    username: str = AGENT_USERNAME,
+    *,
+    raise_on_resolve: bool = False,
+) -> MagicMock:
+    """Build a mock CredentialRegistry with resolve_identity behaviour."""
+    mock = MagicMock()
+    if raise_on_resolve:
+        mock.resolve_identity = AsyncMock(side_effect=RuntimeError("network error"))
+    else:
+        mock.resolve_identity = AsyncMock(
+            return_value=AgentIdentity(user_id=user_id, username=username)
+        )
+    return mock
+
+
+def _note_body_with_user(
+    user_id: int = NOTE_AUTHOR_USER_ID,
+    username: str = "reviewer",
+    note: str = "/copilot fix the bug",
+) -> dict[str, object]:
+    """Build a note webhook body with a specific user id and username."""
+    return {
+        "object_kind": "note",
+        "user": {"id": user_id, "username": username},
+        "project": {
+            "id": PROJECT_ID,
+            "path_with_namespace": "g/p",
+            "git_http_url": "https://x.git",
+        },
+        "object_attributes": {"note": note, "noteable_type": "MergeRequest"},
+        "merge_request": {
+            "iid": MR_IID,
+            "title": "Fix",
+            "source_branch": "feat",
+            "target_branch": "main",
+        },
+    }
+
+
+async def test_self_comment_detected_via_user_id(client: AsyncClient) -> None:
+    """Note from the agent (matched by user_id) is ignored."""
+    app.state.credential_registry = _make_credential_registry_mock(user_id=AGENT_USER_ID)
+    try:
+        body = _note_body_with_user(user_id=AGENT_USER_ID, username="someone-else")
+        resp = await client.post("/webhook", json=body, headers=HEADERS)
+        assert resp.json() == {"status": "ignored", "reason": "self-comment"}
+    finally:
+        del app.state.credential_registry
+
+
+async def test_self_comment_fallback_to_username(client: AsyncClient) -> None:
+    """Without credential_registry, username comparison still works."""
+    app.state.settings = make_settings(agent_gitlab_username=AGENT_USERNAME)
+    body = _note_body_with_user(user_id=NOTE_AUTHOR_USER_ID, username=AGENT_USERNAME)
+    resp = await client.post("/webhook", json=body, headers=HEADERS)
+    assert resp.json() == {"status": "ignored", "reason": "self-comment"}
+
+
+async def test_no_self_comment_when_ids_differ(client: AsyncClient) -> None:
+    """Note from a different user proceeds to queue."""
+    app.state.credential_registry = _make_credential_registry_mock(user_id=AGENT_USER_ID)
+    try:
+        with patch("gitlab_copilot_agent.webhook.handle_copilot_comment"):
+            body = _note_body_with_user(user_id=NOTE_AUTHOR_USER_ID)
+            resp = await client.post("/webhook", json=body, headers=HEADERS)
+            assert resp.json() == {"status": "queued"}
+    finally:
+        del app.state.credential_registry
+
+
+async def test_identity_resolution_failure_falls_through(client: AsyncClient) -> None:
+    """When resolve_identity raises, self-check falls through to username."""
+    app.state.credential_registry = _make_credential_registry_mock(raise_on_resolve=True)
+    app.state.settings = make_settings(agent_gitlab_username=AGENT_USERNAME)
+    try:
+        body = _note_body_with_user(user_id=NOTE_AUTHOR_USER_ID, username=AGENT_USERNAME)
+        resp = await client.post("/webhook", json=body, headers=HEADERS)
+        # Falls through to username check which matches → self-comment
+        assert resp.json() == {"status": "ignored", "reason": "self-comment"}
+    finally:
+        del app.state.credential_registry
+
+
+async def test_identity_resolution_failure_proceeds_when_no_username_match(
+    client: AsyncClient,
+) -> None:
+    """When resolve_identity raises and username doesn't match, note is queued."""
+    app.state.credential_registry = _make_credential_registry_mock(raise_on_resolve=True)
+    try:
+        with patch("gitlab_copilot_agent.webhook.handle_copilot_comment"):
+            body = _note_body_with_user(user_id=NOTE_AUTHOR_USER_ID, username="reviewer")
+            resp = await client.post("/webhook", json=body, headers=HEADERS)
+            assert resp.json() == {"status": "queued"}
+    finally:
+        del app.state.credential_registry

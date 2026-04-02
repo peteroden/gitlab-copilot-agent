@@ -191,6 +191,65 @@ All models use `extra="ignore"` to allow additional API fields.
 
 ---
 
+## Discussion Models (`discussion_models.py`)
+
+Models for MR discussion history, shared by review and discussion flows. All models use `frozen=True` (immutable).
+
+### `DiscussionNote`
+**Purpose**: A single note within a discussion thread.
+
+**Config**: `frozen=True` (immutable)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `note_id` | `int` | — | GitLab note ID |
+| `author_id` | `int` | — | Author's GitLab user ID |
+| `author_username` | `str` | — | Author's GitLab username (for display) |
+| `body` | `str` | — | Note body text |
+| `created_at` | `str` | — | ISO 8601 timestamp |
+| `is_system` | `bool` | — | True for system-generated notes |
+| `resolved` | `bool \| None` | `None` | Resolution status (None if not resolvable) |
+| `resolvable` | `bool` | `False` | Whether the note can be resolved |
+| `position` | `dict[str, object] \| None` | `None` | Diff position: new_path, old_path, new_line, old_line |
+
+---
+
+### `Discussion`
+**Purpose**: A threaded discussion on a merge request.
+
+**Config**: `frozen=True` (immutable)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `discussion_id` | `str` | — | GitLab discussion ID |
+| `notes` | `list[DiscussionNote]` | — | Notes in thread order |
+| `is_resolved` | `bool` | `False` | Whether the discussion is resolved |
+| `is_inline` | `bool` | `False` | True for DiffNote (inline), False for overview |
+
+---
+
+### `AgentIdentity`
+**Purpose**: The agent's GitLab identity, discovered via `GET /user`.
+
+**Config**: `frozen=True` (immutable)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `user_id` | `int` | Immutable GitLab user ID |
+| `username` | `str` | GitLab username (mutable, for display/@mention) |
+
+---
+
+### `DiscussionHistory`
+**Purpose**: Full discussion context for an MR, including agent identity.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `discussions` | `list[Discussion]` | `[]` | All discussions on the MR |
+| `agent` | `AgentIdentity` | — | Agent identity for self-detection |
+
+---
+
 ## Jira Models (`jira_models.py`)
 
 All models use `extra="ignore"` to allow additional API fields.
@@ -521,6 +580,13 @@ graph TB
         RCFG --> AC[AgentConfig]
     end
     
+    subgraph "Discussion Context"
+        DH[DiscussionHistory]
+        DH --> DISC[Discussion]
+        DISC --> DN[DiscussionNote]
+        DH --> AI[AgentIdentity]
+    end
+    
     subgraph "Project Mapping"
         MS[MappingSource] -->|render| RM[RenderedMap]
         RM --> RB[RenderedBinding]
@@ -534,6 +600,8 @@ graph TB
     TP -.->|copilot_session.py| RCFG
     TP -.->|executor| PR
     PR -.->|comment_poster.py| MRD
+    CR -.->|resolve_identity| AI
+    DH -.->|orchestrator.py| TP
 ```
 
 ---
@@ -549,6 +617,7 @@ graph TB
 | Review (`comment_parser.py`) | ❌ No | ❌ Forbidden | ✅ Yes |
 | Task Exec (`task_executor.py`) | ❌ No | ❌ Forbidden | ✅ Yes |
 | Repo Config (`repo_config.py`) | ❌ No | ❌ Forbidden | ✅ Yes |
+| Discussion (`discussion_models.py`) | ❌ No | ❌ Forbidden | ✅ Yes |
 | Project Mapping (`project_mapping.py`) | ✅ Yes | ❌ Forbidden | ❌ No |
 
 **Strict Mode**: Rejects unknown fields and enforces exact type matching.  

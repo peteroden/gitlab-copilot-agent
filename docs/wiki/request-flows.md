@@ -14,6 +14,7 @@ sequenceDiagram
     participant WH as webhook.py
     participant ORCH as orchestrator.py
     participant GLCL as gitlab_client.py
+    participant CREG as credential_registry.py
     participant EXEC as TaskExecutor
     participant COP as copilot_session.py
     participant SDK as Copilot SDK
@@ -41,6 +42,15 @@ sequenceDiagram
     ORCH->>GLCL: clone_repo(git_http_url, source_branch, token)
     GLCL->>GLCL: git_operations.git_clone()
     GLCL-->>ORCH: repo_path: Path
+    
+    ORCH->>GLCL: list_mr_discussions(project_id, mr_iid)
+    GLCL-->>ORCH: list[Discussion]
+    
+    ORCH->>CREG: resolve_identity(credential_ref, gitlab_url)
+    Note over CREG: GET /user (cached per credential)
+    CREG-->>ORCH: AgentIdentity (user_id, username)
+    
+    ORCH->>ORCH: Build DiscussionHistory(discussions, agent)
     
     ORCH->>EXEC: execute(TaskParams: review)
     alt LocalTaskExecutor

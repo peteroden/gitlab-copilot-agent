@@ -157,6 +157,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.dedup_store = dedup_store
     app.state.review_tracker = ReviewedMRTracker()
 
+    # Credential registry — always available for identity resolution
+    creds = CredentialRegistry.from_env()
+    app.state.credential_registry = creds
+
     poller: JiraPoller | None = None
     gl_poller: GitLabPoller | None = None
     jira_client: JiraClient | None = None
@@ -180,7 +184,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 and settings.jira.in_review_status != "In Review"
             ):
                 binding.in_review_status = settings.jira.in_review_status
-        creds = CredentialRegistry.from_env()
         try:
             project_registry = await ProjectRegistry.from_rendered_map(
                 rendered, creds, settings.gitlab_url

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # E2E test: deploy agent to k3d, run all test flows against mock services.
 # Tests: 1. Webhook MR review, 2. Jira polling, 3. /copilot command,
-#        4. GitLab polling, 5. Hot-reload config, 6. Plugin install, 7. Graceful shutdown.
+#        4. GitLab polling, 5. Hot-reload config, 6. Plugin install,
+#        7. Graceful shutdown, 8. Discussion history capture.
 # Usage: ./tests/e2e/run.sh [agent-url] [mock-gitlab-url] [mock-jira-url]
 set -euo pipefail
 
@@ -279,6 +280,67 @@ else
         echo " ⚠️ (could not verify shutdown logs — pod replaced)"
     fi
 fi
+
+# === TEST 8: Discussion History Capture (#321) ===
+echo ""; echo "--- Test 8: Discussion History Capture ---"
+# Agent pod was restarted by Test 7 — wait for it to be healthy again
+wait_for_health "$AGENT_URL/health" "agent (post-restart)" 40 || exit 1
+# Pre-seed a discussion thread so the agent processes non-empty history
+curl -sf -X DELETE "$MOCK_GITLAB_URL/discussions" > /dev/null
+curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/discussions" > /dev/null
+curl -sf -X POST "$MOCK_GITLAB_URL/mock/discussions" \
+    -H "Content-Type: application/json" \
+    -d '[{
+        "id": "seed-disc-001",
+        "individual_note": false,
+        "notes": [{
+            "id": 9001,
+            "type": "DiffNote",
+            "body": "Consider adding error handling here.",
+            "author": {"id": 9999, "username": "mock-review-bot"},
+            "created_at": "2024-01-15T10:00:00Z",
+            "system": false,
+            "resolvable": true,
+            "resolved": false,
+            "position": {"new_path": "app.py", "old_path": "app.py", "new_line": 1, "old_line": null}
+        }, {
+            "id": 9002,
+            "type": "DiffNote",
+            "body": "Will fix, thanks!",
+            "author": {"id": 42, "username": "developer"},
+            "created_at": "2024-01-15T11:00:00Z",
+            "system": false,
+            "resolvable": false,
+            "resolved": false,
+            "position": null
+        }]
+    }]' > /dev/null
+
+echo -n "Sending webhook (MR with prior discussions)..."
+send_webhook '{
+    "object_kind": "merge_request",
+    "user": {"id": 1, "username": "e2e-test"},
+    "project": {"id": 999, "path_with_namespace": "test/e2e-repo",
+                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+    "object_attributes": {"iid": 321, "title": "Discussion history test MR", "description": "Test with prior feedback",
+        "action": "open", "source_branch": "main", "target_branch": "main",
+        "last_commit": {"id": "disc321", "message": "test discussions"}, "url": "http://mock/mr/321", "oldrev": null}
+}'
+
+poll_until "$MOCK_GITLAB_URL/discussions" \
+    "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
+    "Waiting for review with discussion context" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+
+echo -n "Verifying review completed with non-empty discussion history..."
+REVIEW_POSTED=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
+import sys, json
+ds = json.load(sys.stdin)
+has_review = any('position' in str(d) for d in ds)
+print('yes' if has_review else 'no')")
+[ "$REVIEW_POSTED" = "yes" ] && echo " ✅" || { echo " ❌"; exit 1; }
+
+# Clean up seeded discussions
+curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/discussions" > /dev/null
 
 echo ""; echo "=== ALL E2E TESTS PASSED ==="
 exit 0

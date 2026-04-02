@@ -1,6 +1,9 @@
 """Webhook endpoint for GitLab MR events."""
 
+from __future__ import annotations
+
 import hmac
+from typing import TYPE_CHECKING
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
@@ -11,6 +14,9 @@ from gitlab_copilot_agent.models import MergeRequestWebhookPayload, NoteWebhookP
 from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
 from gitlab_copilot_agent.orchestrator import handle_review
 from gitlab_copilot_agent.project_registry import ProjectRegistry
+
+if TYPE_CHECKING:
+    from gitlab_copilot_agent.credential_registry import CredentialRegistry
 
 log = structlog.get_logger()
 
@@ -56,10 +62,19 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
     project_id = payload.project.id
     head_sha = mr.last_commit.id
     project_token = _resolve_project_token(project_id, registry, settings.gitlab_token)
+    credential_registry: CredentialRegistry | None = getattr(
+        request.app.state, "credential_registry", None
+    )
     bound = log.bind(project_id=project_id, mr_iid=mr.iid, head_sha=head_sha)
     bound.info("background_review_starting")
     try:
-        await handle_review(settings, payload, executor, project_token=project_token)
+        await handle_review(
+            settings,
+            payload,
+            executor,
+            project_token=project_token,
+            credential_registry=credential_registry,
+        )
         review_tracker.mark(project_id, mr.iid, head_sha)
         bound.info("background_review_completed")
     except Exception:
@@ -144,11 +159,27 @@ async def webhook(
             return {"status": "ignored", "reason": "not an MR note"}
         if not parse_copilot_command(note_payload.object_attributes.note):
             return {"status": "ignored", "reason": "not a /copilot command"}
+
+        # Self-comment detection: prefer immutable user_id over mutable username
+        credential_registry: CredentialRegistry | None = getattr(
+            request.app.state, "credential_registry", None
+        )
+        if credential_registry is not None:
+            try:
+                agent_identity = await credential_registry.resolve_identity(
+                    "default", settings.gitlab_url
+                )
+                if note_payload.user.id == agent_identity.user_id:
+                    return {"status": "ignored", "reason": "self-comment"}
+            except Exception:
+                await log.awarning("identity_resolution_failed_for_self_check", exc_info=True)
+        # Fallback to legacy username comparison (deprecated)
         if (
             settings.agent_gitlab_username
             and note_payload.user.username == settings.agent_gitlab_username
         ):
             return {"status": "ignored", "reason": "self-comment"}
+
         background_tasks.add_task(_process_copilot_comment, request, note_payload)
         return {"status": "queued"}
 

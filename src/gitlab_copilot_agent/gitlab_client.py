@@ -10,6 +10,8 @@ import gitlab
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
+from gitlab_copilot_agent.discussion_models import AgentIdentity, Discussion, DiscussionNote
+
 log = structlog.get_logger()
 
 
@@ -96,6 +98,8 @@ class GitLabClientProtocol(Protocol):
         self, project_id: int, mr_iid: int, created_after: str | None = None
     ) -> list[NoteListItem]: ...
     async def resolve_project(self, id_or_path: str | int) -> int: ...
+    async def list_mr_discussions(self, project_id: int, mr_iid: int) -> list[Discussion]: ...
+    async def get_current_user(self) -> AgentIdentity: ...
 
 
 class GitLabClient:
@@ -216,3 +220,87 @@ class GitLabClient:
             return project.id  # pyright: ignore[reportReturnType]
 
         return await asyncio.to_thread(_resolve)
+
+    async def list_mr_discussions(self, project_id: int, mr_iid: int) -> list[Discussion]:
+        """Fetch all discussions on an MR with thread structure."""
+
+        def _fetch() -> list[Discussion]:
+            project = self._gl.projects.get(project_id)
+            mr = project.mergerequests.get(mr_iid)
+            raw_discussions = mr.discussions.list(get_all=True)
+
+            discussions: list[Discussion] = []
+            for raw_disc in raw_discussions:
+                attrs = raw_disc.attributes
+                notes: list[DiscussionNote] = []
+                is_inline = False
+
+                for raw_note in attrs.get("notes", []):
+                    if raw_note.get("system", False):
+                        continue  # Skip system notes
+
+                    note_type = raw_note.get("type")
+                    if note_type == "DiffNote":
+                        is_inline = True
+
+                    position: dict[str, object] | None = None
+                    raw_pos = raw_note.get("position")
+                    if raw_pos and isinstance(raw_pos, dict):
+                        position = {
+                            "new_path": raw_pos.get("new_path"),  # pyright: ignore[reportUnknownMemberType]
+                            "old_path": raw_pos.get("old_path"),  # pyright: ignore[reportUnknownMemberType]
+                            "new_line": raw_pos.get("new_line"),  # pyright: ignore[reportUnknownMemberType]
+                            "old_line": raw_pos.get("old_line"),  # pyright: ignore[reportUnknownMemberType]
+                        }
+
+                    author = raw_note.get("author", {})
+                    notes.append(
+                        DiscussionNote(
+                            note_id=raw_note["id"],
+                            author_id=author.get("id", 0),
+                            author_username=author.get("username", ""),
+                            body=raw_note.get("body", ""),
+                            created_at=raw_note.get("created_at", ""),
+                            is_system=False,  # already filtered above
+                            resolved=raw_note.get("resolved"),
+                            resolvable=raw_note.get("resolvable", False),
+                            position=position,
+                        )
+                    )
+
+                if not notes:
+                    continue  # All notes were system notes
+
+                # Check resolution at discussion level
+                raw_notes = attrs.get("notes", [])
+                first_note: dict[str, object] = (
+                    raw_notes[0] if raw_notes else {}  # pyright: ignore[reportUnknownMemberType]
+                )
+                is_resolved = bool(first_note.get("resolved", False))
+
+                discussions.append(
+                    Discussion(
+                        discussion_id=attrs["id"],
+                        notes=notes,
+                        is_resolved=is_resolved,
+                        is_inline=is_inline,
+                    )
+                )
+
+            return discussions
+
+        return await asyncio.to_thread(_fetch)
+
+    async def get_current_user(self) -> AgentIdentity:
+        """Discover the identity of the authenticated user."""
+
+        def _fetch() -> AgentIdentity:
+            self._gl.auth()
+            user = self._gl.user
+            assert user is not None, "GitLab auth() did not populate user"
+            return AgentIdentity(
+                user_id=user.id,  # pyright: ignore[reportArgumentType]
+                username=user.username,  # pyright: ignore[reportArgumentType]
+            )
+
+        return await asyncio.to_thread(_fetch)

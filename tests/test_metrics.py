@@ -154,6 +154,7 @@ async def test_review_pipeline_records_success_metrics(
     mock_gl.get_mr_details = AsyncMock(
         return_value=MRDetails(title="t", description=None, diff_refs=DIFF_REFS, changes=[])
     )
+    mock_gl.list_mr_discussions = AsyncMock(return_value=[])
     mock_run_review.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
 
     mock_total = MagicMock()
@@ -213,6 +214,7 @@ async def test_review_task_execution_failure_posts_comment_without_raising(
     mock_gl.get_mr_details = AsyncMock(
         return_value=MRDetails(title="t", description=None, diff_refs=DIFF_REFS, changes=[])
     )
+    mock_gl.list_mr_discussions = AsyncMock(return_value=[])
     mock_gl.post_mr_comment = AsyncMock()
     mock_run_review.side_effect = TaskExecutionError("Task failed: runner error")
 

@@ -267,3 +267,21 @@ def test_marketplaces_from_comma_separated(monkeypatch: pytest.MonkeyPatch) -> N
         "https://mp1.example.com",
         "https://mp2.example.com",
     ]
+
+
+# -- Deprecation warning tests --
+
+
+def test_agent_gitlab_username_emits_deprecation_warning() -> None:
+    """Setting agent_gitlab_username should emit a DeprecationWarning."""
+    with pytest.warns(DeprecationWarning, match="agent_gitlab_username is deprecated"):
+        make_settings(agent_gitlab_username="bot")
+
+
+def test_no_deprecation_warning_without_agent_username() -> None:
+    """No DeprecationWarning when agent_gitlab_username is not set."""
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        make_settings()  # should not raise
