@@ -500,9 +500,19 @@ Alias matching is case-insensitive. Startup fails fast if a binding references a
 
 ### Adding a Per-Project GitLab Token
 
+Create a **project access token** in GitLab (Settings → Access Tokens) with these scopes:
+
+| Scope | Required for |
+|-------|-------------|
+| `api` | MR details, discussions, posting comments, resolving threads |
+| `read_repository` | Git clone for code review and discussion context |
+| `write_repository` | Git push for coding tasks (commit changes from @mention requests) |
+
+Set the role to **Developer** or higher.
+
 When deploying to Azure Container Apps, three files need updating:
 
-1. **GitHub Actions secret** — create `GITLAB_TOKEN__<ALIAS>` (double underscore) in repo settings
+1. **GitHub Actions secret** — create `GITLAB_TOKEN__<ALIAS>` (double underscore) in repo settings (use environment-scoped secrets if the token is env-specific)
 2. **`deploy.yml`** — add the KV entry to `TF_VAR_kv_bootstrap_secrets`:
    ```yaml
    TF_VAR_kv_bootstrap_secrets: >-
