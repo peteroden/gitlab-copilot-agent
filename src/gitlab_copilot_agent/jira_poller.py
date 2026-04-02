@@ -38,7 +38,6 @@ class JiraPoller:
         allowed_project_ids: set[int] | None = None,
     ) -> None:
         self._client = jira_client
-        self._trigger_status = settings.trigger_status
         self._interval = settings.poll_interval
         self._project_map = project_map
         self._handler = handler
@@ -82,17 +81,27 @@ class JiraPoller:
             await asyncio.sleep(self._interval)
 
     async def _poll_once(self) -> None:
-        """Single poll cycle — search for issues, filter by project map, invoke handler."""
+        """Single poll cycle — one JQL query per distinct trigger status."""
         async with self._poll_lock:
             with _tracer.start_as_current_span("jira.poll"):
-                project_keys = sorted(self._project_map.jira_keys())
-                if not project_keys:
+                all_projects = list(self._project_map.jira_keys())
+                if not all_projects:
                     return
 
-                project_list = ", ".join(f'"{key}"' for key in project_keys)
-                jql = f'status = "{self._trigger_status}" AND project IN ({project_list})'
+                # Group project keys by their resolved trigger_status
+                by_status: dict[str, list[str]] = {}
+                for key in all_projects:
+                    project = self._project_map.get_by_jira(key)
+                    if project is None:
+                        continue
+                    by_status.setdefault(project.trigger_status, []).append(key)
 
-                issues = await self._client.search_issues(jql)
+                issues: list[JiraIssue] = []
+                for trigger_status, project_keys in by_status.items():
+                    project_list = ", ".join(f'"{k}"' for k in sorted(project_keys))
+                    jql = f'status = "{trigger_status}" AND project IN ({project_list})'
+                    issues.extend(await self._client.search_issues(jql))
+
                 span = trace.get_current_span()
                 span.set_attribute("issue_count", len(issues))
 

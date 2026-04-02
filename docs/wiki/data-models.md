@@ -434,6 +434,9 @@ See [configuration-reference.md](configuration-reference.md) for all fields.
 | `repo` | `str` | — | GitLab repo path (e.g., `group/project`) |
 | `target_branch` | `str` | — | Default MR target branch |
 | `credential_ref` | `str` | — | Credential alias (`"default"` or named) |
+| `trigger_status` | `str` | `"AI Ready"` | Jira status that triggers the agent |
+| `in_progress_status` | `str` | `"In Progress"` | Jira status set when agent starts work |
+| `in_review_status` | `str` | `"In Review"` | Jira status set after MR creation |
 
 ---
 
@@ -460,6 +463,9 @@ See [configuration-reference.md](configuration-reference.md) for all fields.
 | `target_branch` | `str` | Default MR target branch |
 | `credential_ref` | `str` | Credential alias |
 | `token` | `str` | Resolved GitLab token (masked in repr) |
+| `trigger_status` | `str` | Jira status that triggers the agent (`"AI Ready"`) |
+| `in_progress_status` | `str` | Jira status set when agent starts work (`"In Progress"`) |
+| `in_review_status` | `str` | Jira status set after MR creation (`"In Review"`) |
 
 ---
 

@@ -31,6 +31,18 @@ class Defaults(BaseModel):
     plugins: list[str] = Field(
         default_factory=list, description="Default Copilot CLI plugins for all bindings"
     )
+    trigger_status: str = Field(
+        default="AI Ready",
+        description="Default Jira status that triggers agent processing",
+    )
+    in_progress_status: str = Field(
+        default="In Progress",
+        description="Default Jira status set when agent starts working",
+    )
+    in_review_status: str = Field(
+        default="In Review",
+        description="Default Jira status set after MR creation",
+    )
 
 
 class Binding(BaseModel):
@@ -57,6 +69,18 @@ class Binding(BaseModel):
     plugins: list[str] | None = Field(
         default=None,
         description="Repo-specific Copilot CLI plugins (overrides defaults when set)",
+    )
+    trigger_status: str | None = Field(
+        default=None,
+        description="Override the trigger status for this binding",
+    )
+    in_progress_status: str | None = Field(
+        default=None,
+        description="Override the in-progress status for this binding",
+    )
+    in_review_status: str | None = Field(
+        default=None,
+        description="Override the in-review status for this binding",
     )
 
     @model_validator(mode="after")
@@ -126,6 +150,9 @@ class MappingFile(BaseModel):
                 target_branch=b.target_branch or self.defaults.target_branch,
                 credential_ref=b.credential_ref or self.defaults.credential_ref,
                 plugins=b.plugins if b.plugins is not None else self.defaults.plugins,
+                trigger_status=b.trigger_status or self.defaults.trigger_status,
+                in_progress_status=b.in_progress_status or self.defaults.in_progress_status,
+                in_review_status=b.in_review_status or self.defaults.in_review_status,
             )
         return RenderedMap(mappings=rendered_bindings)
 
@@ -140,6 +167,18 @@ class RenderedBinding(BaseModel):
     credential_ref: str = Field(description="Resolved credential alias")
     plugins: list[str] = Field(
         default_factory=list, description="Effective Copilot CLI plugins for this binding"
+    )
+    trigger_status: str = Field(
+        default="AI Ready",
+        description="Resolved Jira status that triggers agent processing",
+    )
+    in_progress_status: str = Field(
+        default="In Progress",
+        description="Resolved Jira status set when agent starts working",
+    )
+    in_review_status: str = Field(
+        default="In Review",
+        description="Resolved Jira status set after MR creation",
     )
 
 

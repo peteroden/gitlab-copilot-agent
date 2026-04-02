@@ -53,10 +53,13 @@ class CodingOrchestrator:
         self._tracker = tracker or ProcessedIssueTracker()
 
     async def _transition_to_in_review(
-        self, issue_key: str, bound_log: structlog.stdlib.BoundLogger
+        self,
+        issue_key: str,
+        project_mapping: ResolvedProject,
+        bound_log: structlog.stdlib.BoundLogger,
     ) -> None:
         """Transition issue to 'In Review' after MR creation. Non-blocking on failure."""
-        in_review = self._settings.jira.in_review_status if self._settings.jira else "In Review"
+        in_review = project_mapping.in_review_status
         try:
             await self._jira.transition_issue(issue_key, in_review)
         except Exception:
@@ -83,11 +86,7 @@ class CodingOrchestrator:
                     issue.fields.description if isinstance(issue.fields.description, str) else None
                 )
                 repo_path: Path | None = None
-                in_prog = (
-                    self._settings.jira.in_progress_status
-                    if self._settings.jira
-                    else "In Progress"
-                )
+                in_prog = project_mapping.in_progress_status
                 try:
                     await self._jira.transition_issue(issue.key, in_prog)
                     repo_path = await git_clone(
@@ -144,7 +143,7 @@ class CodingOrchestrator:
                         f"/-/merge_requests/{mr_iid}"
                     )
                     await self._jira.add_comment(issue.key, f"MR created: {mr_url}")
-                    await self._transition_to_in_review(issue.key, bound_log)
+                    await self._transition_to_in_review(issue.key, project_mapping, bound_log)
                     await bound_log.ainfo("coding_task_complete", mr_iid=mr_iid)
                     self._tracker.mark(issue.key)
                     outcome = "success"

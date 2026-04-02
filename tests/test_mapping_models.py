@@ -27,6 +27,12 @@ DEFAULT_CRED = "default"
 PLATFORM_CRED = "platform_team"
 PLUGIN_A = "copilot-plugin-a"
 PLUGIN_B = "copilot-plugin-b"
+TRIGGER_STATUS = "AI Ready"
+IN_PROGRESS_STATUS = "In Progress"
+IN_REVIEW_STATUS = "In Review"
+CUSTOM_TRIGGER = "Ready for Dev"
+CUSTOM_IN_PROGRESS = "Development"
+CUSTOM_IN_REVIEW = "Code Review"
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +60,9 @@ class TestDefaults:
         d = Defaults()
         assert d.target_branch == DEFAULT_BRANCH
         assert d.credential_ref == DEFAULT_CRED
+        assert d.trigger_status == TRIGGER_STATUS
+        assert d.in_progress_status == IN_PROGRESS_STATUS
+        assert d.in_review_status == IN_REVIEW_STATUS
 
     def test_defaults_override(self) -> None:
         d = Defaults(target_branch=DEVELOP_BRANCH, credential_ref=PLATFORM_CRED)
@@ -263,3 +272,64 @@ class TestPlugins:
         json_str = rendered.model_dump_json()
         reloaded = RenderedMap.model_validate_json(json_str)
         assert reloaded.mappings[JIRA_KEY_PROJ].plugins == [PLUGIN_A]
+
+
+# ---------------------------------------------------------------------------
+# Status fields
+# ---------------------------------------------------------------------------
+
+
+class TestStatusFields:
+    def test_defaults_status_defaults(self) -> None:
+        d = Defaults()
+        assert d.trigger_status == TRIGGER_STATUS
+        assert d.in_progress_status == IN_PROGRESS_STATUS
+        assert d.in_review_status == IN_REVIEW_STATUS
+
+    def test_binding_status_none_by_default(self) -> None:
+        b = Binding(**_minimal_binding())
+        assert b.trigger_status is None
+        assert b.in_progress_status is None
+        assert b.in_review_status is None
+
+    def test_binding_with_status_overrides(self) -> None:
+        b = Binding(
+            **_minimal_binding(
+                trigger_status=CUSTOM_TRIGGER,
+                in_progress_status=CUSTOM_IN_PROGRESS,
+                in_review_status=CUSTOM_IN_REVIEW,
+            )
+        )
+        assert b.trigger_status == CUSTOM_TRIGGER
+        assert b.in_progress_status == CUSTOM_IN_PROGRESS
+        assert b.in_review_status == CUSTOM_IN_REVIEW
+
+    def test_render_uses_default_statuses(self) -> None:
+        m = MappingFile(**_minimal_mapping())
+        rendered = m.render()
+        rb = rendered.mappings[JIRA_KEY_PROJ]
+        assert rb.trigger_status == TRIGGER_STATUS
+        assert rb.in_progress_status == IN_PROGRESS_STATUS
+        assert rb.in_review_status == IN_REVIEW_STATUS
+
+    def test_render_uses_binding_override(self) -> None:
+        data = _minimal_mapping(
+            bindings=[_minimal_binding(trigger_status=CUSTOM_TRIGGER)],
+        )
+        m = MappingFile(**data)
+        rendered = m.render()
+        assert rendered.mappings[JIRA_KEY_PROJ].trigger_status == CUSTOM_TRIGGER
+        assert rendered.mappings[JIRA_KEY_PROJ].in_progress_status == IN_PROGRESS_STATUS
+
+    def test_render_mixed_projects(self) -> None:
+        """One binding with custom status, one without — each gets correct status."""
+        data = _minimal_mapping(
+            bindings=[
+                _minimal_binding(trigger_status=CUSTOM_TRIGGER),
+                _minimal_binding(jira_project=JIRA_KEY_OPS, repo=REPO_PLATFORM),
+            ]
+        )
+        m = MappingFile(**data)
+        rendered = m.render()
+        assert rendered.mappings[JIRA_KEY_PROJ].trigger_status == CUSTOM_TRIGGER
+        assert rendered.mappings[JIRA_KEY_OPS].trigger_status == TRIGGER_STATUS

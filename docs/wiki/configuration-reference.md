@@ -414,6 +414,9 @@ Create a `mappings.yaml` file:
 defaults:
   target_branch: main
   credential_ref: default
+  trigger_status: "AI Ready"       # optional — this is the default
+  in_progress_status: "In Progress"
+  in_review_status: "In Review"
 
 bindings:
   - jira_project: PROJ
@@ -422,7 +425,25 @@ bindings:
     repo: platform/tools
     target_branch: develop
     credential_ref: platform_team
+    trigger_status: "Ready for Dev"   # per-project override
+    in_review_status: "Code Review"   # per-project override
 ```
+
+### Per-Project Jira Status Overrides
+
+The three Jira workflow statuses can be set at the `defaults` level (applied to every
+binding) **or** overridden per binding:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `trigger_status` | `"AI Ready"` | Status that causes the poller to pick up the issue |
+| `in_progress_status` | `"In Progress"` | Status the agent transitions to when it starts work |
+| `in_review_status` | `"In Review"` | Status the agent transitions to after creating an MR |
+
+The global env vars `JIRA_TRIGGER_STATUS`, `JIRA_IN_PROGRESS_STATUS`, and
+`JIRA_IN_REVIEW_STATUS` act as a fallback when no YAML mapping is used. When a
+YAML mapping is present the per-binding (or per-defaults) values always take
+precedence.
 
 ### Rendered JSON (env var value)
 

@@ -25,6 +25,9 @@ class ResolvedProject(BaseModel):
     credential_ref: str = Field(description="Credential registry key")
     token: str = Field(description="Resolved GitLab token", repr=False)
     plugins: list[str] = Field(default_factory=list, description="Copilot CLI plugin specs")
+    trigger_status: str = Field(default="AI Ready", description="Jira trigger status")
+    in_progress_status: str = Field(default="In Progress", description="Jira in-progress status")
+    in_review_status: str = Field(default="In Review", description="Jira in-review status")
 
 
 class ProjectRegistry:
@@ -74,6 +77,9 @@ class ProjectRegistry:
                     credential_ref=binding.credential_ref,
                     token=token,
                     plugins=binding.plugins,
+                    trigger_status=binding.trigger_status,
+                    in_progress_status=binding.in_progress_status,
+                    in_review_status=binding.in_review_status,
                 )
             )
         registry = cls(projects)
