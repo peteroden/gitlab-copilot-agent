@@ -71,8 +71,8 @@ resource "null_resource" "kv_bootstrap_open" {
   count = var.kv_bootstrap ? 1 : 0
 
   triggers = {
-    vault_name   = azurerm_key_vault.main.name
-    secrets_hash = sha256(jsonencode(var.kv_bootstrap_secrets))
+    vault_name = azurerm_key_vault.main.name
+    always_run = timestamp()
   }
 
   provisioner "local-exec" {
@@ -132,8 +132,8 @@ resource "null_resource" "kv_bootstrap_close" {
   count = var.kv_bootstrap ? 1 : 0
 
   triggers = {
-    vault_name   = azurerm_key_vault.main.name
-    secrets_hash = sha256(jsonencode(var.kv_bootstrap_secrets))
+    vault_name = azurerm_key_vault.main.name
+    always_run = timestamp()
   }
 
   provisioner "local-exec" {
