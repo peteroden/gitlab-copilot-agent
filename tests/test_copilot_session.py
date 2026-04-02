@@ -258,6 +258,29 @@ async def test_session_no_plugins_skips_setup(
 
 @patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
 @patch("gitlab_copilot_agent.copilot_session.CopilotClient")
+async def test_auth_failure_raises_immediately(
+    mock_client_class: MagicMock,
+    mock_discover: MagicMock,
+    _run: Any,
+) -> None:
+    """Unauthenticated client raises RuntimeError before session creation."""
+    mock_discover.return_value = RepoConfig()
+    mock_client = AsyncMock()
+    mock_client_class.return_value = mock_client
+    mock_client.get_auth_status.return_value = SimpleNamespace(
+        authType=None,
+        isAuthenticated=False,
+    )
+
+    with pytest.raises(RuntimeError, match="Copilot authentication failed"):
+        await _run()
+
+    # Session should never be created
+    mock_client.create_session.assert_not_awaited()
+
+
+@patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
+@patch("gitlab_copilot_agent.copilot_session.CopilotClient")
 async def test_session_error_raises_runtime_error(
     mock_client_class: MagicMock,
     mock_discover: MagicMock,

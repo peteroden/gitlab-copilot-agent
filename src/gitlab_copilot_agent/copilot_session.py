@@ -130,6 +130,25 @@ async def run_copilot_session(
                     is_authenticated=is_authenticated,
                     has_token=bool(settings.github_token),
                 )
+                if not is_authenticated:
+                    await log.aerror(
+                        "copilot_auth_failed",
+                        auth_type=auth_type,
+                        has_token=bool(settings.github_token),
+                        hint=(
+                            "The GitHub token is missing or invalid. "
+                            "Rotate the GITHUB_TOKEN secret with a PAT "
+                            "that has the 'copilot' scope (classic) or "
+                            "'Copilot requests: write' permission "
+                            "(fine-grained)."
+                        ),
+                    )
+                    raise RuntimeError(
+                        "Copilot authentication failed: the configured "
+                        "GITHUB_TOKEN is missing, expired, or lacks "
+                        "required scopes. Rotate the token in Key Vault "
+                        f"[auth_type={auth_type}]"
+                    )
 
                 try:
                     repo_config = discover_repo_config(repo_path)
