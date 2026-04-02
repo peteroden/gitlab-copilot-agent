@@ -164,6 +164,7 @@ locals {
   kv_secrets_controller = merge(
     local.kv_secrets_runner,
     { "gitlab-token" = "gitlab-token" },
+    { for k, _ in var.kv_bootstrap_secrets : k => k if startswith(k, "gitlab-token--") },
     var.jira_url != "" ? { "jira-api-token" = "jira-api-token" } : {}
   )
 }

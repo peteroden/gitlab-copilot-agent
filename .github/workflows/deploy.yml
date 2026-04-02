@@ -139,7 +139,7 @@ jobs:
       - name: Terraform apply
         working-directory: infra
         env:
-          TF_VAR_kv_bootstrap_secrets: '{"gitlab-token":"${{ secrets.GITLAB_TOKEN }}","github-token":"${{ secrets.GH_PAT_FOR_COPILOT }}","jira-api-token":"${{ secrets.JIRA_API_TOKEN }}"}'
+          TF_VAR_kv_bootstrap_secrets: '{"gitlab-token":"${{ secrets.GITLAB_TOKEN }}","gitlab-token--e2e-aca-test":"${{ secrets.GITLAB_TOKEN__E2E_ACA_TEST }}","github-token":"${{ secrets.GH_PAT_FOR_COPILOT }}","jira-api-token":"${{ secrets.JIRA_API_TOKEN }}"}'
           TF_VAR_image_tag: ${{ inputs.image_tag }}
           TF_VAR_image_digest: ${{ steps.ghcr_push.outputs.image_digest }}
           TFVARS_FILE: ${{ inputs.environment }}.tfvars
