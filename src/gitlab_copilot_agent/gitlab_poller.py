@@ -98,11 +98,27 @@ class GitLabPoller:
     async def _poll_once(self) -> None:
         poll_start = datetime.now(UTC).isoformat()
         for pid in self._project_ids:
-            client = self._client_for_project(pid)
-            mrs = await client.list_project_mrs(pid, state="opened", updated_after=self._watermark)
-            for mr in mrs:
-                await self._process_mr(pid, mr)
-            await self._process_notes(pid, mrs, client)
+            try:
+                client = self._client_for_project(pid)
+                mrs = await client.list_project_mrs(
+                    pid, state="opened", updated_after=self._watermark
+                )
+                for mr in mrs:
+                    await self._process_mr(pid, mr)
+                await self._process_notes(pid, mrs, client)
+            except Exception:
+                # Resolve credential_ref for the log message
+                ref = "default"
+                if self._project_registry is not None:
+                    resolved = self._project_registry.get_by_project_id(pid)
+                    if resolved is not None:
+                        ref = resolved.credential_ref
+                await log.aexception(
+                    "gitlab_poll_project_error",
+                    project_id=pid,
+                    credential_ref=ref,
+                    hint="Check that the GitLab token for this credential_ref is valid",
+                )
         self._watermark = poll_start
         self._note_watermark = poll_start
 

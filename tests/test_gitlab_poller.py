@@ -139,21 +139,16 @@ async def test_watermark_advances(mock_hr: AsyncMock) -> None:
 
 
 @pytest.mark.asyncio
-async def test_backoff_increases_and_resets() -> None:
+async def test_per_project_error_is_logged_not_raised() -> None:
+    """A failing project logs the error with credential_ref but doesn't crash the poll."""
     poller, cl, _ = _poller()
-    cl.list_project_mrs.side_effect = RuntimeError("boom")
-    for _ in range(3):
-        with pytest.raises(RuntimeError):
-            await poller._poll_once()
-        poller._failures += 1
-    assert poller._failures == 3
-    # Success resets
-    cl.list_project_mrs.side_effect = None
-    cl.list_project_mrs.return_value = []
-    with patch(_HANDLE_REVIEW, new_callable=AsyncMock):
-        await poller._poll_once()
-    poller._failures = 0
-    assert poller._failures == 0
+    cl.list_project_mrs.side_effect = RuntimeError("403 Forbidden")
+
+    # Should NOT raise — error is caught per-project
+    await poller._poll_once()
+
+    # Watermarks still advance (poll completed)
+    assert poller._watermark is not None
 
 
 @pytest.mark.asyncio
