@@ -1,4 +1,7 @@
-"""Orchestrator — wires webhook → clone → review → post."""
+"""Orchestrator — wires webhook → clone → review → post.
+
+Fetches MR discussion history and agent identity for context-aware reviews.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +14,7 @@ import structlog
 
 from gitlab_copilot_agent.comment_parser import parse_review
 from gitlab_copilot_agent.comment_poster import post_review
+from gitlab_copilot_agent.discussion_models import DiscussionHistory
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.metrics import reviews_duration, reviews_total
 from gitlab_copilot_agent.review_engine import ReviewRequest, run_review
@@ -19,6 +23,7 @@ from gitlab_copilot_agent.telemetry import get_tracer
 
 if TYPE_CHECKING:
     from gitlab_copilot_agent.config import Settings
+    from gitlab_copilot_agent.credential_registry import CredentialRegistry
     from gitlab_copilot_agent.models import MergeRequestWebhookPayload
     from gitlab_copilot_agent.task_executor import TaskExecutor
 
@@ -31,6 +36,7 @@ async def handle_review(
     payload: MergeRequestWebhookPayload,
     executor: TaskExecutor,
     project_token: str | None = None,
+    credential_registry: CredentialRegistry | None = None,
 ) -> None:
     """Full review pipeline: clone → review → parse → post comments."""
     mr = payload.object_attributes
@@ -58,6 +64,29 @@ async def handle_review(
 
             mr_details = await gl_client.get_mr_details(project.id, mr.iid)
 
+            # Fetch discussion history for context
+            discussions = await gl_client.list_mr_discussions(project.id, mr.iid)
+
+            # Resolve agent identity (cached per credential)
+            discussion_history: DiscussionHistory | None = None
+            if credential_registry is not None:
+                try:
+                    agent_identity = await credential_registry.resolve_identity(
+                        "default", settings.gitlab_url
+                    )
+                    discussion_history = DiscussionHistory(
+                        discussions=discussions, agent=agent_identity
+                    )
+                    bound_log.info(
+                        "discussion_history_loaded",
+                        discussion_count=len(discussions),
+                        agent_user_id=agent_identity.user_id,
+                    )
+                except Exception:
+                    bound_log.warning("discussion_history_failed", exc_info=True)
+            else:
+                bound_log.debug("discussion_history_skipped", reason="no_credential_registry")
+
             # Build diff text from MR changes so the LLM reviews only the diff
             diff_text = "\n".join(
                 f"--- a/{c.old_path}\n+++ b/{c.new_path}\n{c.diff}" for c in mr_details.changes
@@ -77,6 +106,7 @@ async def handle_review(
                 project.git_http_url,
                 review_req,
                 diff_text=diff_text,
+                discussion_history=discussion_history,
             )
             parsed = parse_review(raw_result.summary)
 

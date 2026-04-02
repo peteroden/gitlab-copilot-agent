@@ -1,5 +1,6 @@
 """Application configuration via environment variables."""
 
+import warnings
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -228,6 +229,18 @@ class Settings(BaseSettings):
                 project_map_json=self.jira_project_map,
             )
         return None
+
+    @model_validator(mode="after")
+    def _warn_deprecated_fields(self) -> "Settings":
+        if self.agent_gitlab_username is not None:
+            warnings.warn(
+                "agent_gitlab_username is deprecated. "
+                "Agent identity is now auto-discovered via GET /user. "
+                "Remove AGENT_GITLAB_USERNAME from your configuration.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return self
 
     @model_validator(mode="after")
     def _check_auth(self) -> "Settings":
