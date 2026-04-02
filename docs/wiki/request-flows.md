@@ -97,68 +97,128 @@ sequenceDiagram
 
 ---
 
-## 2. Webhook /copilot Command
+## 2. Webhook Discussion Interaction (Unified Thread Handler)
 
-Triggered when GitLab sends `note` webhook for MR comment starting with `/copilot `.
+Triggered when GitLab sends a `note` webhook for an MR comment that @mentions the agent (e.g., `@copilot-agent please add tests`).
 
 ```mermaid
 sequenceDiagram
     participant GL as GitLab
     participant WH as webhook.py
-    participant MRC as mr_comment_handler.py
+    participant DH as discussion_handler.py
+    participant DE as discussion_engine.py
     participant GLCL as gitlab_client.py
     participant EXEC as TaskExecutor
-    participant COP as copilot_session.py
     participant GIT as git_operations.py
-    
+
     GL->>WH: POST /webhook (note event)
     WH->>WH: _validate_webhook_token()
     WH->>WH: Parse NoteWebhookPayload
     WH->>WH: Check noteable_type == "MergeRequest"
-    WH->>WH: parse_copilot_command(note.body)
-    alt Not a /copilot command
+    WH->>WH: Resolve AgentIdentity (credential_registry)
+    WH->>WH: Skip if user.id == agent_identity.user_id (self)
+    WH->>WH: _is_agent_directed(payload, agent_identity)
+    alt Not @mentioned
         WH-->>GL: 200 {"status": "ignored"}
     end
-    WH->>WH: Check agent_gitlab_username (skip self)
-    WH->>WH: Add _process_copilot_comment to background_tasks
+    WH->>WH: Add _process_discussion to background_tasks
     WH-->>GL: 200 {"status": "queued"}
-    
+
     Note over WH,GIT: Background task starts
-    
-    WH->>MRC: handle_copilot_comment(settings, payload, executor, repo_locks)
+
+    WH->>DH: handle_discussion_interaction(settings, payload, executor, agent_identity)
     alt repo_locks provided
-        MRC->>MRC: async with repo_locks.acquire(git_http_url)
+        DH->>DH: async with repo_locks.acquire(git_http_url)
     end
-    
-    MRC->>GIT: git_clone(git_http_url, source_branch, token)
-    GIT-->>MRC: repo_path: Path
-    
-    MRC->>EXEC: execute(TaskParams: coding, prompt=instruction)
-    EXEC->>COP: run_copilot_session(repo_path, get_prompt(settings, "coding"), instruction)
-    COP-->>EXEC: result: TaskResult
-    EXEC-->>MRC: result: TaskResult
-    
-    MRC->>MRC: apply_coding_result(result, repo_path)
-    Note over MRC: If K8s: validate base_sha, git apply --3way<br/>If Local: no-op (files on disk)
-    
-    MRC->>GIT: git_commit(repo_path, message, author)
-    alt has_changes
-        MRC->>GIT: git_push(repo_path, "origin", source_branch, token)
-        MRC->>GLCL: post_mr_comment(project_id, mr_iid, "✅ Changes pushed")
-    else no changes
-        MRC->>GLCL: post_mr_comment(project_id, mr_iid, "ℹ️ No file changes needed")
+
+    DH->>GLCL: clone_repo(git_http_url, source_branch, token)
+    GLCL-->>DH: repo_path: Path
+
+    DH->>GLCL: get_mr_details(project_id, mr_iid)
+    GLCL-->>DH: MRDetails
+    DH->>GLCL: list_mr_discussions(project_id, mr_iid)
+    GLCL-->>DH: list[Discussion]
+    DH->>DH: Build DiscussionHistory + find triggering discussion
+
+    DH->>DE: build_discussion_prompt(mr_details, discussion_history, triggering)
+    DE-->>DH: user_prompt: str
+    DH->>DE: run_discussion(executor, settings, repo_path, ..., user_prompt)
+    DE->>EXEC: execute(TaskParams: coding, prompt)
+    EXEC-->>DE: result: TaskResult
+    DE-->>DH: result: TaskResult
+    DH->>DE: parse_discussion_response(result.summary)
+    DE-->>DH: DiscussionResponse (intent, reply, code_changes)
+
+    alt intent == "coding" or "mixed" with code_changes
+        DH->>DH: apply_coding_result(result, repo_path)
+        DH->>GIT: git_commit(repo_path, message, author)
+        alt has_changes
+            DH->>GIT: git_push(repo_path, "origin", source_branch, token)
+        end
     end
-    
-    MRC->>MRC: shutil.rmtree(repo_path)
+
+    DH->>GL: discussion.notes.create({"body": reply})
+    DH->>DH: shutil.rmtree(repo_path)
 ```
 
 **Error Handling**:
-- On exception: log, emit `webhook_errors_total`, post "❌ Agent encountered an error" comment, re-raise
+- On exception: log, emit `webhook_errors_total` with label `handler="discussion"`, post "❌ Error processing discussion" comment, re-raise
 - Cleanup: `repo_path` removed in finally block
 
 ---
 
-## 3. GitLab Poller MR Discovery
+## 3. Poller @mention Note Discovery
+
+Background poller discovers @mention notes on open MRs.
+
+```mermaid
+sequenceDiagram
+    participant POLL as gitlab_poller.py
+    participant GLCL as gitlab_client.py
+    participant DEDUP as DeduplicationStore
+    participant DH as discussion_handler.py
+    
+    loop For each project_id
+        POLL->>GLCL: list_project_mrs(project_id, state="opened", updated_after=watermark)
+        GLCL-->>POLL: list[MRListItem]
+        
+        loop For each mr
+            POLL->>GLCL: list_mr_notes(project_id, mr.iid, created_after=watermark)
+            GLCL-->>POLL: list[NoteListItem]
+            
+            loop For each note
+                alt note.system
+                    Note over POLL: Skip system notes
+                end
+                POLL->>POLL: Check @mention pattern match
+                alt Not @mentioned
+                    Note over POLL: Skip
+                end
+                POLL->>POLL: Check agent_identity.user_id (skip self)
+                POLL->>POLL: Build dedup key: "note:{project_id}:{mr.iid}:{note.id}"
+                POLL->>DEDUP: is_seen(key)
+                alt Already seen
+                    DEDUP-->>POLL: True (skip)
+                else New
+                    DEDUP-->>POLL: False
+                    POLL->>POLL: Synthesize NoteWebhookPayload
+                    POLL->>DH: handle_discussion_interaction(settings, payload, executor, agent_identity)
+                    Note over DH: Same flow as webhook discussion handler
+                    DH-->>POLL: Done
+                    POLL->>DEDUP: mark_seen(key, ttl=86400)
+                end
+            end
+        end
+    end
+```
+
+**Dedup Key**: `note:{project_id}:{mr_iid}:{note.id}` (TTL: 24 hours)
+
+**Self-Comment Guard**: If agent identity matches note author, skip processing (prevents infinite loop).
+
+---
+
+## 4. GitLab Poller MR Discovery
 
 Background poller discovers new/updated MRs via GitLab API.
 
@@ -210,55 +270,6 @@ sequenceDiagram
 - Successful cycle: reset `_failures` to 0
 
 ---
-
-## 4. GitLab Poller Note Discovery
-
-Background poller discovers `/copilot` notes on open MRs.
-
-```mermaid
-sequenceDiagram
-    participant POLL as gitlab_poller.py
-    participant GLCL as gitlab_client.py
-    participant DEDUP as DeduplicationStore
-    participant MRC as mr_comment_handler.py
-    
-    loop For each project_id
-        POLL->>GLCL: list_project_mrs(project_id, state="opened", updated_after=watermark)
-        GLCL-->>POLL: list[MRListItem]
-        
-        loop For each mr
-            POLL->>GLCL: list_mr_notes(project_id, mr.iid, created_after=watermark)
-            GLCL-->>POLL: list[NoteListItem]
-            
-            loop For each note
-                alt note.system
-                    Note over POLL: Skip system notes
-                end
-                POLL->>POLL: parse_copilot_command(note.body)
-                alt Not a /copilot command
-                    Note over POLL: Skip
-                end
-                POLL->>POLL: Check agent_gitlab_username (skip self)
-                POLL->>POLL: Build dedup key: "note:{project_id}:{mr.iid}:{note.id}"
-                POLL->>DEDUP: is_seen(key)
-                alt Already seen
-                    DEDUP-->>POLL: True (skip)
-                else New
-                    DEDUP-->>POLL: False
-                    POLL->>POLL: Synthesize NoteWebhookPayload
-                    POLL->>MRC: handle_copilot_comment(settings, payload, executor, repo_locks)
-                    Note over MRC: Same flow as webhook command
-                    MRC-->>POLL: Done
-                    POLL->>DEDUP: mark_seen(key, ttl=86400)
-                end
-            end
-        end
-    end
-```
-
-**Dedup Key**: `note:{project_id}:{mr_iid}:{note.id}` (TTL: 24 hours)
-
-**Self-Comment Guard**: If `agent_gitlab_username` is set and matches note author, skip processing (prevents infinite loop if agent posts `/copilot` command).
 
 ---
 
@@ -392,7 +403,7 @@ sequenceDiagram
 | Flow | Latency | Bottleneck | Parallelism |
 |------|---------|-----------|-------------|
 | Webhook MR review | 30-120s | Copilot SDK session | None (sequential: clone → review → post) |
-| Webhook /copilot | 30-120s | Copilot SDK session | Per-repo lock (serializes concurrent commands on same MR) |
+| Webhook discussion (@mention) | 30-120s | Copilot SDK session | Per-repo lock (serializes concurrent requests on same MR) |
 | GitLab poller (MR) | Poll interval + review latency | GitLab API rate limits | Sequential per project |
 | GitLab poller (notes) | Poll interval + command latency | GitLab API rate limits | Sequential per project |
 | Jira poller | Poll interval + coding latency | Jira API rate limits | Sequential per issue, per-repo lock |

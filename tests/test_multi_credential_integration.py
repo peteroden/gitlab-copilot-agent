@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from httpx import AsyncClient
 
+from gitlab_copilot_agent.discussion_models import AgentIdentity
 from gitlab_copilot_agent.gitlab_client import MRDetails
 from gitlab_copilot_agent.main import app
 from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
@@ -31,6 +32,9 @@ PROJECT_ALPHA_REPO = "team-alpha/service-a"
 PROJECT_BETA_ID = 200
 PROJECT_BETA_TOKEN = "token-beta"
 PROJECT_BETA_REPO = "team-beta/service-b"
+
+AGENT_USER_ID = 999
+AGENT_USERNAME = "copilot-bot"
 
 
 def _make_multi_project_registry() -> ProjectRegistry:
@@ -167,7 +171,7 @@ async def test_note_webhook_multi_project_token_isolation(
     _mock_post_review: AsyncMock,
     client: AsyncClient,
 ) -> None:
-    """Copilot comment webhook for project Beta uses Beta's token, not Alpha's."""
+    """Discussion webhook for project Beta uses Beta's token, not Alpha's."""
     mock_gl_instance = mock_client_class.return_value
     mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
     mock_gl_instance.cleanup = AsyncMock()
@@ -178,6 +182,13 @@ async def test_note_webhook_multi_project_token_isolation(
     registry = _make_multi_project_registry()
     app.state.project_registry = registry
 
+    # Wire credential registry for @mention routing
+    mock_cred = MagicMock()
+    mock_cred.resolve_identity = AsyncMock(
+        return_value=AgentIdentity(user_id=AGENT_USER_ID, username=AGENT_USERNAME)
+    )
+    app.state.credential_registry = mock_cred
+
     note_payload = {
         "object_kind": "note",
         "user": {"id": 1, "username": "dev"},
@@ -187,7 +198,7 @@ async def test_note_webhook_multi_project_token_isolation(
             "git_http_url": f"https://gitlab.example.com/{PROJECT_BETA_REPO}.git",
         },
         "object_attributes": {
-            "note": "/copilot review this",
+            "note": f"@{AGENT_USERNAME} review this",
             "noteable_type": "MergeRequest",
         },
         "merge_request": {
@@ -200,7 +211,7 @@ async def test_note_webhook_multi_project_token_isolation(
 
     try:
         with patch(
-            "gitlab_copilot_agent.webhook.handle_copilot_comment", new_callable=AsyncMock
+            "gitlab_copilot_agent.webhook.handle_discussion_interaction", new_callable=AsyncMock
         ) as mock_handle:
             resp = await client.post("/webhook", json=note_payload, headers=HEADERS)
             assert resp.json() == {"status": "queued"}
@@ -211,3 +222,4 @@ async def test_note_webhook_multi_project_token_isolation(
             assert kwargs["project_token"] == PROJECT_BETA_TOKEN
     finally:
         app.state.project_registry = None
+        del app.state.credential_registry

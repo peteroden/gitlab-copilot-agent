@@ -292,7 +292,7 @@ def build_jira_coding_prompt(issue_key: str, summary: str, description: str | No
     )
 ```
 
-#### Coding Prompt (MR Comment, `mr_comment_handler.py`)
+#### Coding Prompt (MR @mention, `discussion_handler.py`)
 ```python
 def build_mr_coding_prompt(instruction: str, mr_title: str, source_branch: str, target_branch: str) -> str:
     return (
@@ -587,7 +587,7 @@ _PYTHON_GITIGNORE_PATTERNS = [
 
 **Logs**: structlog output from `copilot_session.py`, `review_engine.py`, `coding_engine.py`
 
-**Trace**: OTEL spans: `copilot.session`, `mr.review`, `mr.copilot_command`, `jira.coding_task`
+**Trace**: OTEL spans: `copilot.session`, `mr.review`, `mr.discussion`, `jira.coding_task`
 
 **Errors**: Exception stack traces in logs
 

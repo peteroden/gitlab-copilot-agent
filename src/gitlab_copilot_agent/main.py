@@ -214,6 +214,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             executor=app.state.executor,
             repo_locks=repo_locks,
             project_registry=project_registry,
+            credential_registry=creds,
         )
         gl_poller._interval = settings.gitlab_poll_interval  # pyright: ignore[reportPrivateUsage]
         await gl_poller.start()

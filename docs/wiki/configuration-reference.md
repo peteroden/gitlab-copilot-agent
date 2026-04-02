@@ -94,7 +94,7 @@ At least one of these must be set:
 - **Required**: ❌ No
 - **Default**: `None`
 - **Deprecated**: ⚠️ Agent identity is now auto-discovered via `GET /user` using the existing `GITLAB_TOKEN`. The `CredentialRegistry` lazily resolves and caches the agent's `AgentIdentity` (immutable `user_id` + `username`) per credential on first use. No new env vars are needed.
-- **Description**: Previously used for loop prevention (skips self-authored `/copilot` notes). Retained for backward compatibility but no longer required.
+- **Description**: Previously used for loop prevention (skips self-authored notes). Retained for backward compatibility but no longer required.
 - **Example**: `"copilot-agent"`
 
 ### `CLONE_DIR`

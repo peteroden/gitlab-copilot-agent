@@ -1,8 +1,9 @@
-"""Background GitLab poller — discovers new/updated MRs and /copilot notes."""
+"""Background GitLab poller — discovers new/updated MRs and @mention notes."""
 
 from __future__ import annotations
 
 import asyncio
+import re
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
@@ -10,6 +11,9 @@ import structlog
 
 from gitlab_copilot_agent.concurrency import DeduplicationStore, DistributedLock
 from gitlab_copilot_agent.config import Settings
+from gitlab_copilot_agent.credential_registry import CredentialRegistry
+from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
+from gitlab_copilot_agent.discussion_models import AgentIdentity
 from gitlab_copilot_agent.gitlab_client import (
     GitLabClient,
     GitLabClientProtocol,
@@ -26,7 +30,6 @@ from gitlab_copilot_agent.models import (
     WebhookProject,
     WebhookUser,
 )
-from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
 from gitlab_copilot_agent.orchestrator import handle_review
 from gitlab_copilot_agent.project_registry import ProjectRegistry
 from gitlab_copilot_agent.task_executor import TaskExecutionError, TaskExecutor
@@ -37,7 +40,7 @@ _MAX_BACKOFF = 300
 
 
 class GitLabPoller:
-    """Background poller that discovers open MRs and /copilot notes."""
+    """Background poller that discovers open MRs and @mention notes."""
 
     def __init__(
         self,
@@ -48,6 +51,7 @@ class GitLabPoller:
         executor: TaskExecutor,
         repo_locks: DistributedLock | None = None,
         project_registry: ProjectRegistry | None = None,
+        credential_registry: CredentialRegistry | None = None,
     ) -> None:
         self._client = gl_client
         self._settings = settings
@@ -56,19 +60,21 @@ class GitLabPoller:
         self._executor = executor
         self._repo_locks = repo_locks
         self._project_registry = project_registry
+        self._credential_registry = credential_registry
         self._project_clients: dict[str, GitLabClientProtocol] = {}
         self._interval: int = 30
         self._task: asyncio.Task[None] | None = None
         self._watermark: str | None = None
         self._note_watermark: str | None = None
         self._failures: int = 0
+        self._agent_identity: AgentIdentity | None = None
 
     async def start(self) -> None:
         # MR watermark looks back to catch recently created/updated MRs
         if self._watermark is None:
             lookback = self._settings.gitlab_poll_lookback
             self._watermark = (datetime.now(UTC) - timedelta(minutes=lookback)).isoformat()
-        # Note watermark starts at "now" to avoid replaying /copilot commands
+        # Note watermark starts at "now" to avoid replaying old mentions
         if self._note_watermark is None:
             self._note_watermark = datetime.now(UTC).isoformat()
         self._task = asyncio.create_task(self._poll_loop())
@@ -171,9 +177,30 @@ class GitLabPoller:
             return
         await self._dedup.mark_seen(key, ttl_seconds=_DEDUP_TTL)
 
+    async def _resolve_agent_identity(self) -> AgentIdentity | None:
+        """Lazily resolve the agent identity from the credential registry."""
+        if self._agent_identity is not None:
+            return self._agent_identity
+        if self._credential_registry is None:
+            return None
+        try:
+            self._agent_identity = await self._credential_registry.resolve_identity(
+                "default", self._settings.gitlab_url
+            )
+        except Exception:
+            await log.awarning("poller_identity_resolution_failed", exc_info=True)
+            return None
+        return self._agent_identity
+
     async def _process_notes(
         self, project_id: int, mrs: list[MRListItem], client: GitLabClientProtocol
     ) -> None:
+        agent_identity = await self._resolve_agent_identity()
+        if agent_identity is None:
+            return
+        mention_pattern = re.compile(
+            rf"(?<![.\w-])@{re.escape(agent_identity.username)}(?![.\w-])"
+        )
         for mr in mrs:
             notes = await client.list_mr_notes(
                 project_id, mr.iid, created_after=self._note_watermark
@@ -181,27 +208,27 @@ class GitLabPoller:
             for note in notes:
                 if note.system:
                     continue
-                if not parse_copilot_command(note.body):
+                if not mention_pattern.search(note.body):
                     continue
                 # Skip self-authored notes (consistent with webhook)
-                agent_user = self._settings.agent_gitlab_username
-                if agent_user and note.author.username == agent_user:
+                if note.author.id == agent_identity.user_id:
                     continue
                 note_key = f"note:{project_id}:{mr.iid}:{note.id}"
                 if await self._dedup.is_seen(note_key):
                     continue
                 payload = _build_note_payload(note, mr, project_id, self._settings)
                 try:
-                    await handle_copilot_comment(
+                    await handle_discussion_interaction(
                         self._settings,
                         payload,
                         self._executor,
-                        self._repo_locks,
+                        agent_identity,
                         project_token=self._resolve_token(project_id),
+                        repo_locks=self._repo_locks,
                     )
                 except TaskExecutionError:
                     await log.awarning(
-                        "gitlab_copilot_note_task_failed",
+                        "gitlab_mention_note_task_failed",
                         note_id=note.id,
                         project_id=project_id,
                         mr_iid=mr.iid,

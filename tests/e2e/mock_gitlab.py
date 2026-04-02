@@ -132,6 +132,27 @@ async def get_current_user() -> dict:
     return {"id": 9999, "username": "mock-review-bot", "name": "Mock Review Bot"}
 
 
+@app.get("/api/v4/projects/{project_id}/merge_requests/{mr_iid}/discussions/{discussion_id}")
+async def get_discussion(project_id: int, mr_iid: int, discussion_id: str) -> dict:
+    """Return a single discussion by ID (used by discussion_handler to reply)."""
+    for disc in _seeded_discussions:
+        if disc.get("id") == discussion_id:
+            return disc
+    return {"id": discussion_id, "notes": []}
+
+
+@app.post(
+    "/api/v4/projects/{project_id}/merge_requests/{mr_iid}/discussions/{discussion_id}/notes"
+)
+async def reply_to_discussion(
+    project_id: int, mr_iid: int, discussion_id: str, request: Request
+) -> dict:
+    """Record a reply to an existing discussion thread."""
+    body = await request.json()
+    discussions.append({"_type": "reply", "discussion_id": discussion_id, **body})
+    return {"id": 2000, "body": body.get("body", "")}
+
+
 @app.post("/api/v4/projects/{project_id}/merge_requests/{mr_iid}/discussions")
 async def create_discussion(project_id: int, mr_iid: int, request: Request) -> dict:
     body = await request.json()

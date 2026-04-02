@@ -1,0 +1,188 @@
+"""Unified discussion handler — thread interactions via @mention or reply.
+
+Handles questions, coding requests, and resolution signals through a single
+LLM session with full context (repo, diff, discussion history).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import shutil
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import gitlab
+import structlog
+
+from gitlab_copilot_agent.coding_workflow import apply_coding_result
+from gitlab_copilot_agent.discussion_engine import (
+    build_discussion_prompt,
+    parse_discussion_response,
+    run_discussion,
+)
+from gitlab_copilot_agent.discussion_models import DiscussionHistory
+from gitlab_copilot_agent.git_operations import git_commit, git_push
+from gitlab_copilot_agent.gitlab_client import GitLabClient
+from gitlab_copilot_agent.task_executor import TaskExecutionError
+from gitlab_copilot_agent.telemetry import get_tracer
+
+if TYPE_CHECKING:
+    from gitlab_copilot_agent.concurrency import DistributedLock
+    from gitlab_copilot_agent.config import Settings
+    from gitlab_copilot_agent.discussion_models import AgentIdentity, Discussion
+    from gitlab_copilot_agent.models import NoteWebhookPayload
+    from gitlab_copilot_agent.task_executor import TaskExecutor
+
+log = structlog.get_logger()
+_tracer = get_tracer(__name__)
+
+AGENT_AUTHOR_NAME = "Copilot Agent"
+AGENT_AUTHOR_EMAIL = "copilot-agent@noreply.gitlab.com"
+
+# Resolve from prompt_defaults if available; fallback for parallel development.
+import gitlab_copilot_agent.prompt_defaults as _prompt_mod  # noqa: E402
+
+DEFAULT_DISCUSSION_PROMPT: str = getattr(
+    _prompt_mod,
+    "DEFAULT_DISCUSSION_PROMPT",
+    "You are a code assistant participating in a merge request discussion.",
+)
+
+
+def _find_triggering_discussion(
+    discussions: list[Discussion],
+    note_id: int,
+) -> Discussion | None:
+    """Find the discussion containing the note that triggered this handler."""
+    for disc in discussions:
+        for note in disc.notes:
+            if note.note_id == note_id:
+                return disc
+    return None
+
+
+async def handle_discussion_interaction(
+    settings: Settings,
+    payload: NoteWebhookPayload,
+    executor: TaskExecutor,
+    agent_identity: AgentIdentity,
+    project_token: str | None = None,
+    repo_locks: DistributedLock | None = None,
+) -> None:
+    """Handle an @mention or thread-reply interaction on an MR.
+
+    Full pipeline: clone → fetch context → build prompt → LLM → post reply.
+    If the LLM returns code changes, also commit and push.
+    """
+    mr = payload.merge_request
+    project = payload.project
+    note_id = payload.object_attributes.id
+
+    with _tracer.start_as_current_span(
+        "mr.discussion_interaction",
+        attributes={"project_id": project.id, "mr_iid": mr.iid},
+    ):
+        bound_log = log.bind(project_id=project.id, mr_iid=mr.iid, note_id=note_id)
+        await bound_log.ainfo("discussion_interaction_started")
+
+        token = project_token or settings.gitlab_token
+        gl_client = GitLabClient(settings.gitlab_url, token)
+        repo_path: Path | None = None
+
+        async def _execute() -> None:
+            nonlocal repo_path
+            try:
+                # 1. Clone repo (always — questions may need full context)
+                repo_path = await gl_client.clone_repo(
+                    project.git_http_url,
+                    mr.source_branch,
+                    token,
+                    clone_dir=settings.clone_dir,
+                )
+
+                # 2. Fetch MR details + discussions
+                mr_details = await gl_client.get_mr_details(project.id, mr.iid)
+                discussions = await gl_client.list_mr_discussions(project.id, mr.iid)
+                discussion_history = DiscussionHistory(
+                    discussions=discussions, agent=agent_identity
+                )
+
+                # 3. Find the triggering discussion thread
+                triggering = _find_triggering_discussion(discussions, note_id)
+                if triggering is None:
+                    await bound_log.awarning("triggering_discussion_not_found", note_id=note_id)
+                    return
+
+                # 4. Build prompt + run LLM
+                user_prompt = build_discussion_prompt(mr_details, discussion_history, triggering)
+                result = await run_discussion(
+                    executor,
+                    settings,
+                    str(repo_path),
+                    project.git_http_url,
+                    system_prompt=DEFAULT_DISCUSSION_PROMPT,
+                    user_prompt=user_prompt,
+                    source_branch=mr.source_branch,
+                )
+
+                # 5. Parse response
+                response = parse_discussion_response(result.summary)
+                await bound_log.ainfo(
+                    "discussion_response_parsed",
+                    has_code_changes=response.has_code_changes,
+                )
+
+                # 6. If code changes were made: apply, commit, push
+                if response.has_code_changes:
+                    await apply_coding_result(result, repo_path)
+                    has_changes = await git_commit(
+                        repo_path,
+                        f"fix: {payload.object_attributes.note[:50]}",
+                        AGENT_AUTHOR_NAME,
+                        AGENT_AUTHOR_EMAIL,
+                    )
+                    if has_changes:
+                        await git_push(repo_path, "origin", mr.source_branch, token)
+                        response = response.model_copy(
+                            update={"reply": f"{response.reply}\n\n✅ Changes pushed."}
+                        )
+
+                # 7. Post reply to the existing thread
+                gl = gitlab.Gitlab(settings.gitlab_url, private_token=token)
+                gl_project = gl.projects.get(project.id)
+                gl_mr = gl_project.mergerequests.get(mr.iid)
+                disc_obj = gl_mr.discussions.get(triggering.discussion_id)
+                await asyncio.to_thread(disc_obj.notes.create, {"body": response.reply})
+                await bound_log.ainfo("discussion_reply_posted")
+
+            except TaskExecutionError as exc:
+                await bound_log.aexception("discussion_task_failed")
+                try:
+                    await gl_client.post_mr_comment(
+                        project.id,
+                        mr.iid,
+                        f"❌ Error processing discussion.\n\n**Error:** {exc}",
+                    )
+                except Exception:
+                    await bound_log.aexception("error_comment_failed")
+                raise
+            except Exception:
+                await bound_log.aexception("discussion_interaction_failed")
+                try:
+                    await gl_client.post_mr_comment(
+                        project.id,
+                        mr.iid,
+                        "❌ Error processing discussion request.",
+                    )
+                except Exception:
+                    await bound_log.aexception("error_comment_failed")
+                raise
+            finally:
+                if repo_path:
+                    await asyncio.to_thread(shutil.rmtree, repo_path, True)
+
+        if repo_locks:
+            async with repo_locks.acquire(project.git_http_url):
+                await _execute()
+        else:
+            await _execute()

@@ -26,25 +26,26 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 ---
 
 ### `webhook.py`
-**Purpose**: FastAPI router for GitLab webhooks (merge_request, note).
+**Purpose**: FastAPI router for GitLab webhooks (merge_request, note). Routes note events to the unified discussion handler via @mention detection.
 
 **Key Functions**:
 - `webhook(request: Request, background_tasks: BackgroundTasks, x_gitlab_token: str | None) -> dict[str, str]`: POST endpoint, validates HMAC, dispatches to background handlers
 - `_validate_webhook_token(received: str | None, expected: str) -> None`: HMAC comparison using `hmac.compare_digest`
 - `_process_review(request: Request, payload: MergeRequestWebhookPayload) -> None`: Background task for MR review
-- `_process_copilot_comment(request: Request, payload: NoteWebhookPayload) -> None`: Background task for /copilot commands
+- `_is_agent_directed(payload: NoteWebhookPayload, agent_identity: AgentIdentity, request: Request) -> bool`: Check if note @mentions the agent
+- `_process_discussion(request: Request, payload: NoteWebhookPayload, agent_identity: AgentIdentity) -> None`: Background task for discussion interactions
 
 **Key Constants**:
 - `HANDLED_ACTIONS = frozenset({"open", "update"})`: MR actions that trigger review
 
-**Internal Imports**: `models`, `orchestrator`, `mr_comment_handler`, `metrics`, `concurrency`
+**Internal Imports**: `models`, `orchestrator`, `discussion_handler`, `discussion_models`, `metrics`, `concurrency`, `project_registry`, `credential_registry`
 
 **Depended On By**: `main.py` (includes router)
 
 ---
 
 ### `gitlab_poller.py`
-**Purpose**: Background poller that discovers open MRs and /copilot notes via GitLab API.
+**Purpose**: Background poller that discovers open MRs and @mention notes via GitLab API.
 
 **Key Classes**:
 - `GitLabPoller`: Polls projects on interval, synthesizes webhook payloads, dispatches to handlers
@@ -52,14 +53,14 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - `stop() -> None`: Cancel polling task
   - `_poll_once() -> None`: Single poll cycle (all projects, MRs, notes)
   - `_process_mr(project_id: int, mr: MRListItem) -> None`: Dispatch MR review
-  - `_process_notes(project_id: int, mrs: list[MRListItem]) -> None`: Dispatch /copilot commands
+  - `_process_notes(project_id: int, mrs: list[MRListItem]) -> None`: Dispatch @mention interactions
   - `_watermark: str | None`: ISO timestamp of last poll start (updated after each cycle)
   - `_failures: int`: Consecutive failure count for exponential backoff
 
 **Key Functions**:
 - `_build_note_payload(note: NoteListItem, mr: MRListItem, project_id: int, settings: Settings) -> NoteWebhookPayload`: Synthesize webhook payload from API models
 
-**Internal Imports**: `config`, `gitlab_client`, `models`, `orchestrator`, `mr_comment_handler`, `concurrency`, `task_executor`
+**Internal Imports**: `config`, `gitlab_client`, `models`, `orchestrator`, `discussion_handler`, `discussion_models`, `concurrency`, `task_executor`, `credential_registry`
 
 **Depended On By**: `main.py` (started in lifespan if `gitlab_poll=true`)
 
@@ -105,21 +106,47 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 ---
 
 ### `mr_comment_handler.py`
-**Purpose**: Handle `/copilot <instruction>` commands from MR comments.
+
+> **Deprecated**: This module is superseded by `discussion_handler.py`, which handles all @mention interactions for both webhook and poller paths. `mr_comment_handler.py` is no longer imported or used.
+
+---
+
+### `discussion_handler.py`
+**Purpose**: Unified handler for @mention and thread-reply interactions on MRs.
 
 **Key Constants**:
-- `COPILOT_PREFIX = "/copilot "`
 - `AGENT_AUTHOR_NAME = "Copilot Agent"`
 - `AGENT_AUTHOR_EMAIL = "copilot-agent@noreply.gitlab.com"`
 
 **Key Functions**:
-- `parse_copilot_command(note: str) -> str | None`: Extract instruction from comment
-- `build_mr_coding_prompt(instruction: str, mr_title: str, source_branch: str, target_branch: str) -> str`: Build user prompt
-- `handle_copilot_comment(settings: Settings, payload: NoteWebhookPayload, executor: TaskExecutor, repo_locks: DistributedLock | None) -> None`: Clone → code → apply result → commit → push → comment
+- `handle_discussion_interaction(settings: Settings, payload: NoteWebhookPayload, executor: TaskExecutor, agent_identity: AgentIdentity, project_token: str | None, repo_locks: DistributedLock | None) -> None`: Full discussion pipeline — clone → fetch MR details & discussions → find triggering thread → build prompt → run LLM → parse response → post reply (+ optional commit/push)
+- `_find_triggering_discussion(discussions: list[Discussion], note_id: int) -> Discussion | None`: Locate the discussion containing the triggering note
 
-**Internal Imports**: `config`, `models`, `task_executor`, `gitlab_client`, `git_operations`, `coding_workflow`, `prompt_defaults`, `concurrency`, `telemetry`
+**Internal Imports**: `discussion_engine`, `discussion_models`, `coding_workflow`, `git_operations`, `gitlab_client`, `task_executor`, `telemetry`, `concurrency`, `config`, `models`, `prompt_defaults`
 
-**Depended On By**: `webhook.py`, `gitlab_poller.py`
+**Depended On By**: `webhook.py`
+
+---
+
+### `discussion_engine.py`
+**Purpose**: Discussion prompt construction and response parsing for @mention/thread interactions.
+
+**Key Constants**:
+- `MAX_DIFF_CHARS = 80_000`: Max diff characters included in prompt
+- `MAX_OTHER_DISCUSSIONS = 5`: Max other threads summarized for context
+- `MAX_OTHER_NOTE_CHARS = 100`: Max characters per summarized note
+
+**Key Models**:
+- `DiscussionResponse`: Structured LLM response — `intent` (question, coding, resolution, mixed), `reply` (text to post), `code_changes` (optional file changes)
+
+**Key Functions**:
+- `build_discussion_prompt(mr_details: MRDetails, discussion_history: DiscussionHistory, triggering_discussion: Discussion) -> str`: Build user prompt with MR metadata, triggering thread, diff, and other discussion context
+- `parse_discussion_response(raw: str) -> DiscussionResponse`: Extract structured response from LLM output; falls back to question-intent reply if parsing fails
+- `run_discussion(executor: TaskExecutor, settings: Settings, repo_path: str, repo_url: str, system_prompt: str, user_prompt: str, source_branch: str) -> TaskResult`: Execute discussion LLM session via executor
+
+**Internal Imports**: `task_executor`, `config`, `discussion_models`, `gitlab_client`
+
+**Depended On By**: `discussion_handler.py`
 
 ---
 
@@ -201,7 +228,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Internal Imports**: `config` (TYPE_CHECKING only)
 
-**Depended On By**: `review_engine.py`, `coding_engine.py`, `mr_comment_handler.py`, `task_runner.py`
+**Depended On By**: `review_engine.py`, `coding_engine.py`, `task_runner.py`
 
 ---
 
@@ -213,7 +240,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Internal Imports**: `task_executor`, `git_operations`, `telemetry`
 
-**Depended On By**: `coding_orchestrator.py`, `mr_comment_handler.py`
+**Depended On By**: `coding_orchestrator.py`
 
 ---
 
@@ -237,7 +264,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Internal Imports**: `config`
 
-**Depended On By**: All execution callers (`orchestrator.py`, `mr_comment_handler.py`, `coding_orchestrator.py`); `main.py` (instantiation)
+**Depended On By**: All execution callers (`orchestrator.py`, `coding_orchestrator.py`); `main.py` (instantiation)
 
 ---
 
@@ -358,7 +385,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Internal Imports**: `git_operations`
 
-**Depended On By**: `orchestrator.py`, `mr_comment_handler.py`, `coding_orchestrator.py`, `gitlab_poller.py`, `main.py`
+**Depended On By**: `orchestrator.py`, `coding_orchestrator.py`, `gitlab_poller.py`, `main.py`
 
 ---
 
@@ -408,7 +435,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Internal Imports**: `telemetry`
 
-**Depended On By**: `gitlab_client.py`, `mr_comment_handler.py`, `coding_orchestrator.py`, `task_runner.py`, `coding_workflow.py`
+**Depended On By**: `gitlab_client.py`, `coding_orchestrator.py`, `task_runner.py`, `coding_workflow.py`
 
 ---
 
@@ -495,7 +522,7 @@ All use `strict=True` config.
 
 **Internal Imports**: None
 
-**Depended On By**: `webhook.py`, `gitlab_poller.py`, `mr_comment_handler.py`, `orchestrator.py`
+**Depended On By**: `webhook.py`, `gitlab_poller.py`, `orchestrator.py`
 
 ---
 
@@ -535,7 +562,7 @@ All use `frozen=True` config.
 
 **Internal Imports**: None
 
-**Depended On By**: `orchestrator.py`, `credential_registry.py`
+**Depended On By**: `orchestrator.py`, `credential_registry.py`, `discussion_handler.py`, `discussion_engine.py`
 
 ---
 
@@ -615,7 +642,7 @@ All use `frozen=True` config.
 
 **Internal Imports**: None
 
-**Depended On By**: `main.py`, `webhook.py`, `gitlab_poller.py`, `coding_orchestrator.py`, `mr_comment_handler.py`
+**Depended On By**: `main.py`, `webhook.py`, `gitlab_poller.py`, `coding_orchestrator.py`
 
 ---
 
@@ -654,7 +681,7 @@ All use `frozen=True` config.
 
 **Internal Imports**: None
 
-**Depended On By**: `main.py`, `orchestrator.py`, `mr_comment_handler.py`, `coding_orchestrator.py`, `copilot_session.py`, `git_operations.py`, `jira_poller.py`
+**Depended On By**: `main.py`, `orchestrator.py`, `coding_orchestrator.py`, `copilot_session.py`, `git_operations.py`, `jira_poller.py`
 
 ---
 
@@ -715,7 +742,9 @@ All use `frozen=True` config.
 | `gitlab_poller.py` | Ingestion | 175 | MR/note discovery |
 | `jira_poller.py` | Ingestion | 90 | Issue discovery |
 | `orchestrator.py` | Processing | 95 | MR review pipeline |
-| `mr_comment_handler.py` | Processing | 130 | /copilot command handling |
+| `mr_comment_handler.py` | Processing | 130 | *(Deprecated — superseded by `discussion_handler.py`)* |
+| `discussion_handler.py` | Processing | 191 | Unified @mention/thread interaction handler |
+| `discussion_engine.py` | Processing | 147 | Discussion prompt construction & response parsing |
 | `coding_orchestrator.py` | Processing | 142 | Jira task implementation |
 | `review_engine.py` | Processing | 91 | Review prompt construction |
 | `coding_engine.py` | Processing | 109 | Coding prompt construction |
@@ -742,4 +771,4 @@ All use `frozen=True` config.
 | `process_sandbox.py` | Utils | 20 | CLI path resolution |
 | `plugin_manager.py` | Utils | 88 | Plugin installation |
 
-**Total: 31 modules, ~3,518 lines of code**
+**Total: 33 modules, ~3,856 lines of code**

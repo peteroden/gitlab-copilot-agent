@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     mr_comment_system_prompt_suffix: str | None = Field(
         default=None, description="Appended to default MR comment system prompt"
     )
+    discussion_system_prompt: str | None = Field(
+        default=None, description="Full override of discussion system prompt"
+    )
+    discussion_system_prompt_suffix: str | None = Field(
+        default=None, description="Appended to default discussion system prompt"
+    )
 
     # Server
     host: str = Field(default="0.0.0.0", description="Server bind host")
@@ -332,6 +338,12 @@ class TaskRunnerSettings(BaseSettings):
     mr_comment_system_prompt: str | None = Field(default=None, description="MR comment override")
     mr_comment_system_prompt_suffix: str | None = Field(
         default=None, description="MR comment suffix"
+    )
+    discussion_system_prompt: str | None = Field(
+        default=None, description="Discussion prompt override"
+    )
+    discussion_system_prompt_suffix: str | None = Field(
+        default=None, description="Discussion suffix"
     )
 
     # Runtime

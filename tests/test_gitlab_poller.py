@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from gitlab_copilot_agent.concurrency import MemoryDedup
+from gitlab_copilot_agent.credential_registry import CredentialRegistry
+from gitlab_copilot_agent.discussion_models import AgentIdentity
 from gitlab_copilot_agent.gitlab_client import MRAuthor, MRListItem, NoteListItem
 from gitlab_copilot_agent.gitlab_poller import GitLabPoller
 from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
@@ -20,11 +22,14 @@ PATH_WITH_NS = "group/my-project"
 MR_WEB_URL = f"{GITLAB_URL}/{PATH_WITH_NS}/-/merge_requests/{MR_IID}"
 MR_AUTHOR = MRAuthor(id=99, username="dev")
 NOTE_AUTHOR = MRAuthor(id=42, username="reviewer")
+AGENT_USERNAME = "review-bot"
+AGENT_USER_ID = 100
+AGENT_IDENTITY = AgentIdentity(user_id=AGENT_USER_ID, username=AGENT_USERNAME)
 NOTE_ID = 777
-COPILOT_BODY = "/copilot review this"
+MENTION_BODY = f"@{AGENT_USERNAME} review this"
 PER_PROJECT_TOKEN = "project-specific-token"
 _HANDLE_REVIEW = "gitlab_copilot_agent.gitlab_poller.handle_review"
-_HANDLE_COMMENT = "gitlab_copilot_agent.gitlab_poller.handle_copilot_comment"
+_HANDLE_DISCUSSION = "gitlab_copilot_agent.gitlab_poller.handle_discussion_interaction"
 
 
 def _mr_item(**overrides: object) -> MRListItem:
@@ -47,7 +52,7 @@ def _mr_item(**overrides: object) -> MRListItem:
 def _note_item(**overrides: object) -> NoteListItem:
     defaults = {
         "id": NOTE_ID,
-        "body": COPILOT_BODY,
+        "body": MENTION_BODY,
         "author": NOTE_AUTHOR,
         "system": False,
         "created_at": "2024-01-01T00:00:00Z",
@@ -56,15 +61,24 @@ def _note_item(**overrides: object) -> NoteListItem:
     return NoteListItem.model_validate(defaults)
 
 
+def _mock_credential_registry() -> AsyncMock:
+    """Create a mock CredentialRegistry that resolves to the test agent identity."""
+    registry = AsyncMock(spec=CredentialRegistry)
+    registry.resolve_identity.return_value = AGENT_IDENTITY
+    return registry
+
+
 def _poller(
     client: AsyncMock | None = None,
     dedup: MemoryDedup | None = None,
+    credential_registry: AsyncMock | None = None,
 ) -> tuple[GitLabPoller, AsyncMock, MemoryDedup]:
     cl = client or AsyncMock()
     # Default: no notes unless overridden
     cl.list_mr_notes.return_value = []
     dd = dedup or MemoryDedup()
-    p = GitLabPoller(cl, make_settings(), {PROJECT_ID}, dd, AsyncMock())
+    creds = credential_registry or _mock_credential_registry()
+    p = GitLabPoller(cl, make_settings(), {PROJECT_ID}, dd, AsyncMock(), credential_registry=creds)
     return p, cl, dd
 
 
@@ -185,115 +199,116 @@ async def test_poll_loop_resets_failures_on_success(mock_hr: AsyncMock) -> None:
 
 
 @pytest.mark.asyncio
-@patch(_HANDLE_COMMENT, new_callable=AsyncMock)
+@patch(_HANDLE_DISCUSSION, new_callable=AsyncMock)
 @patch(_HANDLE_REVIEW, new_callable=AsyncMock)
-async def test_note_discovery_triggers_comment_handler(
-    mock_hr: AsyncMock, mock_hc: AsyncMock
+async def test_note_discovery_triggers_discussion_handler(
+    mock_hr: AsyncMock, mock_hd: AsyncMock
 ) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
     cl.list_mr_notes.return_value = [_note_item()]
     await poller._poll_once()
-    mock_hc.assert_called_once()
-    payload = mock_hc.call_args[0][1]
-    assert payload.object_attributes.note == COPILOT_BODY
+    mock_hd.assert_called_once()
+    payload = mock_hd.call_args[0][1]
+    assert payload.object_attributes.note == MENTION_BODY
     assert payload.merge_request.iid == MR_IID
 
 
 @pytest.mark.asyncio
-@patch(_HANDLE_COMMENT, new_callable=AsyncMock)
+@patch(_HANDLE_DISCUSSION, new_callable=AsyncMock)
 @patch(_HANDLE_REVIEW, new_callable=AsyncMock)
-async def test_note_skips_system_notes(mock_hr: AsyncMock, mock_hc: AsyncMock) -> None:
+async def test_note_skips_system_notes(mock_hr: AsyncMock, mock_hd: AsyncMock) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
     cl.list_mr_notes.return_value = [_note_item(system=True)]
     await poller._poll_once()
-    mock_hc.assert_not_called()
+    mock_hd.assert_not_called()
 
 
 @pytest.mark.asyncio
-@patch(_HANDLE_COMMENT, new_callable=AsyncMock)
+@patch(_HANDLE_DISCUSSION, new_callable=AsyncMock)
 @patch(_HANDLE_REVIEW, new_callable=AsyncMock)
-async def test_note_skips_non_copilot_comments(mock_hr: AsyncMock, mock_hc: AsyncMock) -> None:
+async def test_note_skips_non_mention_comments(mock_hr: AsyncMock, mock_hd: AsyncMock) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
     cl.list_mr_notes.return_value = [_note_item(body="just a regular comment")]
     await poller._poll_once()
-    mock_hc.assert_not_called()
+    mock_hd.assert_not_called()
 
 
 @pytest.mark.asyncio
-@patch(_HANDLE_COMMENT, new_callable=AsyncMock)
+@patch(_HANDLE_DISCUSSION, new_callable=AsyncMock)
 @patch(_HANDLE_REVIEW, new_callable=AsyncMock)
-async def test_note_dedup_skips_seen(mock_hr: AsyncMock, mock_hc: AsyncMock) -> None:
+async def test_note_dedup_skips_seen(mock_hr: AsyncMock, mock_hd: AsyncMock) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
     cl.list_mr_notes.return_value = [_note_item()]
     await poller._poll_once()
     await poller._poll_once()
-    assert mock_hc.call_count == 1
+    assert mock_hd.call_count == 1
 
 
 @pytest.mark.asyncio
-@patch(_HANDLE_COMMENT, new_callable=AsyncMock)
+@patch(_HANDLE_DISCUSSION, new_callable=AsyncMock)
 @patch(_HANDLE_REVIEW, new_callable=AsyncMock)
 async def test_task_execution_failure_marks_note_seen(
-    mock_hr: AsyncMock, mock_hc: AsyncMock
+    mock_hr: AsyncMock, mock_hd: AsyncMock
 ) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
     cl.list_mr_notes.return_value = [_note_item()]
-    mock_hc.side_effect = TaskExecutionError("runner error")
+    mock_hd.side_effect = TaskExecutionError("runner error")
 
     await poller._poll_once()
     await poller._poll_once()
 
-    assert mock_hc.call_count == 1
+    assert mock_hd.call_count == 1
 
 
 @pytest.mark.asyncio
-@patch(_HANDLE_COMMENT, new_callable=AsyncMock)
+@patch(_HANDLE_DISCUSSION, new_callable=AsyncMock)
 @patch(_HANDLE_REVIEW, new_callable=AsyncMock)
 async def test_task_execution_failure_does_not_abort_other_notes(
-    mock_hr: AsyncMock, mock_hc: AsyncMock
+    mock_hr: AsyncMock, mock_hd: AsyncMock
 ) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
     cl.list_mr_notes.return_value = [_note_item(id=1), _note_item(id=2)]
-    mock_hc.side_effect = [TaskExecutionError("runner error"), None]
+    mock_hd.side_effect = [TaskExecutionError("runner error"), None]
 
     await poller._poll_once()
 
-    assert mock_hc.call_count == 2
+    assert mock_hd.call_count == 2
 
 
 @pytest.mark.asyncio
-@patch(_HANDLE_COMMENT, new_callable=AsyncMock)
+@patch(_HANDLE_DISCUSSION, new_callable=AsyncMock)
 @patch(_HANDLE_REVIEW, new_callable=AsyncMock)
 async def test_note_payload_has_correct_project_info(
-    mock_hr: AsyncMock, mock_hc: AsyncMock
+    mock_hr: AsyncMock, mock_hd: AsyncMock
 ) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
     cl.list_mr_notes.return_value = [_note_item()]
     await poller._poll_once()
-    payload = mock_hc.call_args[0][1]
+    payload = mock_hd.call_args[0][1]
     assert payload.project.path_with_namespace == PATH_WITH_NS
     assert payload.project.git_http_url == f"{GITLAB_URL}/{PATH_WITH_NS}.git"
     assert payload.user.username == NOTE_AUTHOR.username
 
 
 @pytest.mark.asyncio
-@patch(_HANDLE_COMMENT, new_callable=AsyncMock)
+@patch(_HANDLE_DISCUSSION, new_callable=AsyncMock)
 @patch(_HANDLE_REVIEW, new_callable=AsyncMock)
-async def test_note_skips_self_authored_comments(mock_hr: AsyncMock, mock_hc: AsyncMock) -> None:
-    """Agent's own /copilot notes are ignored (consistent with webhook)."""
+async def test_note_skips_self_authored_comments(mock_hr: AsyncMock, mock_hd: AsyncMock) -> None:
+    """Agent's own @mention notes are ignored (consistent with webhook)."""
     poller, cl, _ = _poller()
-    poller._settings = make_settings(agent_gitlab_username=NOTE_AUTHOR.username)
     cl.list_project_mrs.return_value = [_mr_item()]
-    cl.list_mr_notes.return_value = [_note_item()]
+    # Note authored by the agent itself (matching user_id)
+    agent_author = MRAuthor(id=AGENT_USER_ID, username=AGENT_USERNAME)
+    cl.list_mr_notes.return_value = [_note_item(author=agent_author)]
     await poller._poll_once()
-    mock_hc.assert_not_called()
+    mock_hd.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -357,12 +372,12 @@ async def test_poll_falls_back_to_none_when_not_in_registry(mock_hr: AsyncMock) 
 
 
 @pytest.mark.asyncio
-@patch(_HANDLE_COMMENT, new_callable=AsyncMock)
+@patch(_HANDLE_DISCUSSION, new_callable=AsyncMock)
 @patch(_HANDLE_REVIEW, new_callable=AsyncMock)
-async def test_poll_passes_per_project_token_to_comment_handler(
-    mock_hr: AsyncMock, mock_hc: AsyncMock
+async def test_poll_passes_per_project_token_to_discussion_handler(
+    mock_hr: AsyncMock, mock_hd: AsyncMock
 ) -> None:
-    """Poller passes per-project token from registry to handle_copilot_comment."""
+    """Poller passes per-project token from registry to handle_discussion_interaction."""
     registry = _make_project_registry()
     poller, cl, _ = _poller()
     poller._project_registry = registry
@@ -370,8 +385,8 @@ async def test_poll_passes_per_project_token_to_comment_handler(
     cl.list_project_mrs.return_value = [_mr_item()]
     cl.list_mr_notes.return_value = [_note_item()]
     await poller._poll_once()
-    mock_hc.assert_called_once()
-    _, kwargs = mock_hc.call_args
+    mock_hd.assert_called_once()
+    _, kwargs = mock_hd.call_args
     assert kwargs["project_token"] == PER_PROJECT_TOKEN
 
 

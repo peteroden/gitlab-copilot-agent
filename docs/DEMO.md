@@ -84,9 +84,9 @@ Options:
 - Narrate: "Custom agents add specialized reviewers — this one focuses on security"
 - **Key message:** "The agent adapts to YOUR codebase. It's not generic AI — it's YOUR AI reviewer."
 
-### 5. Demo the `/copilot` command (3 min)
+### 5. Demo the @mention interaction (3 min)
 
-- On any open MR, add a comment: `/copilot fix the type hints in models.py`
+- On any open MR, add a comment: `@copilot-agent fix the type hints in models.py`
 - Watch the agent push a commit with the changes
 - Narrate: "Developers can direct the agent with natural language on any MR"
 
@@ -160,7 +160,7 @@ The script runs three scenes:
 | Scene | What happens | Transition trigger |
 |-------|-------------|-------------------|
 | 1. Code Review | Navigates to MR, scrolls through review comments | `review_complete` OTEL event |
-| 2. /copilot Command | Types `/copilot fix ...` on the MR, shows commit + diff | `copilot_command_complete` event |
+| 2. @mention Interaction | Types `@copilot-agent fix ...` on the MR, shows commit + diff | `discussion_complete` event |
 | 3. Jira Flow | Shows Jira board → agent codes → MR created → "In Review" | `coding_task_complete` event |
 
 ### Options
@@ -200,7 +200,7 @@ ffmpeg -i demo-video/video.webm -c:v libx264 demo-video/demo.mp4
 
 ### How It Works
 
-The script embeds a lightweight OTEL collector (same pattern as `scripts/otel_console_collector.py`) that listens for agent log events via gRPC. When the agent emits `review_complete`, `copilot_command_complete`, etc., the script refreshes the page and transitions to the next scene. If an event doesn't arrive within the timeout, it falls back to page refresh + visual detection.
+The script embeds a lightweight OTEL collector (same pattern as `scripts/otel_console_collector.py`) that listens for agent log events via gRPC. When the agent emits `review_complete`, `discussion_complete`, etc., the script refreshes the page and transitions to the next scene. If an event doesn't arrive within the timeout, it falls back to page refresh + visual detection.
 
 ## Cleanup
 

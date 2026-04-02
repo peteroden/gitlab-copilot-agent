@@ -41,4 +41,6 @@ Option B. The YAML → rendered JSON pipeline gives us human-friendly authoring 
 - **Easier**: Multi-team token isolation without separate service instances.
 - **Harder**: Operators must understand the YAML → JSON rendering step (mitigated by CLI tooling and docs).
 - **Risk**: New env vars (`GITLAB_TOKEN__*`) require container restart to take effect — only mapping changes are hot-reloadable.
-- **Follow-up needed**: Secondary code paths (`mr_comment_handler.py`, `gitlab_poller.py`) still use the global `GITLAB_TOKEN`. Per-project tokens only flow through the Jira polling → coding pipeline.
+- **Follow-up needed**: Secondary code paths (`gitlab_poller.py`) still use the global `GITLAB_TOKEN`. Per-project tokens only flow through the Jira polling → coding pipeline.
+
+> **Note**: `mr_comment_handler.py` referenced in the original ADR was replaced by `discussion_handler.py`.

@@ -476,7 +476,7 @@ NetworkPolicies use `app.kubernetes.io/instance` labels to scope to the Helm rel
 9. **Egress NetworkPolicy**: Block job pod egress to internal services (allow GitLab, Copilot API, Redis only) ✅ (implemented — PR #164)
 10. **Resource Quotas**: Limit job pod resource consumption
 11. **Pin Docker Base Images**: Use digest-based pins to prevent supply chain attacks ✅ (implemented — `Dockerfile` uses `@sha256:` pins, CI validates, Dependabot updates)
-12. **Review Gate for /copilot**: Require human approval before auto-push on coding commands (prevents prompt injection → auto-merge)
+12. **Review Gate for @mention coding**: Require human approval before auto-push on coding commands (prevents prompt injection → auto-merge)
 
 ---
 
@@ -500,4 +500,4 @@ NetworkPolicies use `app.kubernetes.io/instance` labels to scope to the Helm rel
 2. K8s Job can exfiltrate tokens via network (mitigate: egress NetworkPolicy)
 3. Copilot API compromise can generate malicious reviews or code patches (mitigate: manual MR review before merge, patch validation)
 4. HMAC secret compromise allows full webhook replay (mitigate: rotation, monitoring)
-5. Prompt injection in `/copilot` command could instruct agent to write malicious code — the patch lands as a MR, not directly on main (mitigate: require human review before merge)
+5. Prompt injection in @mention interaction could instruct agent to write malicious code — the patch lands as a MR, not directly on main (mitigate: require human review before merge)
