@@ -176,6 +176,21 @@ wheels = [
 ]
 
 [[package]]
+name = "azure-data-tables"
+version = "12.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "azure-core" },
+    { name = "isodate" },
+    { name = "typing-extensions" },
+    { name = "yarl" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ad/b8/e76cfa7f5f847722664c6f8108c391deadcb9d9aad579650c128affd4669/azure_data_tables-12.7.0.tar.gz", hash = "sha256:b14fc94a3223a2835ff5688e17d8e107b27c7cd7c4114138f2ac81373723705d", size = 258650, upload-time = "2025-05-06T17:51:06.323Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/14/3e/2b8da274b49402659cd732def2ae217f2e86312278feb56b55ccbffbbc26/azure_data_tables-12.7.0-py3-none-any.whl", hash = "sha256:24ed9b5690aa46c213182e32bb1b39a68dd9f526d84f447c287e3a401b437c10", size = 133178, upload-time = "2025-05-06T17:51:07.65Z" },
+]
+
+[[package]]
 name = "azure-identity"
 version = "1.24.0"
 source = { registry = "https://pypi.org/simple" }
@@ -659,6 +674,7 @@ dependencies = [
 [package.optional-dependencies]
 azure = [
     { name = "aiohttp" },
+    { name = "azure-data-tables" },
     { name = "azure-identity" },
     { name = "azure-storage-blob" },
     { name = "azure-storage-queue" },
@@ -690,6 +706,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'azure'", specifier = ">=3.9.0" },
+    { name = "azure-data-tables", marker = "extra == 'azure'", specifier = ">=12.6.0" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.17.0" },
     { name = "azure-storage-blob", marker = "extra == 'azure'", specifier = ">=12.24.0" },
     { name = "azure-storage-queue", marker = "extra == 'azure'", specifier = ">=12.12.0" },

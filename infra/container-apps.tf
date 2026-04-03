@@ -471,6 +471,12 @@ resource "azurerm_role_assignment" "controller_blob_contributor" {
   principal_id         = azurerm_user_assigned_identity.controller.principal_id
 }
 
+resource "azurerm_role_assignment" "controller_table_contributor" {
+  scope                = azurerm_storage_account.tasks.id
+  role_definition_name = "Storage Table Data Contributor"
+  principal_id         = azurerm_user_assigned_identity.controller.principal_id
+}
+
 # Job: Storage Queue and Blob data access
 resource "azurerm_role_assignment" "job_queue_processor" {
   scope                = azurerm_storage_account.tasks.id

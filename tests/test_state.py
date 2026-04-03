@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from gitlab_copilot_agent.azure_storage import AzureStorageTaskQueue, BlobResultStore
+from gitlab_copilot_agent.azure_storage import AzureStorageTaskQueue, BlobResultStore, TableDedup
 from gitlab_copilot_agent.concurrency import (
     MemoryDedup,
     MemoryLock,
@@ -27,6 +27,13 @@ def test_create_lock_returns_memory_lock() -> None:
 
 def test_create_dedup_returns_memory_dedup() -> None:
     assert isinstance(create_dedup(), MemoryDedup)
+
+
+def test_create_dedup_delegates_to_azure_with_conn_string() -> None:
+    with patch("azure.data.tables.TableServiceClient.from_connection_string") as mock_svc:
+        mock_svc.return_value.get_table_client.return_value = MagicMock()
+        store = create_dedup(azure_storage_connection_string=CONN_STR)
+    assert isinstance(store, TableDedup)
 
 
 def test_create_result_store_returns_memory_by_default() -> None:

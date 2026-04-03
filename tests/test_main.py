@@ -6,7 +6,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
 
-from gitlab_copilot_agent.concurrency import MemoryDedup, RepoLockManager
+from gitlab_copilot_agent.concurrency import DeduplicationStore, RepoLockManager
 from gitlab_copilot_agent.main import _create_executor, lifespan
 from gitlab_copilot_agent.task_executor import LocalTaskExecutor, TaskExecutor
 from tests.conftest import (
@@ -55,7 +55,7 @@ async def test_lifespan_without_jira_starts_and_stops(env_vars: None) -> None:
         assert test_app.state.settings.jira is None
         assert test_app.state.repo_locks is not None
         assert isinstance(test_app.state.repo_locks, RepoLockManager)
-        assert isinstance(test_app.state.dedup_store, MemoryDedup)
+        assert isinstance(test_app.state.dedup_store, DeduplicationStore)
         assert isinstance(test_app.state.executor, LocalTaskExecutor)
         assert test_app.state.project_registry is None
 
