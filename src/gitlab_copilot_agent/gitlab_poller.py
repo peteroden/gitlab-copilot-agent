@@ -225,6 +225,7 @@ class GitLabPoller:
     ) -> None:
         agent_identity = await self._resolve_agent_identity(project_id)
         if agent_identity is None:
+            await log.adebug("skipping_notes_no_identity", project_id=project_id)
             return
         mention_pattern = re.compile(
             rf"(?<![.\w-])@{re.escape(agent_identity.username)}(?![.\w-])"
@@ -233,6 +234,15 @@ class GitLabPoller:
             notes = await client.list_mr_notes(
                 project_id, mr.iid, created_after=self._note_watermark
             )
+            if notes:
+                await log.ainfo(
+                    "notes_found",
+                    project_id=project_id,
+                    mr_iid=mr.iid,
+                    note_count=len(notes),
+                    agent_username=agent_identity.username,
+                    watermark=self._note_watermark,
+                )
             for note in notes:
                 if note.system:
                     continue
