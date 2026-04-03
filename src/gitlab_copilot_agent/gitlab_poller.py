@@ -100,12 +100,13 @@ class GitLabPoller:
         for pid in self._project_ids:
             try:
                 client = self._client_for_project(pid)
-                mrs = await client.list_project_mrs(
-                    pid, state="opened", updated_after=self._watermark
-                )
-                for mr in mrs:
+                # Fetch ALL open MRs — needed for note scanning since notes
+                # don't update MR.updated_at. MR review uses dedup to avoid
+                # re-reviewing unchanged MRs.
+                all_open_mrs = await client.list_project_mrs(pid, state="opened")
+                for mr in all_open_mrs:
                     await self._process_mr(pid, mr)
-                await self._process_notes(pid, mrs, client)
+                await self._process_notes(pid, all_open_mrs, client)
             except Exception as exc:
                 ref = "default"
                 if self._project_registry is not None:
