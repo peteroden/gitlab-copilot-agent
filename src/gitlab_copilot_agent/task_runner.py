@@ -191,6 +191,8 @@ async def _build_coding_result(
                 current_sha=current_sha[:12],
             )
             patch = await _run_git_simple(repo_path, "diff", pre_session_sha, "HEAD", "--binary")
+            if patch and not patch.endswith("\n"):
+                patch += "\n"
         elif used_changed_paths_fallback:
             await bound_log.awarning("changed_paths_fallback_no_patch")
             patch = ""

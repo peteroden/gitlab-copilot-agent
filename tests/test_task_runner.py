@@ -262,7 +262,7 @@ class TestBuildCodingResult:
                 Path("/repo"), DELETED_FILE_OUTPUT, AsyncMock(), "abc123"
             )
         data = json.loads(result)
-        assert data["patch"] == "diff --git a/src/utils.py ..."
+        assert data["patch"] == "diff --git a/src/utils.py ...\n"
         assert data["base_sha"] == "abc123"
         # Verify fallback diff was called with pre-session SHA
         git_mock.assert_any_await(Path("/repo"), "diff", "abc123", "HEAD", "--binary")
