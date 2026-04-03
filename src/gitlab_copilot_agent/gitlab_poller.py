@@ -94,10 +94,18 @@ class GitLabPoller:
             except Exception:
                 self._failures += 1
                 await log.aexception("gitlab_poll_error")
-            await asyncio.sleep(min(self._interval * 2**self._failures, _MAX_BACKOFF))
+            sleep_seconds = min(self._interval * 2**self._failures, _MAX_BACKOFF)
+            if self._failures > 0:
+                await log.awarning(
+                    "gitlab_poll_backoff",
+                    failures=self._failures,
+                    sleep_seconds=sleep_seconds,
+                )
+            await asyncio.sleep(sleep_seconds)
 
     async def _poll_once(self) -> None:
         poll_start = datetime.now(UTC).isoformat()
+        await log.ainfo("gitlab_poll_cycle", project_count=len(self._project_ids))
         for pid in self._project_ids:
             try:
                 client = self._client_for_project(pid)
