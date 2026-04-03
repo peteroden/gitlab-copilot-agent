@@ -12,21 +12,24 @@ graph TD
     IssueComment(Comment)
   end
   subgraph "controller"
-    (Merge Request)
-    Commit(Commit)
-    Comment(Comment)
+    GitLabWebhookListener(GitLab Webhook Listener)
+    GitLabPoller(GitLab Poller)
+    JiraPoller(Jira Poller)
+    Coding
+    Review
+    Discussion
   end
 
-  subgraph "Copilot Agent"
-    WebhookListener(Webhook Listener)
-    StateTracker(State Tracker)
-    ReviewGenerator(Review Generator)
-    FeedbackHandler(Feedback Handler)
+  subgraph "Task Runner"
+    CodingTask
+    DiscussionTask
+    ReviewTask
   end
+
+  Issue -->|Triggers| JiraPoller
 
   MR -->|Triggers| WebhookListener
   WebhookListener --> StateTracker
-  StateTracker --> ReviewGenerator
   ReviewGenerator -->|Posts Review| Comment
   Comment --> FeedbackHandler
   FeedbackHandler --> StateTracker

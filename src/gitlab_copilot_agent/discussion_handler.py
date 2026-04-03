@@ -23,7 +23,7 @@ from gitlab_copilot_agent.discussion_engine import (
 from gitlab_copilot_agent.discussion_models import DiscussionHistory
 from gitlab_copilot_agent.git_operations import git_commit, git_push
 from gitlab_copilot_agent.gitlab_client import GitLabClient
-from gitlab_copilot_agent.task_executor import TaskExecutionError
+from gitlab_copilot_agent.task_executor import CodingResult, TaskExecutionError
 from gitlab_copilot_agent.telemetry import get_tracer
 
 if TYPE_CHECKING:
@@ -126,15 +126,17 @@ async def handle_discussion_interaction(
                     note_id=note_id,
                 )
 
-                # 5. Parse response
+                # 5. Parse response — use summary as reply text
                 response = parse_discussion_response(result.summary)
+
+                # 6. If the task runner captured code changes, apply and push
+                has_patch = isinstance(result, CodingResult) and bool(result.patch)
                 await bound_log.ainfo(
                     "discussion_response_parsed",
-                    has_code_changes=response.has_code_changes,
+                    has_code_changes=has_patch,
                 )
 
-                # 6. If code changes were made: apply, commit, push
-                if response.has_code_changes:
+                if has_patch:
                     await apply_coding_result(result, repo_path)
                     has_changes = await git_commit(
                         repo_path,
