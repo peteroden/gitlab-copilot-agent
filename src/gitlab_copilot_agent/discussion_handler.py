@@ -123,6 +123,7 @@ async def handle_discussion_interaction(
                     system_prompt=DEFAULT_DISCUSSION_PROMPT,
                     user_prompt=user_prompt,
                     source_branch=mr.source_branch,
+                    note_id=note_id,
                 )
 
                 # 5. Parse response

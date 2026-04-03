@@ -132,6 +132,7 @@ async def run_discussion(
     system_prompt: str,
     user_prompt: str,
     source_branch: str,
+    note_id: int = 0,
 ) -> TaskResult:
     """Run a discussion LLM session and return the result.
 
@@ -140,7 +141,7 @@ async def run_discussion(
     """
     task = TaskParams(
         task_type="coding",  # use coding task type for repo access
-        task_id=f"discussion-{source_branch}",
+        task_id=f"discussion-{source_branch}-{note_id}",
         repo_url=repo_url,
         branch=source_branch,
         system_prompt=system_prompt,
