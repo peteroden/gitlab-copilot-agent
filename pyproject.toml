@@ -84,5 +84,6 @@ dev = [
     "azure-identity>=1.17.0",
     "azure-storage-queue>=12.12.0",
     "azure-storage-blob>=12.24.0",
+    "azure-data-tables>=12.6.0",
     "aiohttp>=3.9.0",
 ]

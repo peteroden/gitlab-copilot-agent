@@ -694,6 +694,7 @@ kubernetes = [
 [package.dev-dependencies]
 dev = [
     { name = "aiohttp" },
+    { name = "azure-data-tables" },
     { name = "azure-identity" },
     { name = "azure-storage-blob" },
     { name = "azure-storage-queue" },
@@ -739,6 +740,7 @@ provides-extras = ["kubernetes", "azure", "dev"]
 [package.metadata.requires-dev]
 dev = [
     { name = "aiohttp", specifier = ">=3.9.0" },
+    { name = "azure-data-tables", specifier = ">=12.6.0" },
     { name = "azure-identity", specifier = ">=1.17.0" },
     { name = "azure-storage-blob", specifier = ">=12.24.0" },
     { name = "azure-storage-queue", specifier = ">=12.12.0" },
