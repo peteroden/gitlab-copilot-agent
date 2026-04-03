@@ -12,6 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from gitlab_copilot_agent.concurrency import ReviewedMRTracker
 from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
 from gitlab_copilot_agent.discussion_models import AgentIdentity
+from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.metrics import webhook_errors_total, webhook_received_total
 from gitlab_copilot_agent.models import MergeRequestWebhookPayload, NoteWebhookPayload
 from gitlab_copilot_agent.orchestrator import handle_review
@@ -84,24 +85,45 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
         bound.exception("background_review_failed")
 
 
-def _is_agent_directed(
+async def _is_agent_directed(
     payload: NoteWebhookPayload,
     agent_identity: AgentIdentity,
-    request: Request,  # noqa: ARG001 — reserved for future thread-participation lookup
+    request: Request,
 ) -> bool:
-    """Check if a note is directed at the agent via @mention.
+    """Check if a note is directed at the agent via @mention or thread participation.
 
-    Uses a word-boundary regex to avoid false positives from substrings
-    (e.g. ``@copilot-botty`` should not match agent ``@copilot-bot``)
-    or email addresses (e.g. ``user@copilot.example.com``).
-
-    Thread-participation detection (checking whether the agent previously
-    participated in the discussion) requires a GitLab API call and is
-    deferred to the background handler.
+    Returns True if:
+    - The note body contains @{agent_username} (word-boundary regex), OR
+    - The note is in a discussion thread where the agent previously commented
+      (requires fetching the discussion via GitLab API).
     """
     note_body = payload.object_attributes.note
     pattern = rf"(?<![.\w-])@{re.escape(agent_identity.username)}(?![.\w-])"
-    return bool(re.search(pattern, note_body))
+    if re.search(pattern, note_body):
+        return True
+
+    # Check thread participation — if the note has a discussion_id,
+    # fetch the discussion and check if the agent has a prior note in it
+    discussion_id = payload.object_attributes.discussion_id
+    if discussion_id and payload.merge_request:
+        settings = request.app.state.settings
+        registry: ProjectRegistry | None = getattr(request.app.state, "project_registry", None)
+        token = _resolve_project_token(payload.project.id, registry, settings.gitlab_token)
+        try:
+            gl_client = GitLabClient(settings.gitlab_url, token)
+            discussions = await gl_client.list_mr_discussions(
+                payload.project.id, payload.merge_request.iid
+            )
+            for disc in discussions:
+                if disc.discussion_id == discussion_id:
+                    for note in disc.notes:
+                        if note.author_id == agent_identity.user_id:
+                            return True
+                    break
+        except Exception:
+            await log.awarning("thread_participation_check_failed", exc_info=True)
+
+    return False
 
 
 async def _process_discussion(
@@ -209,7 +231,7 @@ async def webhook(
             return {"status": "ignored", "reason": "self-comment"}
 
         # Check if this note is directed at the agent
-        if not _is_agent_directed(note_payload, agent_identity, request):
+        if not await _is_agent_directed(note_payload, agent_identity, request):
             return {"status": "ignored", "reason": "not directed at agent"}
 
         background_tasks.add_task(_process_discussion, request, note_payload, agent_identity)

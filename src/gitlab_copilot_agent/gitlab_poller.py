@@ -17,6 +17,7 @@ from gitlab_copilot_agent.discussion_models import AgentIdentity
 from gitlab_copilot_agent.gitlab_client import (
     GitLabClient,
     GitLabClientProtocol,
+    MRAuthor,
     MRListItem,
     NoteListItem,
 )
@@ -232,30 +233,59 @@ class GitLabPoller:
             rf"(?<![.\w-])@{re.escape(agent_identity.username)}(?![.\w-])"
         )
         for mr in mrs:
-            notes = await client.list_mr_notes(
-                project_id, mr.iid, created_after=self._note_watermark
-            )
-            if notes:
-                await log.ainfo(
-                    "notes_found",
-                    project_id=project_id,
-                    mr_iid=mr.iid,
-                    note_count=len(notes),
-                    agent_username=agent_identity.username,
-                    watermark=self._note_watermark,
-                )
-            for note in notes:
-                if note.system:
+            if mr.sha is None:
+                continue
+            # Use discussions API to get thread structure for participation detection
+            try:
+                discussions = await client.list_mr_discussions(project_id, mr.iid)
+            except Exception:
+                await log.awarning("discussion_fetch_failed", project_id=project_id, mr_iid=mr.iid)
+                continue
+
+            for disc in discussions:
+                if disc.is_resolved:
                     continue
-                if not mention_pattern.search(note.body):
+                # Find the latest non-system note in the thread
+                latest_note = None
+                for note in reversed(disc.notes):
+                    if not note.is_system:
+                        latest_note = note
+                        break
+                if latest_note is None:
                     continue
-                # Skip self-authored notes (consistent with webhook)
-                if note.author.id == agent_identity.user_id:
+                # Skip if the latest note is from the agent (we already replied)
+                if latest_note.author_id == agent_identity.user_id:
                     continue
-                note_key = f"note:{project_id}:{mr.iid}:{note.id}"
+                # Skip notes older than the watermark
+                if self._note_watermark and latest_note.created_at <= self._note_watermark:
+                    continue
+
+                # Check if this note is directed at the agent:
+                # 1. @mention in the note body, OR
+                # 2. Agent previously participated in this discussion thread
+                is_mention = bool(mention_pattern.search(latest_note.body))
+                agent_participated = any(n.author_id == agent_identity.user_id for n in disc.notes)
+                if not is_mention and not agent_participated:
+                    continue
+
+                note_key = f"note:{project_id}:{mr.iid}:{latest_note.note_id}"
                 if await self._dedup.is_seen(note_key):
                     continue
-                payload = _build_note_payload(note, mr, project_id, self._settings)
+
+                # Build payload from the discussion note
+                note_as_list_item = NoteListItem(
+                    id=latest_note.note_id,
+                    body=latest_note.body,
+                    author=MRAuthor(
+                        id=latest_note.author_id, username=latest_note.author_username
+                    ),
+                    system=latest_note.is_system,
+                    created_at=latest_note.created_at,
+                )
+                payload = _build_note_payload(note_as_list_item, mr, project_id, self._settings)
+                # Add discussion_id to the payload for the handler
+                payload.object_attributes.discussion_id = disc.discussion_id
+
                 try:
                     await handle_discussion_interaction(
                         self._settings,
@@ -268,7 +298,7 @@ class GitLabPoller:
                 except TaskExecutionError:
                     await log.awarning(
                         "gitlab_mention_note_task_failed",
-                        note_id=note.id,
+                        note_id=latest_note.note_id,
                         project_id=project_id,
                         mr_iid=mr.iid,
                     )

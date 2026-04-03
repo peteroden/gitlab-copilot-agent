@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import AsyncClient
 
-from gitlab_copilot_agent.discussion_models import AgentIdentity
+from gitlab_copilot_agent.discussion_models import AgentIdentity, Discussion, DiscussionNote
 from gitlab_copilot_agent.main import app
 from gitlab_copilot_agent.models import NoteWebhookPayload
 from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
@@ -434,7 +434,7 @@ async def test_identity_resolution_failure_returns_ignored(client: AsyncClient) 
 # -- _is_agent_directed tests --
 
 
-def test_is_agent_directed_with_mention() -> None:
+async def test_is_agent_directed_with_mention() -> None:
     """Note containing @agent_username is directed at agent."""
     from gitlab_copilot_agent.webhook import _is_agent_directed
 
@@ -442,10 +442,10 @@ def test_is_agent_directed_with_mention() -> None:
     payload = NoteWebhookPayload.model_validate(
         _note_body_with_user(note=f"@{AGENT_USERNAME} please review this")
     )
-    assert _is_agent_directed(payload, identity, MagicMock()) is True
+    assert await _is_agent_directed(payload, identity, MagicMock()) is True
 
 
-def test_is_agent_directed_without_mention() -> None:
+async def test_is_agent_directed_without_mention() -> None:
     """Note without @mention is not directed at agent."""
     from gitlab_copilot_agent.webhook import _is_agent_directed
 
@@ -453,10 +453,10 @@ def test_is_agent_directed_without_mention() -> None:
     payload = NoteWebhookPayload.model_validate(
         _note_body_with_user(note="just a regular comment")
     )
-    assert _is_agent_directed(payload, identity, MagicMock()) is False
+    assert await _is_agent_directed(payload, identity, MagicMock()) is False
 
 
-def test_is_agent_directed_wrong_username() -> None:
+async def test_is_agent_directed_wrong_username() -> None:
     """Note mentioning a different user is not directed at agent."""
     from gitlab_copilot_agent.webhook import _is_agent_directed
 
@@ -464,10 +464,10 @@ def test_is_agent_directed_wrong_username() -> None:
     payload = NoteWebhookPayload.model_validate(
         _note_body_with_user(note="@other-user please review")
     )
-    assert _is_agent_directed(payload, identity, MagicMock()) is False
+    assert await _is_agent_directed(payload, identity, MagicMock()) is False
 
 
-def test_is_agent_directed_rejects_substring_match() -> None:
+async def test_is_agent_directed_rejects_substring_match() -> None:
     """@copilot-bot must not match @copilot-botty (different user)."""
     from gitlab_copilot_agent.webhook import _is_agent_directed
 
@@ -475,10 +475,10 @@ def test_is_agent_directed_rejects_substring_match() -> None:
     payload = NoteWebhookPayload.model_validate(
         _note_body_with_user(note=f"@{AGENT_USERNAME}ty please review")
     )
-    assert _is_agent_directed(payload, identity, MagicMock()) is False
+    assert await _is_agent_directed(payload, identity, MagicMock()) is False
 
 
-def test_is_agent_directed_rejects_email() -> None:
+async def test_is_agent_directed_rejects_email() -> None:
     """Email addresses containing @username must not trigger."""
     from gitlab_copilot_agent.webhook import _is_agent_directed
 
@@ -486,10 +486,10 @@ def test_is_agent_directed_rejects_email() -> None:
     payload = NoteWebhookPayload.model_validate(
         _note_body_with_user(note=f"contact support@{AGENT_USERNAME}.example.com")
     )
-    assert _is_agent_directed(payload, identity, MagicMock()) is False
+    assert await _is_agent_directed(payload, identity, MagicMock()) is False
 
 
-def test_is_agent_directed_at_end_of_line() -> None:
+async def test_is_agent_directed_at_end_of_line() -> None:
     """@mention at end of text (no trailing chars) is valid."""
     from gitlab_copilot_agent.webhook import _is_agent_directed
 
@@ -497,4 +497,45 @@ def test_is_agent_directed_at_end_of_line() -> None:
     payload = NoteWebhookPayload.model_validate(
         _note_body_with_user(note=f"please review @{AGENT_USERNAME}")
     )
-    assert _is_agent_directed(payload, identity, MagicMock()) is True
+    assert await _is_agent_directed(payload, identity, MagicMock()) is True
+
+
+@pytest.mark.parametrize(
+    ("agent_in_thread", "expected"),
+    [(True, True), (False, False)],
+    ids=["agent-participated", "human-only"],
+)
+async def test_is_agent_directed_thread_participation(
+    agent_in_thread: bool,
+    expected: bool,
+) -> None:
+    """Thread participation: agent in thread → True, human-only → False."""
+    from gitlab_copilot_agent.webhook import _is_agent_directed
+
+    identity = AgentIdentity(user_id=AGENT_USER_ID, username=AGENT_USERNAME)
+    body = _note_body_with_user(note="follow-up without mention")
+    body["object_attributes"]["discussion_id"] = "disc-100"
+    payload = NoteWebhookPayload.model_validate(body)
+    request = MagicMock()
+    request.app.state.settings = make_settings()
+    request.app.state.project_registry = None
+    author_id = AGENT_USER_ID if agent_in_thread else NOTE_AUTHOR_USER_ID
+    author_name = AGENT_USERNAME if agent_in_thread else "reviewer"
+    mock_gl = AsyncMock()
+    mock_gl.list_mr_discussions.return_value = [
+        Discussion(
+            discussion_id="disc-100",
+            notes=[
+                DiscussionNote(
+                    note_id=10,
+                    author_id=author_id,
+                    author_username=author_name,
+                    body="prior comment",
+                    created_at="2024-01-01T00:00:00Z",
+                    is_system=False,
+                ),
+            ],
+        ),
+    ]
+    with patch("gitlab_copilot_agent.webhook.GitLabClient", return_value=mock_gl):
+        assert await _is_agent_directed(payload, identity, request) is expected

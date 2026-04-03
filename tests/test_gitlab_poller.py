@@ -9,7 +9,7 @@ import pytest
 
 from gitlab_copilot_agent.concurrency import MemoryDedup
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
-from gitlab_copilot_agent.discussion_models import AgentIdentity
+from gitlab_copilot_agent.discussion_models import AgentIdentity, Discussion, DiscussionNote
 from gitlab_copilot_agent.gitlab_client import MRAuthor, MRListItem, NoteListItem
 from gitlab_copilot_agent.gitlab_poller import GitLabPoller
 from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
@@ -61,6 +61,29 @@ def _note_item(**overrides: object) -> NoteListItem:
     return NoteListItem.model_validate(defaults)
 
 
+def _discussion(
+    note_id: int = NOTE_ID,
+    body: str = MENTION_BODY,
+    author: MRAuthor = NOTE_AUTHOR,
+    is_system: bool = False,
+    is_resolved: bool = False,
+    discussion_id: str | None = None,
+    extra_notes: list[DiscussionNote] | None = None,
+) -> Discussion:
+    """Create a Discussion with a single DiscussionNote for testing."""
+    disc_id = discussion_id or f"disc-{note_id}"
+    main_note = DiscussionNote(
+        note_id=note_id,
+        author_id=author.id,
+        author_username=author.username,
+        body=body,
+        created_at="2024-01-01T00:00:00Z",
+        is_system=is_system,
+    )
+    notes = [*(extra_notes or []), main_note]
+    return Discussion(discussion_id=disc_id, notes=notes, is_resolved=is_resolved)
+
+
 def _mock_credential_registry() -> AsyncMock:
     """Create a mock CredentialRegistry that resolves to the test agent identity."""
     registry = AsyncMock(spec=CredentialRegistry)
@@ -74,8 +97,8 @@ def _poller(
     credential_registry: AsyncMock | None = None,
 ) -> tuple[GitLabPoller, AsyncMock, MemoryDedup]:
     cl = client or AsyncMock()
-    # Default: no notes unless overridden
-    cl.list_mr_notes.return_value = []
+    # Default: no discussions unless overridden
+    cl.list_mr_discussions.return_value = []
     dd = dedup or MemoryDedup()
     creds = credential_registry or _mock_credential_registry()
     p = GitLabPoller(cl, make_settings(), {PROJECT_ID}, dd, AsyncMock(), credential_registry=creds)
@@ -201,7 +224,7 @@ async def test_note_discovery_triggers_discussion_handler(
 ) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
-    cl.list_mr_notes.return_value = [_note_item()]
+    cl.list_mr_discussions.return_value = [_discussion()]
     await poller._poll_once()
     mock_hd.assert_called_once()
     payload = mock_hd.call_args[0][1]
@@ -215,7 +238,7 @@ async def test_note_discovery_triggers_discussion_handler(
 async def test_note_skips_system_notes(mock_hr: AsyncMock, mock_hd: AsyncMock) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
-    cl.list_mr_notes.return_value = [_note_item(system=True)]
+    cl.list_mr_discussions.return_value = [_discussion(is_system=True)]
     await poller._poll_once()
     mock_hd.assert_not_called()
 
@@ -226,7 +249,7 @@ async def test_note_skips_system_notes(mock_hr: AsyncMock, mock_hd: AsyncMock) -
 async def test_note_skips_non_mention_comments(mock_hr: AsyncMock, mock_hd: AsyncMock) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
-    cl.list_mr_notes.return_value = [_note_item(body="just a regular comment")]
+    cl.list_mr_discussions.return_value = [_discussion(body="just a regular comment")]
     await poller._poll_once()
     mock_hd.assert_not_called()
 
@@ -237,7 +260,7 @@ async def test_note_skips_non_mention_comments(mock_hr: AsyncMock, mock_hd: Asyn
 async def test_note_dedup_skips_seen(mock_hr: AsyncMock, mock_hd: AsyncMock) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
-    cl.list_mr_notes.return_value = [_note_item()]
+    cl.list_mr_discussions.return_value = [_discussion()]
     await poller._poll_once()
     await poller._poll_once()
     assert mock_hd.call_count == 1
@@ -251,7 +274,7 @@ async def test_task_execution_failure_marks_note_seen(
 ) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
-    cl.list_mr_notes.return_value = [_note_item()]
+    cl.list_mr_discussions.return_value = [_discussion()]
     mock_hd.side_effect = TaskExecutionError("runner error")
 
     await poller._poll_once()
@@ -268,7 +291,7 @@ async def test_task_execution_failure_does_not_abort_other_notes(
 ) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
-    cl.list_mr_notes.return_value = [_note_item(id=1), _note_item(id=2)]
+    cl.list_mr_discussions.return_value = [_discussion(note_id=1), _discussion(note_id=2)]
     mock_hd.side_effect = [TaskExecutionError("runner error"), None]
 
     await poller._poll_once()
@@ -284,7 +307,7 @@ async def test_note_payload_has_correct_project_info(
 ) -> None:
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
-    cl.list_mr_notes.return_value = [_note_item()]
+    cl.list_mr_discussions.return_value = [_discussion()]
     await poller._poll_once()
     payload = mock_hd.call_args[0][1]
     assert payload.project.path_with_namespace == PATH_WITH_NS
@@ -299,9 +322,8 @@ async def test_note_skips_self_authored_comments(mock_hr: AsyncMock, mock_hd: As
     """Agent's own @mention notes are ignored (consistent with webhook)."""
     poller, cl, _ = _poller()
     cl.list_project_mrs.return_value = [_mr_item()]
-    # Note authored by the agent itself (matching user_id)
     agent_author = MRAuthor(id=AGENT_USER_ID, username=AGENT_USERNAME)
-    cl.list_mr_notes.return_value = [_note_item(author=agent_author)]
+    cl.list_mr_discussions.return_value = [_discussion(author=agent_author)]
     await poller._poll_once()
     mock_hd.assert_not_called()
 
@@ -378,7 +400,7 @@ async def test_poll_passes_per_project_token_to_discussion_handler(
     poller._project_registry = registry
     poller._project_clients["default"] = cl
     cl.list_project_mrs.return_value = [_mr_item()]
-    cl.list_mr_notes.return_value = [_note_item()]
+    cl.list_mr_discussions.return_value = [_discussion()]
     await poller._poll_once()
     mock_hd.assert_called_once()
     _, kwargs = mock_hd.call_args
@@ -394,9 +416,50 @@ async def test_poll_uses_per_project_client_for_discovery(mock_hr: AsyncMock) ->
     poller._project_registry = registry
     project_cl = AsyncMock()
     project_cl.list_project_mrs.return_value = [_mr_item()]
-    project_cl.list_mr_notes.return_value = []
+    project_cl.list_mr_discussions.return_value = []
     poller._project_clients["default"] = project_cl
     await poller._poll_once()
     # Per-project client used for discovery, not the default
     project_cl.list_project_mrs.assert_called_once()
     default_cl.list_project_mrs.assert_not_called()
+
+
+# -- Thread participation tests --
+
+
+@pytest.mark.asyncio
+@patch(_HANDLE_DISCUSSION, new_callable=AsyncMock)
+@patch(_HANDLE_REVIEW, new_callable=AsyncMock)
+async def test_note_agent_participated_thread_triggers_handler(
+    mock_hr: AsyncMock, mock_hd: AsyncMock
+) -> None:
+    """Reply in thread with prior agent note (no @mention) triggers handler."""
+    poller, cl, _ = _poller()
+    cl.list_project_mrs.return_value = [_mr_item()]
+    agent_note = DiscussionNote(
+        note_id=10,
+        author_id=AGENT_USER_ID,
+        author_username=AGENT_USERNAME,
+        body="agent review",
+        created_at="2024-01-01T00:00:00Z",
+        is_system=False,
+    )
+    cl.list_mr_discussions.return_value = [
+        _discussion(body="follow-up without mention", extra_notes=[agent_note]),
+    ]
+    await poller._poll_once()
+    mock_hd.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch(_HANDLE_DISCUSSION, new_callable=AsyncMock)
+@patch(_HANDLE_REVIEW, new_callable=AsyncMock)
+async def test_note_human_only_thread_ignored(mock_hr: AsyncMock, mock_hd: AsyncMock) -> None:
+    """Reply in thread with no agent notes and no @mention is ignored."""
+    poller, cl, _ = _poller()
+    cl.list_project_mrs.return_value = [_mr_item()]
+    cl.list_mr_discussions.return_value = [
+        _discussion(body="just a human follow-up"),
+    ]
+    await poller._poll_once()
+    mock_hd.assert_not_called()
