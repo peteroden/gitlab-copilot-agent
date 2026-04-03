@@ -21,6 +21,7 @@ from gitlab_copilot_agent.discussion_engine import (
     run_discussion,
 )
 from gitlab_copilot_agent.discussion_models import DiscussionHistory
+from gitlab_copilot_agent.error_messages import user_error_message
 from gitlab_copilot_agent.git_operations import git_commit, git_push
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.task_executor import CodingResult, TaskExecutionError
@@ -159,26 +160,34 @@ async def handle_discussion_interaction(
                 await bound_log.ainfo("discussion_reply_posted")
 
             except TaskExecutionError as exc:
-                await bound_log.aexception("discussion_task_failed")
+                error_str = str(exc)
+                await bound_log.aerror(
+                    "discussion_task_failed",
+                    error=error_str,
+                )
                 try:
                     await gl_client.post_mr_comment(
-                        project.id,
-                        mr.iid,
-                        f"❌ Error processing discussion.\n\n**Error:** {exc}",
+                        project.id, mr.iid, user_error_message(error_str)
                     )
                 except Exception:
-                    await bound_log.aexception("error_comment_failed")
+                    await bound_log.awarning("error_comment_failed", exc_info=True)
                 raise
-            except Exception:
-                await bound_log.aexception("discussion_interaction_failed")
+            except Exception as exc:
+                await bound_log.aerror(
+                    "discussion_interaction_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
                 try:
                     await gl_client.post_mr_comment(
                         project.id,
                         mr.iid,
-                        "❌ Error processing discussion request.",
+                        "❌ Unable to process your request. "
+                        "The service encountered an unexpected error. "
+                        "Please try again or contact the project administrator.",
                     )
                 except Exception:
-                    await bound_log.aexception("error_comment_failed")
+                    await bound_log.awarning("error_comment_failed", exc_info=True)
                 raise
             finally:
                 if repo_path:
