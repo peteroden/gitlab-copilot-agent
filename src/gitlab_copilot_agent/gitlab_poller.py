@@ -152,6 +152,8 @@ class GitLabPoller:
         return self._client
 
     async def _process_mr(self, project_id: int, mr: MRListItem) -> None:
+        if mr.sha is None:
+            return  # MR has no commits (e.g. empty draft)
         if self._settings.gitlab_review_on_push:
             key = f"review:{project_id}:{mr.iid}:{mr.sha}"
         else:

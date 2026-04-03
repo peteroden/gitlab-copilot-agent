@@ -32,7 +32,7 @@ class MRListItem(BaseModel):
     description: str | None = None
     source_branch: str
     target_branch: str
-    sha: str
+    sha: str | None = None
     web_url: str
     state: str
     author: MRAuthor
