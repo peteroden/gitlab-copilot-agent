@@ -38,6 +38,11 @@ _PATCH_MSG = (
     "Please try again."
 )
 
+_BRANCH_DELETED_MSG = (
+    "⚠️ The source branch `{branch}` has been deleted or is inaccessible.\n\n"
+    "I can't access the code to process your request."
+)
+
 _FALLBACK_MSG = (
     "❌ Unable to process your request.\n\n"
     "An unexpected error occurred. "
@@ -48,6 +53,7 @@ _FALLBACK_MSG = (
 _PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("authentication failed", "github_token"), _AUTH_MSG),
     (("403", "forbidden"), _PERMISSION_MSG),
+    (("not found in upstream", "not allowed to download"), _CLONE_MSG),
     (("clone failed", "unable to access"), _CLONE_MSG),
     (("timeout", "timed out"), _TIMEOUT_MSG),
     (("corrupt patch", "git apply"), _PATCH_MSG),
@@ -65,3 +71,8 @@ def user_error_message(error: str) -> str:
         if any(kw in lower for kw in keywords):
             return message
     return _FALLBACK_MSG
+
+
+def branch_deleted_message(branch: str) -> str:
+    """User-friendly message when the MR source branch has been deleted."""
+    return _BRANCH_DELETED_MSG.format(branch=branch)

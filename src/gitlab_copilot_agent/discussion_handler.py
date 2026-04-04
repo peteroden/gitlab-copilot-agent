@@ -21,7 +21,7 @@ from gitlab_copilot_agent.discussion_engine import (
     run_discussion,
 )
 from gitlab_copilot_agent.discussion_models import DiscussionHistory
-from gitlab_copilot_agent.error_messages import user_error_message
+from gitlab_copilot_agent.error_messages import branch_deleted_message, user_error_message
 from gitlab_copilot_agent.git_operations import TransientCloneError, git_commit, git_push
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.task_executor import CodingResult, TaskExecutionError
@@ -120,13 +120,7 @@ async def handle_discussion_interaction(
                                 disc_obj = gl_mr.discussions.get(triggering.discussion_id)
                                 await asyncio.to_thread(
                                     disc_obj.notes.create,
-                                    {
-                                        "body": (
-                                            f"⚠️ The source branch `{mr.source_branch}` "
-                                            "has been deleted or is inaccessible. "
-                                            "I can't access the code to process your request."
-                                        )
-                                    },
+                                    {"body": branch_deleted_message(mr.source_branch)},
                                 )
                         except Exception:
                             await bound_log.awarning("branch_deleted_reply_failed", exc_info=True)
