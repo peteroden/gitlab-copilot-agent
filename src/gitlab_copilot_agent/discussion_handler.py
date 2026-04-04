@@ -22,7 +22,7 @@ from gitlab_copilot_agent.discussion_engine import (
 )
 from gitlab_copilot_agent.discussion_models import DiscussionHistory
 from gitlab_copilot_agent.error_messages import user_error_message
-from gitlab_copilot_agent.git_operations import git_commit, git_push
+from gitlab_copilot_agent.git_operations import TransientCloneError, git_commit, git_push
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.task_executor import CodingResult, TaskExecutionError
 from gitlab_copilot_agent.telemetry import get_tracer
@@ -94,12 +94,44 @@ async def handle_discussion_interaction(
             nonlocal repo_path
             try:
                 # 1. Clone repo (always — questions may need full context)
-                repo_path = await gl_client.clone_repo(
-                    project.git_http_url,
-                    mr.source_branch,
-                    token,
-                    clone_dir=settings.clone_dir,
-                )
+                try:
+                    repo_path = await gl_client.clone_repo(
+                        project.git_http_url,
+                        mr.source_branch,
+                        token,
+                        clone_dir=settings.clone_dir,
+                    )
+                except (RuntimeError, TransientCloneError) as clone_exc:
+                    clone_err = str(clone_exc).lower()
+                    if "not found" in clone_err or "not allowed" in clone_err:
+                        await bound_log.awarning(
+                            "branch_deleted_or_inaccessible",
+                            branch=mr.source_branch,
+                            error=str(clone_exc),
+                        )
+                        # Try to reply in the triggering thread
+                        try:
+                            discussions = await gl_client.list_mr_discussions(project.id, mr.iid)
+                            triggering = _find_triggering_discussion(discussions, note_id)
+                            if triggering:
+                                gl = gitlab.Gitlab(settings.gitlab_url, private_token=token)
+                                gl_project = gl.projects.get(project.id)
+                                gl_mr = gl_project.mergerequests.get(mr.iid)
+                                disc_obj = gl_mr.discussions.get(triggering.discussion_id)
+                                await asyncio.to_thread(
+                                    disc_obj.notes.create,
+                                    {
+                                        "body": (
+                                            f"⚠️ The source branch `{mr.source_branch}` "
+                                            "has been deleted or is inaccessible. "
+                                            "I can't access the code to process your request."
+                                        )
+                                    },
+                                )
+                        except Exception:
+                            await bound_log.awarning("branch_deleted_reply_failed", exc_info=True)
+                        return
+                    raise
 
                 # 2. Fetch MR details + discussions
                 mr_details = await gl_client.get_mr_details(project.id, mr.iid)

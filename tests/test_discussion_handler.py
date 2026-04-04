@@ -452,3 +452,50 @@ async def test_repo_lock_used_when_provided(
 
     # Verify the handler still completed (reply posted)
     disc_obj.notes.create.assert_called_once()
+
+
+@patch(f"{_MOD}.gitlab.Gitlab")
+@patch(f"{_MOD}.parse_discussion_response")
+@patch(f"{_MOD}.build_discussion_prompt")
+@patch(f"{_MOD}.run_discussion")
+@patch(f"{_MOD}.GitLabClient")
+async def test_deleted_branch_replies_with_warning(
+    mock_client_cls: MagicMock,
+    mock_run: AsyncMock,
+    mock_build: MagicMock,
+    mock_parse: MagicMock,
+    mock_gl_cls: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """When the source branch is deleted, reply with a helpful warning."""
+    from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
+
+    gl_client = AsyncMock()
+    mock_client_cls.return_value = gl_client
+    gl_client.clone_repo = AsyncMock(
+        side_effect=RuntimeError(
+            "git clone failed: Remote branch feature/test not found in upstream origin"
+        )
+    )
+    gl_client.list_mr_discussions.return_value = [_make_discussion()]
+
+    disc_obj = MagicMock()
+    disc_obj.notes.create = MagicMock()
+    gl_mr_mock = mock_gl_cls.return_value.projects.get.return_value.mergerequests.get.return_value
+    gl_mr_mock.discussions.get.return_value = disc_obj
+
+    await handle_discussion_interaction(
+        make_settings(),
+        _make_payload(),
+        AsyncMock(),
+        _make_agent(),
+    )
+
+    # LLM should NOT have been called
+    mock_run.assert_not_awaited()
+
+    # Warning reply posted to thread
+    disc_obj.notes.create.assert_called_once()
+    reply = disc_obj.notes.create.call_args[0][0]["body"]
+    assert "deleted" in reply or "inaccessible" in reply
+    assert SOURCE_BRANCH in reply
