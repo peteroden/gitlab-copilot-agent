@@ -224,7 +224,7 @@ async def test_review_task_execution_failure_posts_comment_without_raising(
     mock_gl.post_mr_comment.assert_awaited_once()
     comment = mock_gl.post_mr_comment.call_args[0][2]
     assert "Automated review failed" in comment
-    assert "runner error" in comment
+    assert "runner error" not in comment  # user-friendly message, no internal details
 
 
 async def test_webhook_records_error_metric_on_background_failure(

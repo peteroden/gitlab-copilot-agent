@@ -94,7 +94,7 @@ At least one of these must be set:
 - **Required**: ❌ No
 - **Default**: `None`
 - **Deprecated**: ⚠️ Agent identity is now auto-discovered via `GET /user` using the existing `GITLAB_TOKEN`. The `CredentialRegistry` lazily resolves and caches the agent's `AgentIdentity` (immutable `user_id` + `username`) per credential on first use. No new env vars are needed.
-- **Description**: Previously used for loop prevention (skips self-authored `/copilot` notes). Retained for backward compatibility but no longer required.
+- **Description**: Previously used for loop prevention (skips self-authored notes). Retained for backward compatibility but no longer required.
 - **Example**: `"copilot-agent"`
 
 ### `CLONE_DIR`
@@ -497,6 +497,39 @@ GITLAB_TOKEN__PLATFORM_TEAM=glpat-other  # Used by credential_ref: platform_team
 ```
 
 Alias matching is case-insensitive. Startup fails fast if a binding references an unknown alias.
+
+### Adding a Per-Project GitLab Token
+
+Create a **project access token** in GitLab (Settings → Access Tokens) with these settings:
+
+**Role:** **Developer** (minimum). Guest and Reporter are insufficient — the agent needs Developer-level access to list merge requests, post comments, push code, and resolve threads.
+
+**Scopes:**
+
+| Scope | Required for |
+|-------|-------------|
+| `api` | MR details, discussions, posting comments, resolving threads |
+| `read_repository` | Git clone for code review and discussion context |
+| `write_repository` | Git push for coding tasks (commit changes from @mention requests) |
+
+When deploying to Azure Container Apps, three files need updating:
+
+1. **GitHub Actions secret** — create `GITLAB_TOKEN__<ALIAS>` (double underscore) in repo settings (use environment-scoped secrets if the token is env-specific)
+2. **`deploy.yml`** — add the KV entry to `TF_VAR_kv_bootstrap_secrets`:
+   ```yaml
+   TF_VAR_kv_bootstrap_secrets: >-
+     {
+       ...existing entries...,
+       "gitlab-token--<alias>": "${{ secrets.GITLAB_TOKEN__<ALIAS> }}"
+     }
+   ```
+   The KV name uses hyphens (`gitlab-token--<alias>`). The ACA env var transform (`upper` + `replace("-","_")`) produces `GITLAB_TOKEN__<ALIAS>`.
+3. **`<env>.tfvars`** — set `credential_ref` in the project binding:
+   ```json
+   {"repo":"group/project","target_branch":"main","credential_ref":"<alias>"}
+   ```
+
+The agent auto-discovers its identity per token via `GET /user` — no username configuration needed.
 
 ### Hot-Reload
 

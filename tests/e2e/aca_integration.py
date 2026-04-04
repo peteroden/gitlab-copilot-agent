@@ -18,6 +18,7 @@ log = structlog.get_logger()
 # --- Environment ---
 GITLAB_URL = os.environ.get("GITLAB_URL", "https://gitlab.com")
 GITLAB_TOKEN = os.environ["GITLAB_TOKEN"]
+GITLAB_PROJECT_TOKEN = os.environ.get("GITLAB_TOKEN__E2E_ACA_TEST")
 GITLAB_PROJECT = os.environ["GITLAB_PROJECT"]
 JIRA_URL = os.environ["JIRA_URL"]
 JIRA_EMAIL = os.environ["JIRA_EMAIL"]
@@ -315,6 +316,58 @@ def test_mr_review(project: Any, mr_iid: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Test: @mention interaction
+# ---------------------------------------------------------------------------
+
+
+def _resolve_agent_username() -> str | None:
+    """Discover the agent's bot username via GET /user with the project token."""
+    if not GITLAB_PROJECT_TOKEN:
+        return None
+    gl = gitlab.Gitlab(GITLAB_URL, private_token=GITLAB_PROJECT_TOKEN)
+    gl.auth()
+    username: str = gl.user.username  # pyright: ignore[reportOptionalMemberAccess,reportAttributeAccessIssue]
+    log.info("resolved agent username", username=username)
+    return username
+
+
+def test_mention_reply(project: Any, mr_iid: int, agent_username: str) -> None:
+    """Post an @mention on an existing review thread and verify the agent replies."""
+    log.info("test: @mention reply", mr_iid=mr_iid, agent_username=agent_username)
+    mr = project.mergerequests.get(mr_iid)
+
+    # Find a review discussion to reply in
+    discussions = mr.discussions.list(get_all=True)
+    review_disc = None
+    for d in discussions:
+        if not d.attributes.get("individual_note"):
+            review_disc = d
+            break
+    if review_disc is None:
+        raise RuntimeError("No review discussion found to reply in")
+
+    disc_id = review_disc.id
+    initial_note_count = len(review_disc.attributes.get("notes", []))
+    log.info("posting @mention", discussion_id=disc_id, note_count=initial_note_count)
+
+    # Post @mention in the thread
+    disc_obj = mr.discussions.get(disc_id)
+    disc_obj.notes.create({"body": f"@{agent_username} can you explain this in more detail?"})
+
+    # Poll for the agent's reply
+    def _has_reply() -> bool:
+        d = mr.discussions.get(disc_id)
+        notes = d.attributes.get("notes", [])
+        if len(notes) > initial_note_count + 1:
+            log.info("agent replied", note_count=len(notes))
+            return True
+        return False
+
+    _poll("agent replies to @mention", _has_reply, timeout_s=300, interval_s=15)
+    log.info("✓ @mention reply test passed", mr_iid=mr_iid)
+
+
+# ---------------------------------------------------------------------------
 # Test: Jira → coding flow
 # ---------------------------------------------------------------------------
 
@@ -375,12 +428,25 @@ def main() -> None:
     created_jira_issue = False
 
     # --- Test 1: MR review ---
+    mr_iid: int | None = None
     try:
         mr_iid = prepare_review_mr(project)
         test_mr_review(project, mr_iid)
     except Exception as exc:
         log.error("MR review test failed", error=str(exc))
         failures.append(f"MR review: {exc}")
+
+    # --- Test 1b: @mention reply ---
+    if mr_iid is not None:
+        agent_username = _resolve_agent_username()
+        if agent_username:
+            try:
+                test_mention_reply(project, mr_iid, agent_username)
+            except Exception as exc:
+                log.error("@mention reply test failed", error=str(exc))
+                failures.append(f"@mention reply: {exc}")
+        else:
+            log.warning("skipping @mention test — no project token configured")
 
     # --- Test 2: Jira → coding ---
     jira_issue_key = JIRA_ISSUE_KEY

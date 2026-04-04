@@ -1,6 +1,6 @@
 """Default system prompts and configurable prompt resolution.
 
-Prompt resolution order for each persona (coding, review, mr_comment):
+Prompt resolution order for each persona (coding, review, discussion):
 1. Global base: SYSTEM_PROMPT + SYSTEM_PROMPT_SUFFIX (both optional, concatenated)
 2. Type-specific: <TYPE>_SYSTEM_PROMPT override or built-in default + <TYPE>_SYSTEM_PROMPT_SUFFIX
 3. Result: global base + type-specific (global omitted when empty)
@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from gitlab_copilot_agent.config import Settings, TaskRunnerSettings
 
-PromptType = Literal["coding", "review", "mr_comment"]
+PromptType = Literal["coding", "review", "discussion"]
 
 DEFAULT_CODING_PROMPT = """\
 You are a senior software engineer implementing requested changes.
@@ -110,24 +110,58 @@ After the JSON array, add a brief summary paragraph.
 If the code looks good, return an empty array and say so in the summary.
 """
 
-DEFAULT_MR_COMMENT_PROMPT = DEFAULT_CODING_PROMPT
+DEFAULT_DISCUSSION_PROMPT = """\
+You are a code assistant participating in a merge request discussion.
+You have full access to the diff, discussion history, and repository.
+
+A developer has posted a message in this discussion thread. Analyze their
+message and the thread context, then respond appropriately:
+- If they are asking a question — answer thoroughly using code context
+- If they are requesting code changes — implement the changes using file tools
+- If they are signaling resolution (e.g. "fixed", "done") — acknowledge
+- If the message combines multiple intents — address each part
+
+Your response text will be posted as a reply in the discussion thread.
+
+If you made code changes, your final message MUST end with a JSON block
+listing the files you changed (same format as the coding prompt):
+
+```json
+{
+  "summary": "Brief description of changes made",
+  "files_changed": [
+    "src/app/main.py",
+    "tests/test_main.py"
+  ]
+}
+```
+
+If you did NOT make code changes (question, resolution, or explanation),
+just respond with your answer — no JSON block needed.
+
+Guidelines:
+- Be concise and specific. Reference exact code when explaining.
+- For coding requests, explore the repo, make changes via file tools, run tests.
+- Do NOT run git add, git commit, or git push — the caller handles version control.
+- Do NOT include file contents in the JSON — only list changed file paths.
+"""
 
 _DEFAULTS: dict[PromptType, str] = {
     "coding": DEFAULT_CODING_PROMPT,
     "review": DEFAULT_REVIEW_PROMPT,
-    "mr_comment": DEFAULT_MR_COMMENT_PROMPT,
+    "discussion": DEFAULT_DISCUSSION_PROMPT,
 }
 
 _OVERRIDE_FIELDS: dict[PromptType, str] = {
     "coding": "coding_system_prompt",
     "review": "review_system_prompt",
-    "mr_comment": "mr_comment_system_prompt",
+    "discussion": "discussion_system_prompt",
 }
 
 _SUFFIX_FIELDS: dict[PromptType, str] = {
     "coding": "coding_system_prompt_suffix",
     "review": "review_system_prompt_suffix",
-    "mr_comment": "mr_comment_system_prompt_suffix",
+    "discussion": "discussion_system_prompt_suffix",
 }
 
 

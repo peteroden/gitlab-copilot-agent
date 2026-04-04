@@ -74,7 +74,10 @@ async def test_full_pipeline(
     assert resp.json() == {"status": "queued"}
 
     mock_gl_instance.clone_repo.assert_awaited_once_with(
-        "https://gitlab.com/group/my-project.git", "feature/x", GITLAB_TOKEN, clone_dir=None
+        "https://gitlab.example.com/group/my-project.git",
+        "feature/x",
+        GITLAB_TOKEN,
+        clone_dir=None,
     )
 
     mock_run_review.assert_awaited_once()
@@ -112,7 +115,7 @@ async def test_orchestrator_cleans_up_on_error(
         project=WebhookProject(
             id=PROJECT_ID,
             path_with_namespace="group/my-project",
-            git_http_url="https://gitlab.com/group/my-project.git",
+            git_http_url="https://gitlab.example.com/group/my-project.git",
         ),
         object_attributes=MRObjectAttributes(
             iid=MR_IID,
@@ -122,7 +125,7 @@ async def test_orchestrator_cleans_up_on_error(
             source_branch="feature/x",
             target_branch="main",
             last_commit=MRLastCommit(id="abc123", message="feat: add X"),
-            url="https://gitlab.com/group/my-project/-/merge_requests/7",
+            url="https://gitlab.example.com/group/my-project/-/merge_requests/7",
         ),
     )
 
@@ -181,7 +184,7 @@ def _make_payload() -> MergeRequestWebhookPayload:
         project=WebhookProject(
             id=PROJECT_ID,
             path_with_namespace="group/my-project",
-            git_http_url="https://gitlab.com/group/my-project.git",
+            git_http_url="https://gitlab.example.com/group/my-project.git",
         ),
         object_attributes=MRObjectAttributes(
             iid=MR_IID,
@@ -191,7 +194,7 @@ def _make_payload() -> MergeRequestWebhookPayload:
             source_branch="feature/x",
             target_branch="main",
             last_commit=MRLastCommit(id="abc123", message="feat: add X"),
-            url="https://gitlab.com/group/my-project/-/merge_requests/7",
+            url="https://gitlab.example.com/group/my-project/-/merge_requests/7",
         ),
     )
 

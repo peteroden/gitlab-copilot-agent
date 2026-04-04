@@ -7,9 +7,9 @@ Automated code review for GitLab Merge Requests, powered by the GitHub Copilot S
 ## What It Does
 
 - **Webhook-driven reviews**: GitLab MR webhooks trigger Copilot-powered code review with inline suggestions
-- **GitLab polling** (`GITLAB_POLL=true`): Polls GitLab API for open MRs and `/copilot <instruction>` comments — no webhook required
+- **@mention interactions**: @mention the agent in any MR thread (e.g., `@copilot-agent add unit tests`) to ask questions, request code changes, or signal resolution
+- **GitLab polling** (`GITLAB_POLL=true`): Polls GitLab API for open MRs and @mention comments — no webhook required
 - **Jira integration**: Polls Jira for issues in a trigger status, creates branches + MRs in GitLab, triggers agent review
-- **`/copilot` commands**: MR comments starting with `/copilot ` trigger the agent with custom instructions (e.g., `/copilot add unit tests`)
 - **Repo-level configuration**: Loads project-specific skills, agents, and instructions from `.github/`, `.claude/`, `AGENTS.md`
 - **Task execution**: Local subprocess or Kubernetes Job isolation per review
 - **K8s executor**: Can run review jobs as Kubernetes Jobs instead of local processes
@@ -145,7 +145,7 @@ make k3d-deploy                 # deploy via Helm
 1. Go to your GitLab project → **Settings** → **Webhooks**
 2. Set the URL to `https://your-host/webhook`
 3. Set the secret token to match `GITLAB_WEBHOOK_SECRET`
-4. Check **Merge request events**
+4. Check **Merge request events** and **Comments** (for @mention interactions)
 5. Save
 
 The service needs a publicly reachable URL. For local dev, use [ngrok](https://ngrok.com): `ngrok http 8000`.
@@ -342,7 +342,8 @@ End-to-end tests deploy the agent to k3d and test three flows against host-side 
 
 1. **Webhook MR review** — sends MR webhook → verifies review comments posted
 2. **Jira polling** — agent polls mock Jira for "AI Ready" issues → verifies transitions, MR creation, comments
-3. **/copilot command** — sends note webhook with `/copilot <instruction>` → verifies agent response comment
+3. **@mention interaction** — sends note webhook with @mention → verifies agent reply in discussion thread
+4. **@mention interaction (poller)** — agent polls for @mention notes → verifies agent response comment
 
 ```bash
 # Create the E2E cluster
@@ -374,7 +375,7 @@ See the **[Developer Wiki](docs/wiki/index.md)** for full architecture documenta
 - [ADRs](docs/adr/) — architecture decision records
 
 ```
-GitLab Webhook/Poller → FastAPI → Clone repo → Copilot agent review → Parse output → Post inline comments + summary
+GitLab Webhook/Poller → FastAPI → Clone repo → Copilot agent (review or discussion) → Parse output → Post inline comments/replies + summary
 ```
 
 ## Local Kubernetes Development

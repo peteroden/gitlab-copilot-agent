@@ -122,7 +122,7 @@ async def acquire(self, key: str, ttl_seconds: int = 300) -> AsyncIterator[None]
 **Lock Key**: `git_http_url` (e.g., `https://gitlab.com/group/project.git`)
 
 **Operations Locked**:
-1. **MR `/copilot` command** (`mr_comment_handler.py`):
+1. **MR @mention interaction** (`discussion_orchestrator.py`):
    - Clone → code → commit → push
    - Prevents concurrent pushes to same branch
 2. **Jira coding task** (`coding_orchestrator.py`):
@@ -233,13 +233,13 @@ await dedup.mark_seen(key, ttl_seconds=86400)
 
 ---
 
-### 2. /copilot Notes (Poller Only)
+### 2. @mention Notes (Poller)
 
 **Key**: `note:{project_id}:{mr_iid}:{note_id}`
 
 **TTL**: 86400s (24 hours)
 
-**Purpose**: Prevent re-processing same `/copilot` comment.
+**Purpose**: Prevent re-processing same @mention comment.
 
 **Tracked By**: `DeduplicationStore` in `gitlab_poller.py` → `_process_notes()`
 
@@ -335,7 +335,7 @@ await dedup.mark_seen(key, ttl_seconds=86400)
 
 ### 1. Concurrent Pushes to Same Branch
 
-**Scenario**: Two `/copilot` commands on same MR, both try to push to `source_branch`.
+**Scenario**: Two @mention interactions on same MR, both try to push to `source_branch`.
 
 **Without Lock**:
 ```
@@ -350,7 +350,7 @@ Pod A: acquire lock → clone → code → commit → push → release
 Pod B: wait for lock ────────────────────────────────┘→ clone → ...
 ```
 
-**Code**: `mr_comment_handler.py`, `coding_orchestrator.py` both use `repo_locks.acquire()`.
+**Code**: `discussion_orchestrator.py`, `coding_orchestrator.py` both use `repo_locks.acquire()`.
 
 ---
 

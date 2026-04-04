@@ -153,7 +153,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Shared lock manager for both webhook and Jira flows
     repo_locks = create_lock()
     app.state.repo_locks = repo_locks
-    dedup_store = create_dedup()
+    dedup_store = create_dedup(
+        azure_storage_account_url=settings.azure_storage_account_url,
+        azure_storage_connection_string=settings.azure_storage_connection_string,
+    )
     app.state.dedup_store = dedup_store
     app.state.review_tracker = ReviewedMRTracker()
 
@@ -214,6 +217,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             executor=app.state.executor,
             repo_locks=repo_locks,
             project_registry=project_registry,
+            credential_registry=creds,
         )
         gl_poller._interval = settings.gitlab_poll_interval  # pyright: ignore[reportPrivateUsage]
         await gl_poller.start()

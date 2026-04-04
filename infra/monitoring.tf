@@ -6,7 +6,7 @@ resource "azurerm_log_analytics_workspace" "main" {
   retention_in_days   = 30
 
   internet_ingestion_enabled = false
-  internet_query_enabled     = false
+  internet_query_enabled     = true
 
   tags = var.tags
 }
@@ -19,7 +19,7 @@ resource "azurerm_application_insights" "main" {
   application_type    = "web"
 
   internet_ingestion_enabled = false
-  internet_query_enabled     = false
+  internet_query_enabled     = true
 
   tags = var.tags
 }
@@ -30,7 +30,7 @@ resource "azurerm_monitor_private_link_scope" "main" {
   name                  = "ampls-${var.resource_group_name}"
   resource_group_name   = azurerm_resource_group.main.name
   ingestion_access_mode = "PrivateOnly"
-  query_access_mode     = "PrivateOnly"
+  query_access_mode     = "Open"
 
   tags = var.tags
 }

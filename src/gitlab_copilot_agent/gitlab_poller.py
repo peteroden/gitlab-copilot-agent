@@ -1,8 +1,9 @@
-"""Background GitLab poller — discovers new/updated MRs and /copilot notes."""
+"""Background GitLab poller — discovers new/updated MRs and @mention notes."""
 
 from __future__ import annotations
 
 import asyncio
+import re
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 
@@ -10,9 +11,13 @@ import structlog
 
 from gitlab_copilot_agent.concurrency import DeduplicationStore, DistributedLock
 from gitlab_copilot_agent.config import Settings
+from gitlab_copilot_agent.credential_registry import CredentialRegistry
+from gitlab_copilot_agent.discussion_models import AgentIdentity
+from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 from gitlab_copilot_agent.gitlab_client import (
     GitLabClient,
     GitLabClientProtocol,
+    MRAuthor,
     MRListItem,
     NoteListItem,
 )
@@ -26,7 +31,6 @@ from gitlab_copilot_agent.models import (
     WebhookProject,
     WebhookUser,
 )
-from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
 from gitlab_copilot_agent.orchestrator import handle_review
 from gitlab_copilot_agent.project_registry import ProjectRegistry
 from gitlab_copilot_agent.task_executor import TaskExecutionError, TaskExecutor
@@ -37,7 +41,7 @@ _MAX_BACKOFF = 300
 
 
 class GitLabPoller:
-    """Background poller that discovers open MRs and /copilot notes."""
+    """Background poller that discovers open MRs and @mention notes."""
 
     def __init__(
         self,
@@ -48,6 +52,7 @@ class GitLabPoller:
         executor: TaskExecutor,
         repo_locks: DistributedLock | None = None,
         project_registry: ProjectRegistry | None = None,
+        credential_registry: CredentialRegistry | None = None,
     ) -> None:
         self._client = gl_client
         self._settings = settings
@@ -56,7 +61,9 @@ class GitLabPoller:
         self._executor = executor
         self._repo_locks = repo_locks
         self._project_registry = project_registry
+        self._credential_registry = credential_registry
         self._project_clients: dict[str, GitLabClientProtocol] = {}
+        self._identity_cache: dict[str, AgentIdentity] = {}
         self._interval: int = 30
         self._task: asyncio.Task[None] | None = None
         self._watermark: str | None = None
@@ -68,7 +75,7 @@ class GitLabPoller:
         if self._watermark is None:
             lookback = self._settings.gitlab_poll_lookback
             self._watermark = (datetime.now(UTC) - timedelta(minutes=lookback)).isoformat()
-        # Note watermark starts at "now" to avoid replaying /copilot commands
+        # Note watermark starts at "now" to avoid replaying old mentions
         if self._note_watermark is None:
             self._note_watermark = datetime.now(UTC).isoformat()
         self._task = asyncio.create_task(self._poll_loop())
@@ -87,18 +94,49 @@ class GitLabPoller:
             except Exception:
                 self._failures += 1
                 await log.aexception("gitlab_poll_error")
-            await asyncio.sleep(min(self._interval * 2**self._failures, _MAX_BACKOFF))
+            sleep_seconds = min(self._interval * 2**self._failures, _MAX_BACKOFF)
+            if self._failures > 0:
+                await log.awarning(
+                    "gitlab_poll_backoff",
+                    failures=self._failures,
+                    sleep_seconds=sleep_seconds,
+                )
+            await asyncio.sleep(sleep_seconds)
 
     async def _poll_once(self) -> None:
         poll_start = datetime.now(UTC).isoformat()
+        await log.ainfo("gitlab_poll_cycle", project_count=len(self._project_ids))
+        all_succeeded = True
         for pid in self._project_ids:
-            client = self._client_for_project(pid)
-            mrs = await client.list_project_mrs(pid, state="opened", updated_after=self._watermark)
-            for mr in mrs:
-                await self._process_mr(pid, mr)
-            await self._process_notes(pid, mrs, client)
-        self._watermark = poll_start
-        self._note_watermark = poll_start
+            try:
+                client = self._client_for_project(pid)
+                # Fetch ALL open MRs — needed for note scanning since notes
+                # don't update MR.updated_at. MR review uses dedup to avoid
+                # re-reviewing unchanged MRs.
+                all_open_mrs = await client.list_project_mrs(pid, state="opened")
+                for mr in all_open_mrs:
+                    await self._process_mr(pid, mr)
+                await self._process_notes(pid, all_open_mrs, client)
+            except Exception as exc:
+                all_succeeded = False
+                ref = "default"
+                if self._project_registry is not None:
+                    resolved = self._project_registry.get_by_project_id(pid)
+                    if resolved is not None:
+                        ref = resolved.credential_ref
+                await log.aerror(
+                    "gitlab_poll_project_error",
+                    project_id=pid,
+                    credential_ref=ref,
+                    error=str(exc),
+                    hint="Check that the GitLab token for this credential_ref is valid, "
+                    "has api + read_repository scopes, and uses Developer role or higher",
+                )
+        # Only advance watermarks if all projects were scanned successfully.
+        # Otherwise, notes from failed projects would be skipped on the next cycle.
+        if all_succeeded:
+            self._watermark = poll_start
+            self._note_watermark = poll_start
 
     def _resolve_token(self, project_id: int) -> str | None:
         """Return per-project token from registry, or None for global fallback."""
@@ -129,6 +167,8 @@ class GitLabPoller:
         return self._client
 
     async def _process_mr(self, project_id: int, mr: MRListItem) -> None:
+        if mr.sha is None:
+            return  # MR has no commits (e.g. empty draft)
         if self._settings.gitlab_review_on_push:
             key = f"review:{project_id}:{mr.iid}:{mr.sha}"
         else:
@@ -171,38 +211,107 @@ class GitLabPoller:
             return
         await self._dedup.mark_seen(key, ttl_seconds=_DEDUP_TTL)
 
+    async def _resolve_agent_identity(self, project_id: int) -> AgentIdentity | None:
+        """Resolve the agent identity for the credential used by this project."""
+        if self._credential_registry is None:
+            return None
+        ref = "default"
+        if self._project_registry is not None:
+            resolved = self._project_registry.get_by_project_id(project_id)
+            if resolved is not None:
+                ref = resolved.credential_ref
+        # Cache per credential_ref
+        if ref in self._identity_cache:
+            return self._identity_cache[ref]
+        try:
+            identity = await self._credential_registry.resolve_identity(
+                ref, self._settings.gitlab_url
+            )
+            self._identity_cache[ref] = identity
+            return identity
+        except Exception:
+            await log.awarning(
+                "poller_identity_resolution_failed", credential_ref=ref, exc_info=True
+            )
+            return None
+
     async def _process_notes(
         self, project_id: int, mrs: list[MRListItem], client: GitLabClientProtocol
     ) -> None:
+        agent_identity = await self._resolve_agent_identity(project_id)
+        if agent_identity is None:
+            await log.adebug("skipping_notes_no_identity", project_id=project_id)
+            return
+        mention_pattern = re.compile(
+            rf"(?<![.\w-])@{re.escape(agent_identity.username)}(?![.\w-])"
+        )
         for mr in mrs:
-            notes = await client.list_mr_notes(
-                project_id, mr.iid, created_after=self._note_watermark
-            )
-            for note in notes:
-                if note.system:
+            if mr.sha is None:
+                continue
+            # Use discussions API to get thread structure for participation detection
+            try:
+                discussions = await client.list_mr_discussions(project_id, mr.iid)
+            except Exception:
+                await log.awarning("discussion_fetch_failed", project_id=project_id, mr_iid=mr.iid)
+                continue
+
+            for disc in discussions:
+                if disc.is_resolved:
                     continue
-                if not parse_copilot_command(note.body):
+                # Find the latest non-system note in the thread
+                latest_note = None
+                for note in reversed(disc.notes):
+                    if not note.is_system:
+                        latest_note = note
+                        break
+                if latest_note is None:
                     continue
-                # Skip self-authored notes (consistent with webhook)
-                agent_user = self._settings.agent_gitlab_username
-                if agent_user and note.author.username == agent_user:
+                # Skip if the latest note is from the agent (we already replied)
+                if latest_note.author_id == agent_identity.user_id:
                     continue
-                note_key = f"note:{project_id}:{mr.iid}:{note.id}"
+                # Skip notes older than the watermark
+                if self._note_watermark and latest_note.created_at <= self._note_watermark:
+                    continue
+
+                # Check if this note is directed at the agent:
+                # 1. @mention in the note body, OR
+                # 2. Agent previously participated in this discussion thread
+                is_mention = bool(mention_pattern.search(latest_note.body))
+                agent_participated = any(n.author_id == agent_identity.user_id for n in disc.notes)
+                if not is_mention and not agent_participated:
+                    continue
+
+                note_key = f"note:{project_id}:{mr.iid}:{latest_note.note_id}"
                 if await self._dedup.is_seen(note_key):
                     continue
-                payload = _build_note_payload(note, mr, project_id, self._settings)
+
+                # Build payload from the discussion note
+                note_as_list_item = NoteListItem(
+                    id=latest_note.note_id,
+                    body=latest_note.body,
+                    author=MRAuthor(
+                        id=latest_note.author_id, username=latest_note.author_username
+                    ),
+                    system=latest_note.is_system,
+                    created_at=latest_note.created_at,
+                )
+                payload = _build_note_payload(note_as_list_item, mr, project_id, self._settings)
+                # Add discussion_id to the payload for the handler
+                payload.object_attributes.discussion_id = disc.discussion_id
+
                 try:
-                    await handle_copilot_comment(
+                    await handle_discussion_interaction(
                         self._settings,
                         payload,
                         self._executor,
-                        self._repo_locks,
+                        agent_identity,
                         project_token=self._resolve_token(project_id),
+                        repo_locks=self._repo_locks,
                     )
                 except TaskExecutionError:
                     await log.awarning(
-                        "gitlab_copilot_note_task_failed",
-                        note_id=note.id,
+                        "gitlab_mention_note_task_failed",
+                        note_id=latest_note.note_id,
                         project_id=project_id,
                         mr_iid=mr.iid,
                     )

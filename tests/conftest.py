@@ -61,7 +61,7 @@ MR_PAYLOAD: dict[str, Any] = {
     "project": {
         "id": PROJECT_ID,
         "path_with_namespace": "group/my-project",
-        "git_http_url": "https://gitlab.com/group/my-project.git",
+        "git_http_url": "https://gitlab.example.com/group/my-project.git",
     },
     "object_attributes": {
         "iid": MR_IID,
@@ -71,7 +71,7 @@ MR_PAYLOAD: dict[str, Any] = {
         "source_branch": "feature/x",
         "target_branch": "main",
         "last_commit": {"id": "abc123", "message": "feat: add X"},
-        "url": "https://gitlab.com/group/my-project/-/merge_requests/7",
+        "url": "https://gitlab.example.com/group/my-project/-/merge_requests/7",
     },
 }
 

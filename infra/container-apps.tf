@@ -155,16 +155,19 @@ resource "azapi_update_resource" "cae_otlp" {
   }
 }
 
-# S1: Key Vault secret refs — derived from copilot_auth mode and Jira config
+# S1: Key Vault secret refs — derived from kv_bootstrap_secrets keys, copilot_auth, and Jira config.
+# Empty values (env-scoped secrets not set for this environment) are excluded.
+# nonsensitive() is safe — we only extract key names (e.g. "gitlab-token"), never secret values.
 locals {
+  kv_active_keys = nonsensitive(toset([for k, v in var.kv_bootstrap_secrets : k if nonsensitive(v) != ""]))
   kv_secrets_runner = merge(
     var.copilot_auth == "github_token" ? { "github-token" = "github-token" } : {},
     var.copilot_auth == "byok" ? { "copilot-api-key" = "copilot-api-key" } : {},
   )
   kv_secrets_controller = merge(
     local.kv_secrets_runner,
-    { "gitlab-token" = "gitlab-token" },
-    var.jira_url != "" ? { "jira-api-token" = "jira-api-token" } : {}
+    { for k in local.kv_active_keys : k => k if startswith(k, "gitlab-token") },
+    { for k in local.kv_active_keys : k => k if k == "jira-api-token" },
   )
 }
 
@@ -465,6 +468,12 @@ resource "azurerm_role_assignment" "controller_queue_sender" {
 resource "azurerm_role_assignment" "controller_blob_contributor" {
   scope                = azurerm_storage_account.tasks.id
   role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_user_assigned_identity.controller.principal_id
+}
+
+resource "azurerm_role_assignment" "controller_table_contributor" {
+  scope                = azurerm_storage_account.tasks.id
+  role_definition_name = "Storage Table Data Contributor"
   principal_id         = azurerm_user_assigned_identity.controller.principal_id
 }
 

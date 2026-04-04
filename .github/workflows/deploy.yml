@@ -136,10 +136,20 @@ jobs:
             -e "s|__JIRA_EMAIL__|${JIRA_EMAIL}|g" \
             "${DEPLOY_ENV}.tfvars"
 
+      # KV bootstrap secrets — values from GitHub secrets, names must match
+      # kv_secret_names in the environment's tfvars file.
+      # See docs/wiki/configuration-reference.md "Adding a per-project GitLab token".
       - name: Terraform apply
         working-directory: infra
         env:
-          TF_VAR_kv_bootstrap_secrets: '{"gitlab-token":"${{ secrets.GITLAB_TOKEN }}","github-token":"${{ secrets.GH_PAT_FOR_COPILOT }}","jira-api-token":"${{ secrets.JIRA_API_TOKEN }}"}'
+          TF_VAR_kv_bootstrap_secrets: >-
+            {
+              "gitlab-token": "${{ secrets.GITLAB_TOKEN }}",
+              "gitlab-token--e2e-aca-test": "${{ secrets.GITLAB_TOKEN__E2E_ACA_TEST }}",
+              "gitlab-token--copilot-demo": "${{ secrets.GITLAB_TOKEN__COPILOT_DEMO }}",
+              "github-token": "${{ secrets.GH_PAT_FOR_COPILOT }}",
+              "jira-api-token": "${{ secrets.JIRA_API_TOKEN }}"
+            }
           TF_VAR_image_tag: ${{ inputs.image_tag }}
           TF_VAR_image_digest: ${{ steps.ghcr_push.outputs.image_digest }}
           TFVARS_FILE: ${{ inputs.environment }}.tfvars

@@ -8,8 +8,10 @@ identity in Azure, CLI locally).
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -17,6 +19,7 @@ import structlog
 from gitlab_copilot_agent.concurrency import QueueMessage, ResultStore, TaskQueue
 
 if TYPE_CHECKING:
+    from azure.data.tables import TableClient
     from azure.identity.aio import DefaultAzureCredential
     from azure.storage.blob.aio import ContainerClient
     from azure.storage.queue.aio import QueueClient
@@ -205,3 +208,103 @@ def create_blob_result_store(
             account_url, container_name=container_name, credential=credential
         )
     return BlobResultStore(blob_client, credential)
+
+
+def _split_dedup_key(key: str) -> tuple[str, str]:
+    """Split a dedup key into PartitionKey and RowKey.
+
+    The first segment before ':' becomes PartitionKey, the rest is RowKey.
+    If no colon, PartitionKey is 'default'.
+    """
+    if ":" in key:
+        pk, rk = key.split(":", 1)
+        return pk, rk
+    return "default", key
+
+
+class TableDedup:
+    """Azure Table Storage-backed dedup store.
+
+    Each key is a row in a 'dedup' table.  PartitionKey is the key prefix
+    (e.g., 'note'), RowKey is the remainder.  TTL is enforced at read time
+    by checking the entity Timestamp.
+    """
+
+    def __init__(self, table_client: TableClient) -> None:
+        self._table = table_client
+
+    async def is_seen(self, key: str) -> bool:
+        pk, rk = _split_dedup_key(key)
+        try:
+            entity = await asyncio.to_thread(
+                self._table.get_entity,  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+                partition_key=pk,
+                row_key=rk,
+            )
+        except Exception as exc:
+            exc_str = str(exc)
+            if "ResourceNotFound" in exc_str or "Not Found" in exc_str:
+                return False
+            # Fail closed on auth/permission errors (persistent — won't self-heal).
+            # Fail open on transient errors (network, throttling — will resolve on retry).
+            if "Authorization" in exc_str or "Forbidden" in exc_str or "Permission" in exc_str:
+                log.warning("dedup_is_seen_auth_error_fail_closed", key=key, error=exc_str[:200])
+                return True
+            log.warning("dedup_is_seen_transient_error", key=key, error=exc_str[:200])
+            return False
+        raw_ttl = entity.get("ttl_seconds")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+        ttl = raw_ttl if isinstance(raw_ttl, int) else 3600
+        meta: dict[str, Any] = getattr(entity, "metadata", {})
+        ts = meta.get("timestamp")
+        if isinstance(ts, datetime):
+            age = (datetime.now(tz=UTC) - ts).total_seconds()
+            if age > ttl:
+                return False
+        return True
+
+    async def mark_seen(self, key: str, ttl_seconds: int = 3600) -> None:
+        pk, rk = _split_dedup_key(key)
+        entity: dict[str, str | int] = {
+            "PartitionKey": pk,
+            "RowKey": rk,
+            "ttl_seconds": ttl_seconds,
+        }
+        try:
+            await asyncio.to_thread(
+                self._table.upsert_entity,  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+                entity,
+            )
+        except Exception:
+            log.warning("dedup_mark_seen_failed", key=key, exc_info=True)
+
+    async def aclose(self) -> None:
+        """Close the table client."""
+        with contextlib.suppress(Exception):
+            await asyncio.to_thread(self._table.close)
+
+
+def create_table_dedup_store(
+    account_url: str | None,
+    table_name: str = "dedup",
+    *,
+    connection_string: str | None = None,
+) -> TableDedup:
+    """Create a TableDedup backed by Azure Table Storage."""
+    from azure.data.tables import TableServiceClient
+
+    if connection_string:
+        service = TableServiceClient.from_connection_string(connection_string)
+    elif account_url:
+        from azure.identity import DefaultAzureCredential
+
+        table_url = account_url.replace(".blob.", ".table.")
+        service = TableServiceClient(endpoint=table_url, credential=DefaultAzureCredential())
+    else:
+        msg = "Either account_url or connection_string is required"
+        raise ValueError(msg)
+
+    with contextlib.suppress(Exception):
+        service.create_table_if_not_exists(table_name)  # pyright: ignore[reportUnknownMemberType]
+
+    table_client = service.get_table_client(table_name)  # pyright: ignore[reportUnknownMemberType]
+    return TableDedup(table_client)

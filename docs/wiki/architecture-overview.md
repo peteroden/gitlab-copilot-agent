@@ -15,6 +15,7 @@ graph TB
         GLP[gitlab_poller.py<br/>Background Task]
         JP[jira_poller.py<br/>Background Task]
         ORCH[orchestrator.py<br/>Review Handler]
+        DISC[discussion_orchestrator.py<br/>Thread Handler]
         CODING[coding_orchestrator.py<br/>Coding Handler]
         EXEC[LocalTaskExecutor]
         COPILOT[copilot_session.py<br/>SDK Wrapper]
@@ -36,21 +37,25 @@ graph TB
     end
 
     GL -->|Webhook POST<br/>HMAC validation| WH
+    GL -->|@mention note<br/>HMAC validation| WH
     GLP -->|Poll MRs/Notes<br/>API token auth| GL
     JP -->|Search issues<br/>Basic auth| JIRA
 
     WH --> ORCH
     GLP --> ORCH
+    WH --> DISC
     WH --> CODING
     JP --> CODING
 
     ORCH --> EXEC
+    DISC --> EXEC
     CODING --> EXEC
     EXEC --> COPILOT
     
     COPILOT -->|GitHub Token<br/>or BYOK API Key| GHAPI
 
     ORCH --> GL
+    DISC --> GL
     CODING --> GL
     CODING --> JIRA
 
@@ -68,6 +73,7 @@ graph TB
     K8SEXEC -.->|Read patch, apply via git| K8SEXEC
 
     ORCH --> REPO
+    DISC --> REPO
     CODING --> REPO
     JOB1 --> REPO
     JOB2 --> REPO
@@ -76,7 +82,7 @@ graph TB
     classDef trusted fill:#ccffcc
     classDef semi fill:#ffffcc
     class GL,JIRA,REPO,GHAPI untrusted
-    class WH,GLP,JP,ORCH,CODING,EXEC,COPILOT,K8SEXEC trusted
+    class WH,GLP,JP,ORCH,DISC,CODING,EXEC,COPILOT,K8SEXEC trusted
     class AZURE_STORAGE,JOB1,JOB2 semi
 ```
 
@@ -84,12 +90,13 @@ graph TB
 
 ### 1. HTTP Ingestion Layer
 - **`webhook.py`**: FastAPI endpoints for GitLab webhooks (merge_request, note)
-- **`gitlab_poller.py`**: Background poller for MR discovery and `/copilot` notes
+- **`gitlab_poller.py`**: Background poller for MR discovery and @mention notes
 - **`jira_poller.py`**: Background poller for issues in "AI Ready" status
 
 ### 2. Processing Layer
 - **`orchestrator.py`**: MR review orchestration (clone → review → parse → post)
-- **`mr_comment_handler.py`**: `/copilot` command processing (clone → code → apply result → commit → push)
+- **`discussion_orchestrator.py`**: Unified @mention/thread interaction handler (clone → fetch context → LLM → reply ± commit/push)
+- **`discussion_engine.py`**: Discussion prompt construction, structured response parsing (intent + reply + optional code changes)
 - **`coding_orchestrator.py`**: Jira issue implementation (clone → code → apply result → branch → MR)
 - **`coding_workflow.py`**: Shared helper for applying coding results (diff passback from k8s pods)
 - **`review_engine.py`**: Review prompt construction and execution

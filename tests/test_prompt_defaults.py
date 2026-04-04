@@ -2,7 +2,7 @@
 
 from gitlab_copilot_agent.prompt_defaults import (
     DEFAULT_CODING_PROMPT,
-    DEFAULT_MR_COMMENT_PROMPT,
+    DEFAULT_DISCUSSION_PROMPT,
     DEFAULT_REVIEW_PROMPT,
     get_prompt,
 )
@@ -20,12 +20,9 @@ class TestDefaults:
         result = get_prompt(make_settings(), "review")
         assert result == DEFAULT_REVIEW_PROMPT
 
-    def test_mr_comment_default(self) -> None:
-        result = get_prompt(make_settings(), "mr_comment")
-        assert result == DEFAULT_MR_COMMENT_PROMPT
-
-    def test_mr_comment_default_matches_coding(self) -> None:
-        assert DEFAULT_MR_COMMENT_PROMPT == DEFAULT_CODING_PROMPT
+    def test_discussion_default(self) -> None:
+        result = get_prompt(make_settings(), "discussion")
+        assert result == DEFAULT_DISCUSSION_PROMPT
 
 
 class TestOverride:
@@ -39,9 +36,9 @@ class TestOverride:
         s = make_settings(review_system_prompt="custom review")
         assert get_prompt(s, "review") == "custom review"
 
-    def test_mr_comment_override(self) -> None:
-        s = make_settings(mr_comment_system_prompt="custom mr")
-        assert get_prompt(s, "mr_comment") == "custom mr"
+    def test_discussion_override(self) -> None:
+        s = make_settings(discussion_system_prompt="custom discussion")
+        assert get_prompt(s, "discussion") == "custom discussion"
 
     def test_override_ignores_suffix(self) -> None:
         s = make_settings(
@@ -67,6 +64,12 @@ class TestSuffix:
         result = get_prompt(s, "review")
         assert result.startswith(DEFAULT_REVIEW_PROMPT)
         assert result.endswith("extra review rules")
+
+    def test_discussion_suffix(self) -> None:
+        s = make_settings(discussion_system_prompt_suffix="extra discussion rules")
+        result = get_prompt(s, "discussion")
+        assert result.startswith(DEFAULT_DISCUSSION_PROMPT)
+        assert result.endswith("extra discussion rules")
 
 
 class TestGlobalPrompt:
@@ -124,3 +127,17 @@ class TestCodingPromptContent:
         assert "code style" in DEFAULT_CODING_PROMPT
         assert "formatting" in DEFAULT_CODING_PROMPT
         assert "architecture" in DEFAULT_CODING_PROMPT
+
+
+class TestDiscussionPromptContent:
+    """Discussion prompt includes expected structure and intent keywords."""
+
+    def test_mentions_intent_types(self) -> None:
+        assert "question" in DEFAULT_DISCUSSION_PROMPT
+        assert "coding" in DEFAULT_DISCUSSION_PROMPT
+        assert "resolution" in DEFAULT_DISCUSSION_PROMPT
+
+    def test_requires_json_output_for_coding(self) -> None:
+        assert '"files_changed"' in DEFAULT_DISCUSSION_PROMPT
+        assert '"summary"' in DEFAULT_DISCUSSION_PROMPT
+        assert "no JSON block needed" in DEFAULT_DISCUSSION_PROMPT

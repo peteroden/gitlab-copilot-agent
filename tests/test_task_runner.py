@@ -262,7 +262,7 @@ class TestBuildCodingResult:
                 Path("/repo"), DELETED_FILE_OUTPUT, AsyncMock(), "abc123"
             )
         data = json.loads(result)
-        assert data["patch"] == "diff --git a/src/utils.py ..."
+        assert data["patch"] == "diff --git a/src/utils.py ...\n"
         assert data["base_sha"] == "abc123"
         # Verify fallback diff was called with pre-session SHA
         git_mock.assert_any_await(Path("/repo"), "diff", "abc123", "HEAD", "--binary")
@@ -286,7 +286,7 @@ class TestBuildCodingResult:
                 "abc123",
             )
         data = json.loads(result)
-        assert data["summary"] == "Applied coding task changes."
+        assert data["summary"] == "I updated the FastAPI app and tests."
         assert data["patch"] == "diff --git ..."
         assert git_mock.await_count == 2
         git_mock.assert_any_await(Path("/repo"), "add", "-A", "--", "src/app.py")
@@ -305,34 +305,38 @@ class TestBuildCodingResult:
             paths = await _list_changed_paths(Path("/repo"))
         assert paths == ["src/app.py", "src/old.py", "src/staged.py", "tests/test_app.py"]
 
-    async def test_invalid_agent_output_without_repo_changes_fails_closed(self) -> None:
-        """Malformed output still fails when no repo changes can be recovered."""
-        with (
-            patch(f"{_M}._list_changed_paths", AsyncMock(return_value=[])),
-            pytest.raises(RuntimeError, match="did not return a valid files_changed list"),
-        ):
-            await _build_coding_result(
+    async def test_no_changes_returns_empty_patch(self) -> None:
+        """No files_changed and no repo changes returns summary with empty patch."""
+        with patch(f"{_M}._list_changed_paths", AsyncMock(return_value=[])):
+            result = await _build_coding_result(
                 Path("/repo"),
                 "I updated the FastAPI app and tests.",
                 AsyncMock(),
                 "abc123",
             )
+        import json
 
-    async def test_failure_logs_agent_response_excerpt(self) -> None:
-        """Structured log includes raw agent response excerpt for operators."""
+        parsed = json.loads(result)
+        assert parsed["patch"] == ""
+        assert parsed["result_type"] == "coding"
+
+    async def test_no_changes_logs_and_preserves_summary(self) -> None:
+        """No changes logs info and preserves raw LLM response as summary."""
         agent_response = "I tried but could not make changes to the repository."
         mock_log = AsyncMock()
-        with (
-            patch(f"{_M}._list_changed_paths", AsyncMock(return_value=[])),
-            pytest.raises(RuntimeError, match="did not return a valid files_changed list"),
-        ):
-            await _build_coding_result(
+        with patch(f"{_M}._list_changed_paths", AsyncMock(return_value=[])):
+            result = await _build_coding_result(
                 Path("/repo"),
                 agent_response,
                 mock_log,
                 "abc123",
             )
+        import json
+
+        parsed = json.loads(result)
+        assert parsed["summary"] == agent_response
         mock_log.awarning.assert_any_await("agent_output_parse_failed", raw_excerpt=agent_response)
+        mock_log.ainfo.assert_any_await("no_code_changes")
 
 
 _STATE_MOD = "gitlab_copilot_agent.state"

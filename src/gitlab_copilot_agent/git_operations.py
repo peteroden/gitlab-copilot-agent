@@ -74,6 +74,24 @@ def _validate_clone_url(url: str) -> None:
         raise ValueError("Clone URL must have valid host and path")
 
 
+def validate_clone_url_host(clone_url: str, gitlab_url: str) -> None:
+    """Ensure the clone URL belongs to the configured GitLab instance.
+
+    Prevents token exfiltration via forged webhook payloads that redirect
+    ``git clone`` (with embedded token) to an attacker-controlled host.
+
+    Raises:
+        ValueError: If the clone URL host doesn't match the GitLab instance.
+    """
+    clone_parsed = urlparse(clone_url)
+    gitlab_parsed = urlparse(gitlab_url)
+    if clone_parsed.netloc.lower() != gitlab_parsed.netloc.lower():
+        raise ValueError(
+            f"Clone URL host '{clone_parsed.netloc}' does not match "
+            f"configured GitLab host '{gitlab_parsed.netloc}'"
+        )
+
+
 def _sanitize_url_for_log(url: str) -> str:
     """Remove credentials from URL for safe logging."""
     try:
