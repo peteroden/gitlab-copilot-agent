@@ -375,7 +375,9 @@ Tracked by epic: [#77](https://github.com/peteroden/gitlab-copilot-agent/issues/
 
 **Date**: 2025-02
 
-**Context**: With k8s executor, coding tasks (Jira and /copilot) run Copilot in an ephemeral Job pod. The pod modifies files, but when it terminates, all changes are lost. The controller (which creates the MR) never sees the modifications.
+**Context**: With k8s executor, coding tasks (Jira and @mention interactions; originally `/copilot` — see note below) run Copilot in an ephemeral Job pod. The pod modifies files, but when it terminates, all changes are lost. The controller (which creates the MR) never sees the modifications.
+
+> **Note**: The `/copilot` command referenced in the original ADR was replaced by @mention interactions (`@agent-username <instruction>`) in all paths (webhook and poller).
 
 **Decision**: Option A — Diff Passback. The Job pod captures `git diff --cached --binary` after Copilot runs, stores `{summary, patch, base_sha}` in Redis as a `CodingResult`. The controller reads the result, validates `base_sha` matches local HEAD, applies the patch with `git apply --3way`, then commits and pushes as before.
 

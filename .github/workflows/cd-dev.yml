@@ -88,6 +88,7 @@ jobs:
         env:
           GITLAB_URL: https://gitlab.com
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_TOKEN__E2E_ACA_TEST: ${{ secrets.GITLAB_TOKEN__E2E_ACA_TEST }}
           GITLAB_PROJECT: peteroden/e2e-aca-test
           JIRA_URL: ${{ vars.JIRA_URL }}
           JIRA_EMAIL: ${{ vars.JIRA_EMAIL }}

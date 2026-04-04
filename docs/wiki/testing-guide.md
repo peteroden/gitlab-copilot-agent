@@ -240,7 +240,7 @@ mock_jira.py:9997    ◄── HTTP ──── jira poller (search, transition
 **Test flows** (`tests/e2e/run.sh`):
 1. **Webhook MR Review** — sends MR webhook → polls for review comments on mock GitLab
 2. **Jira Polling** — agent polls mock Jira for "AI Ready" issues → transitions to "In Progress" → coding task → push → MR creation → "In Review" transition → Jira comment
-3. **/copilot Command** — sends note webhook with `/copilot <instruction>` → polls for agent response comment on mock GitLab
+3. **@mention Interaction** — sends note webhook with `@agent-username <instruction>` → polls for agent response comment on mock GitLab
 
 **Run locally**:
 ```bash

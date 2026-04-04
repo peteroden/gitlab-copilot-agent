@@ -141,7 +141,7 @@ async def _build_coding_result(
 ) -> str:
     """Stage explicitly listed files, capture diff against pre-session HEAD."""
     agent_output = parse_agent_output(summary)
-    result_summary = agent_output.summary if agent_output else "Applied coding task changes."
+    result_summary = agent_output.summary if agent_output else summary
     used_changed_paths_fallback = False
     if agent_output and agent_output.files_changed:
         for f in agent_output.files_changed:
@@ -156,8 +156,16 @@ async def _build_coding_result(
             await bound_log.awarning("agent_output_parse_failed", raw_excerpt=excerpt)
         changed_paths = await _list_changed_paths(repo_path)
         if not changed_paths:
-            raise RuntimeError(
-                "Agent did not return a valid files_changed list and no repo changes were found."
+            # No files_changed and no repo changes — return summary with empty patch.
+            # This is valid for Q&A discussions or tasks where no changes were needed.
+            await bound_log.ainfo("no_code_changes")
+            return json.dumps(
+                {
+                    "result_type": "coding",
+                    "summary": result_summary,
+                    "patch": "",
+                    "base_sha": pre_session_sha,
+                }
             )
         used_changed_paths_fallback = True
         await bound_log.awarning(
@@ -183,10 +191,11 @@ async def _build_coding_result(
                 current_sha=current_sha[:12],
             )
             patch = await _run_git_simple(repo_path, "diff", pre_session_sha, "HEAD", "--binary")
+            if patch and not patch.endswith("\n"):
+                patch += "\n"
         elif used_changed_paths_fallback:
-            raise RuntimeError(
-                "Agent did not return a valid files_changed list and no patch could be derived."
-            )
+            await bound_log.awarning("changed_paths_fallback_no_patch")
+            patch = ""
 
     if len(patch.encode()) > MAX_PATCH_SIZE:
         raise RuntimeError(f"Patch size {len(patch.encode())} exceeds limit {MAX_PATCH_SIZE}")

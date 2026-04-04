@@ -606,6 +606,22 @@ graph TB
 
 ---
 
+## Discussion Engine Models (`discussion_engine.py`)
+
+### `DiscussionResponse`
+**Purpose**: Parsed response from the discussion LLM session. Captures the reply text and whether code changes were made.
+
+**Config**: `frozen=True` (immutable)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `reply` | `str` | — | Reply text to post in the discussion thread |
+| `has_code_changes` | `bool` | `False` | True if the LLM output contained a `files_changed` JSON block |
+
+**Parsing**: If the LLM output ends with a fenced JSON block containing `files_changed` (same format as the coding prompt), the reply is the text before the block and `has_code_changes` is True. Otherwise the entire output is the reply. No structured intent classification — the handler uses `has_code_changes` to decide whether to commit/push.
+
+---
+
 ## Validation Rules Summary
 
 | Model Family | Strict Mode | Extra Fields | Frozen |
@@ -618,6 +634,7 @@ graph TB
 | Task Exec (`task_executor.py`) | ❌ No | ❌ Forbidden | ✅ Yes |
 | Repo Config (`repo_config.py`) | ❌ No | ❌ Forbidden | ✅ Yes |
 | Discussion (`discussion_models.py`) | ❌ No | ❌ Forbidden | ✅ Yes |
+| Discussion Engine (`discussion_engine.py`) | ❌ No | ❌ Forbidden | ✅ Yes |
 | Project Mapping (`project_mapping.py`) | ✅ Yes | ❌ Forbidden | ❌ No |
 
 **Strict Mode**: Rejects unknown fields and enforces exact type matching.  

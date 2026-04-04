@@ -15,6 +15,8 @@ import structlog
 from gitlab_copilot_agent.comment_parser import parse_review
 from gitlab_copilot_agent.comment_poster import post_review
 from gitlab_copilot_agent.discussion_models import DiscussionHistory
+from gitlab_copilot_agent.error_messages import user_error_message
+from gitlab_copilot_agent.git_operations import validate_clone_url_host
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.metrics import reviews_duration, reviews_total
 from gitlab_copilot_agent.review_engine import ReviewRequest, run_review
@@ -55,6 +57,7 @@ async def handle_review(
         repo_path: Path | None = None
 
         try:
+            validate_clone_url_host(project.git_http_url, settings.gitlab_url)
             repo_path = await gl_client.clone_repo(
                 project.git_http_url,
                 mr.source_branch,
@@ -122,26 +125,33 @@ async def handle_review(
             bound_log.info("comments_posted")
             outcome = "success"
         except TaskExecutionError as exc:
-            bound_log.exception("review_task_failed")
+            error_str = str(exc)
+            bound_log.error("review_task_failed", error=error_str)
             try:
                 await gl_client.post_mr_comment(
                     project.id,
                     mr.iid,
-                    f"⚠️ Automated review failed.\n\n**Error:** {exc}",
+                    f"⚠️ Automated review failed.\n\n{user_error_message(error_str)}",
                 )
             except Exception:
-                bound_log.exception("failure_comment_post_failed")
+                bound_log.warning("failure_comment_post_failed", exc_info=True)
             raise
-        except Exception:
-            bound_log.exception("review_failed")
+        except Exception as exc:
+            bound_log.error(
+                "review_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
             try:
                 await gl_client.post_mr_comment(
                     project.id,
                     mr.iid,
-                    "⚠️ Automated review failed. Check service logs for details.",
+                    "⚠️ Automated review failed. "
+                    "The service encountered an unexpected error. "
+                    "Please try again or contact the project administrator.",
                 )
             except Exception:
-                bound_log.exception("failure_comment_post_failed")
+                bound_log.warning("failure_comment_post_failed", exc_info=True)
             raise
         finally:
             if repo_path:

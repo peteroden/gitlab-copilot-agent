@@ -1,7 +1,8 @@
 """Factory functions for concurrency primitives (lock, dedup, result store, task queue).
 
 All distributed state now uses Azure Storage (Queue + Blob) for dispatch and results.
-Lock and dedup use in-memory implementations (single-controller deployment).
+Lock uses in-memory implementation (single-controller deployment).
+Dedup uses Azure Table Storage when configured, otherwise in-memory.
 """
 
 from __future__ import annotations
@@ -23,8 +24,32 @@ def create_lock() -> DistributedLock:
     return MemoryLock()
 
 
-def create_dedup() -> DeduplicationStore:
-    """Factory: create a DeduplicationStore (in-memory for single-controller)."""
+def create_dedup(
+    *,
+    azure_storage_account_url: str | None = None,
+    azure_storage_connection_string: str | None = None,
+) -> DeduplicationStore:
+    """Factory: create a DeduplicationStore.
+
+    Uses TableDedup when Azure Storage is configured, otherwise in-memory.
+    Falls back to in-memory if Table Storage is unavailable (e.g. Azurite
+    without Table endpoint).
+    """
+    if azure_storage_connection_string or azure_storage_account_url:
+        try:
+            from gitlab_copilot_agent.azure_storage import create_table_dedup_store
+
+            return create_table_dedup_store(
+                azure_storage_account_url,
+                connection_string=azure_storage_connection_string,
+            )
+        except Exception:
+            import structlog
+
+            structlog.get_logger().warning(
+                "table_dedup_unavailable_fallback_memory",
+                exc_info=True,
+            )
     return MemoryDedup()
 
 

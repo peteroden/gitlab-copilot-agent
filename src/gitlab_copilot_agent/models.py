@@ -58,6 +58,9 @@ class NoteObjectAttributes(BaseModel):
     id: int = Field(default=0, description="Note ID (0 when unavailable)")
     note: str = Field(description="Comment body text")
     noteable_type: str = Field(description="Type of noteable: MergeRequest, Issue, etc.")
+    discussion_id: str | None = Field(
+        default=None, description="Discussion thread ID (present for threaded notes)"
+    )
 
 
 class NoteMergeRequest(BaseModel):

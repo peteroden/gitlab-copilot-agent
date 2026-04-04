@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import hmac
+import re
 from typing import TYPE_CHECKING
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from gitlab_copilot_agent.concurrency import ReviewedMRTracker
+from gitlab_copilot_agent.discussion_models import AgentIdentity
+from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
+from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.metrics import webhook_errors_total, webhook_received_total
 from gitlab_copilot_agent.models import MergeRequestWebhookPayload, NoteWebhookPayload
-from gitlab_copilot_agent.mr_comment_handler import handle_copilot_comment, parse_copilot_command
 from gitlab_copilot_agent.orchestrator import handle_review
 from gitlab_copilot_agent.project_registry import ProjectRegistry
 
@@ -76,13 +79,65 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
             credential_registry=credential_registry,
         )
         review_tracker.mark(project_id, mr.iid, head_sha)
+        # Also mark in shared dedup store so the poller won't re-review
+        dedup_store = getattr(request.app.state, "dedup_store", None)
+        if dedup_store is not None:
+            review_key = f"review:{project_id}:{mr.iid}:{head_sha}"
+            await dedup_store.mark_seen(review_key, ttl_seconds=86400)
         bound.info("background_review_completed")
     except Exception:
         webhook_errors_total.add(1, {"handler": "review"})
         bound.exception("background_review_failed")
 
 
-async def _process_copilot_comment(request: Request, payload: NoteWebhookPayload) -> None:
+async def _is_agent_directed(
+    payload: NoteWebhookPayload,
+    agent_identity: AgentIdentity,
+    request: Request,
+) -> bool:
+    """Check if a note is directed at the agent via @mention or thread participation.
+
+    Returns True if:
+    - The note body contains @{agent_username} (word-boundary regex), OR
+    - The note is in a discussion thread where the agent previously commented
+      (requires fetching the discussion via GitLab API).
+    """
+    note_body = payload.object_attributes.note
+    pattern = rf"(?<![.\w-])@{re.escape(agent_identity.username)}(?![.\w-])"
+    if re.search(pattern, note_body):
+        return True
+
+    # Check thread participation — if the note has a discussion_id,
+    # fetch the discussion and check if the agent has a prior note in it
+    discussion_id = payload.object_attributes.discussion_id
+    if discussion_id and payload.merge_request:
+        settings = request.app.state.settings
+        registry: ProjectRegistry | None = getattr(request.app.state, "project_registry", None)
+        token = _resolve_project_token(payload.project.id, registry, settings.gitlab_token)
+        try:
+            gl_client = GitLabClient(settings.gitlab_url, token)
+            discussions = await gl_client.list_mr_discussions(
+                payload.project.id, payload.merge_request.iid
+            )
+            for disc in discussions:
+                if disc.discussion_id == discussion_id:
+                    for note in disc.notes:
+                        if note.author_id == agent_identity.user_id:
+                            return True
+                    break
+        except Exception:
+            await log.awarning("thread_participation_check_failed", exc_info=True)
+
+    return False
+
+
+async def _process_discussion(
+    request: Request,
+    payload: NoteWebhookPayload,
+    agent_identity: AgentIdentity,
+    note_key: str = "",
+) -> None:
+    """Process a discussion interaction in the background."""
     settings = request.app.state.settings
     executor = request.app.state.executor
     repo_locks = request.app.state.repo_locks
@@ -93,15 +148,25 @@ async def _process_copilot_comment(request: Request, payload: NoteWebhookPayload
         mr_iid=payload.merge_request.iid if payload.merge_request else None,
         note_body=payload.object_attributes.note[:80],
     )
-    bound.info("background_copilot_comment_starting")
+    bound.info("background_discussion_starting")
     try:
-        await handle_copilot_comment(
-            settings, payload, executor, repo_locks, project_token=project_token
+        await handle_discussion_interaction(
+            settings,
+            payload,
+            executor,
+            agent_identity,
+            project_token=project_token,
+            repo_locks=repo_locks,
         )
-        bound.info("background_copilot_comment_completed")
+        bound.info("background_discussion_completed")
     except Exception:
-        webhook_errors_total.add(1, {"handler": "copilot_comment"})
-        bound.exception("background_copilot_comment_failed")
+        webhook_errors_total.add(1, {"handler": "discussion"})
+        bound.exception("background_discussion_failed")
+    finally:
+        if note_key:
+            dedup_store = getattr(request.app.state, "dedup_store", None)
+            if dedup_store is not None:
+                await dedup_store.mark_seen(note_key, ttl_seconds=86400)
 
 
 @router.post("/webhook", status_code=200)
@@ -157,30 +222,48 @@ async def webhook(
         note_payload = NoteWebhookPayload.model_validate(body)
         if note_payload.object_attributes.noteable_type != "MergeRequest":
             return {"status": "ignored", "reason": "not an MR note"}
-        if not parse_copilot_command(note_payload.object_attributes.note):
-            return {"status": "ignored", "reason": "not a /copilot command"}
 
-        # Self-comment detection: prefer immutable user_id over mutable username
+        # Self-comment detection via agent identity (per-project credential)
         credential_registry: CredentialRegistry | None = getattr(
             request.app.state, "credential_registry", None
         )
-        if credential_registry is not None:
-            try:
-                agent_identity = await credential_registry.resolve_identity(
-                    "default", settings.gitlab_url
-                )
-                if note_payload.user.id == agent_identity.user_id:
-                    return {"status": "ignored", "reason": "self-comment"}
-            except Exception:
-                await log.awarning("identity_resolution_failed_for_self_check", exc_info=True)
-        # Fallback to legacy username comparison (deprecated)
-        if (
-            settings.agent_gitlab_username
-            and note_payload.user.username == settings.agent_gitlab_username
-        ):
+        if credential_registry is None:
+            return {"status": "ignored", "reason": "no credential registry"}
+
+        # Resolve the credential_ref for this project (not always "default")
+        registry: ProjectRegistry | None = getattr(request.app.state, "project_registry", None)
+        credential_ref = "default"
+        if registry is not None:
+            resolved = registry.get_by_project_id(note_payload.project.id)
+            if resolved is not None:
+                credential_ref = resolved.credential_ref
+
+        try:
+            agent_identity = await credential_registry.resolve_identity(
+                credential_ref, settings.gitlab_url
+            )
+        except Exception:
+            await log.awarning("identity_resolution_failed", exc_info=True)
+            return {"status": "ignored", "reason": "identity resolution failed"}
+
+        if note_payload.user.id == agent_identity.user_id:
             return {"status": "ignored", "reason": "self-comment"}
 
-        background_tasks.add_task(_process_copilot_comment, request, note_payload)
+        # Check if this note is directed at the agent
+        if not await _is_agent_directed(note_payload, agent_identity, request):
+            return {"status": "ignored", "reason": "not directed at agent"}
+
+        # Deduplicate — prevents reprocessing on duplicate webhook deliveries
+        dedup_store = getattr(request.app.state, "dedup_store", None)
+        note_id = note_payload.object_attributes.id
+        mr_iid = note_payload.merge_request.iid if note_payload.merge_request else 0
+        note_key = f"note:{note_payload.project.id}:{mr_iid}:{note_id}"
+        if dedup_store is not None and await dedup_store.is_seen(note_key):
+            return {"status": "skipped", "reason": "already processed"}
+
+        background_tasks.add_task(
+            _process_discussion, request, note_payload, agent_identity, note_key
+        )
         return {"status": "queued"}
 
     return {"status": "ignored", "reason": f"unhandled event: {object_kind}"}

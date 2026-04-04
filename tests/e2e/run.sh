@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # E2E test: deploy agent to k3d, run all test flows against mock services.
-# Tests: 1. Webhook MR review, 2. Jira polling, 3. /copilot command,
+# Tests: 1. Webhook MR review, 2. Jira polling, 3. @mention thread interaction,
 #        4. GitLab polling, 5. Hot-reload config, 6. Plugin install,
 #        7. Graceful shutdown, 8. Discussion history capture.
 # Usage: ./tests/e2e/run.sh [agent-url] [mock-gitlab-url] [mock-jira-url]
@@ -134,18 +134,40 @@ else
     echo " ⚠️ no push/MR (mock LLM — no code changes expected)"
 fi
 
-# === TEST 3: /copilot command ===
-echo ""; echo "--- Test 3: /copilot Command ---"
+# === TEST 3: @mention thread interaction ===
+echo ""; echo "--- Test 3: @mention Thread Interaction ---"
 # Clear recorded state so assertions only see data from this test
 curl -sf -X DELETE "$MOCK_GITLAB_URL/discussions" > /dev/null
+curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/discussions" > /dev/null
 
-echo -n "Sending /copilot note webhook..."
+# Pre-seed a discussion containing the note that will trigger the handler.
+# The note ID (5001) must match the webhook payload so the handler can find
+# the triggering discussion thread.
+curl -sf -X POST "$MOCK_GITLAB_URL/mock/discussions" \
+    -H "Content-Type: application/json" \
+    -d '[{
+        "id": "mention-disc-001",
+        "individual_note": false,
+        "notes": [{
+            "id": 5001,
+            "type": "DiscussionNote",
+            "body": "@mock-review-bot add error handling to main.py",
+            "author": {"id": 2, "username": "developer"},
+            "created_at": "2024-01-15T12:00:00Z",
+            "system": false,
+            "resolvable": false,
+            "resolved": false,
+            "position": null
+        }]
+    }]' > /dev/null
+
+echo -n "Sending @mention note webhook..."
 send_webhook '{
     "object_kind": "note",
     "user": {"id": 2, "username": "developer"},
     "project": {"id": 999, "path_with_namespace": "test/e2e-repo",
                 "git_http_url": "http://host.k3d.internal:9999/repo.git"},
-    "object_attributes": {"note": "/copilot add error handling to main.py",
+    "object_attributes": {"id": 5001, "note": "@mock-review-bot add error handling to main.py",
                           "noteable_type": "MergeRequest"},
     "merge_request": {"iid": 1, "title": "E2E test MR",
                       "source_branch": "main", "target_branch": "main"}
@@ -154,6 +176,9 @@ send_webhook '{
 poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
     "Waiting for agent response" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+
+# Clean up seeded discussions
+curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/discussions" > /dev/null
 
 # === TEST 4: GitLab Polling — MR Discovery ===
 echo ""; echo "--- Test 4: GitLab Polling — MR Discovery ---"
