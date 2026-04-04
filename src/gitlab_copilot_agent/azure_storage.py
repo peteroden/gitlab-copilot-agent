@@ -241,7 +241,11 @@ class TableDedup:
                 partition_key=pk,
                 row_key=rk,
             )
-        except Exception:
+        except Exception as exc:
+            exc_str = str(exc)
+            # ResourceNotFoundError is expected for unseen keys — don't log
+            if "ResourceNotFound" not in exc_str and "Not Found" not in exc_str:
+                log.warning("dedup_is_seen_error", key=key, error=exc_str[:200])
             return False
         raw_ttl = entity.get("ttl_seconds")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
         ttl = raw_ttl if isinstance(raw_ttl, int) else 3600
