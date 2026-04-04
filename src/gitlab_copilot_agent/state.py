@@ -32,14 +32,24 @@ def create_dedup(
     """Factory: create a DeduplicationStore.
 
     Uses TableDedup when Azure Storage is configured, otherwise in-memory.
+    Falls back to in-memory if Table Storage is unavailable (e.g. Azurite
+    without Table endpoint).
     """
     if azure_storage_connection_string or azure_storage_account_url:
-        from gitlab_copilot_agent.azure_storage import create_table_dedup_store
+        try:
+            from gitlab_copilot_agent.azure_storage import create_table_dedup_store
 
-        return create_table_dedup_store(
-            azure_storage_account_url,
-            connection_string=azure_storage_connection_string,
-        )
+            return create_table_dedup_store(
+                azure_storage_account_url,
+                connection_string=azure_storage_connection_string,
+            )
+        except Exception:
+            import structlog
+
+            structlog.get_logger().warning(
+                "table_dedup_unavailable_fallback_memory",
+                exc_info=True,
+            )
     return MemoryDedup()
 
 
