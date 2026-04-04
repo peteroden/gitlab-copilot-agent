@@ -38,7 +38,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Constants**:
 - `HANDLED_ACTIONS = frozenset({"open", "update"})`: MR actions that trigger review
 
-**Internal Imports**: `models`, `orchestrator`, `discussion_handler`, `discussion_models`, `metrics`, `concurrency`, `project_registry`, `credential_registry`
+**Internal Imports**: `models`, `orchestrator`, `discussion_orchestrator`, `discussion_models`, `metrics`, `concurrency`, `project_registry`, `credential_registry`
 
 **Depended On By**: `main.py` (includes router)
 
@@ -60,7 +60,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Functions**:
 - `_build_note_payload(note: NoteListItem, mr: MRListItem, project_id: int, settings: Settings) -> NoteWebhookPayload`: Synthesize webhook payload from API models
 
-**Internal Imports**: `config`, `gitlab_client`, `models`, `orchestrator`, `discussion_handler`, `discussion_models`, `concurrency`, `task_executor`, `credential_registry`
+**Internal Imports**: `config`, `gitlab_client`, `models`, `orchestrator`, `discussion_orchestrator`, `discussion_models`, `concurrency`, `task_executor`, `credential_registry`
 
 **Depended On By**: `main.py` (started in lifespan if `gitlab_poll=true`)
 
@@ -105,7 +105,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 ---
 
-### `discussion_handler.py`
+### `discussion_orchestrator.py`
 **Purpose**: Unified handler for @mention and thread-reply interactions on MRs.
 
 **Key Constants**:
@@ -140,7 +140,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Internal Imports**: `task_executor`, `config`, `discussion_models`, `gitlab_client`
 
-**Depended On By**: `discussion_handler.py`
+**Depended On By**: `discussion_orchestrator.py`
 
 ---
 
@@ -555,7 +555,7 @@ All use `frozen=True` config.
 
 **Internal Imports**: None
 
-**Depended On By**: `orchestrator.py`, `credential_registry.py`, `discussion_handler.py`, `discussion_engine.py`
+**Depended On By**: `orchestrator.py`, `credential_registry.py`, `discussion_orchestrator.py`, `discussion_engine.py`
 
 ---
 
@@ -735,7 +735,7 @@ All use `frozen=True` config.
 | `gitlab_poller.py` | Ingestion | 175 | MR/note discovery |
 | `jira_poller.py` | Ingestion | 90 | Issue discovery |
 | `orchestrator.py` | Processing | 95 | MR review pipeline |
-| `discussion_handler.py` | Processing | 191 | Unified @mention/thread interaction handler |
+| `discussion_orchestrator.py` | Processing | 191 | Unified @mention/thread interaction handler |
 | `discussion_engine.py` | Processing | 147 | Discussion prompt construction & response parsing |
 | `coding_orchestrator.py` | Processing | 142 | Jira task implementation |
 | `review_engine.py` | Processing | 91 | Review prompt construction |

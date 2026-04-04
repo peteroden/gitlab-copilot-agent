@@ -38,7 +38,7 @@ This documentation provides comprehensive implementation details for developers 
 |------|-------------|------------|------------------|
 | MR Review (webhook) | `webhook.py` | `orchestrator.py` → `review_engine.py` → `copilot_session.py` | GitLab API, Copilot SDK |
 | MR Review (poller) | `gitlab_poller.py` | → `orchestrator.py` | GitLab API |
-| @mention interaction | `webhook.py` | `discussion_handler.py` → `copilot_session.py` | GitLab API, Copilot SDK |
+| @mention interaction | `webhook.py` | `discussion_orchestrator.py` → `copilot_session.py` | GitLab API, Copilot SDK |
 | Jira coding task | `jira_poller.py` | `coding_orchestrator.py` → `coding_engine.py` → `copilot_session.py` | Jira API, GitLab API, Copilot SDK |
 
 ---

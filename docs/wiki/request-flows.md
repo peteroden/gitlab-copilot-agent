@@ -105,7 +105,7 @@ Triggered when GitLab sends a `note` webhook for an MR comment that @mentions th
 sequenceDiagram
     participant GL as GitLab
     participant WH as webhook.py
-    participant DH as discussion_handler.py
+    participant DH as discussion_orchestrator.py
     participant DE as discussion_engine.py
     participant GLCL as gitlab_client.py
     participant EXEC as TaskExecutor
@@ -176,7 +176,7 @@ sequenceDiagram
     participant POLL as gitlab_poller.py
     participant GLCL as gitlab_client.py
     participant DEDUP as DeduplicationStore
-    participant DH as discussion_handler.py
+    participant DH as discussion_orchestrator.py
     
     loop For each project_id
         POLL->>GLCL: list_project_mrs(project_id, state="opened", updated_after=watermark)

@@ -12,8 +12,8 @@ import structlog
 from gitlab_copilot_agent.concurrency import DeduplicationStore, DistributedLock
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
-from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
 from gitlab_copilot_agent.discussion_models import AgentIdentity
+from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 from gitlab_copilot_agent.gitlab_client import (
     GitLabClient,
     GitLabClientProtocol,

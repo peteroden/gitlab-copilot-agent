@@ -292,7 +292,7 @@ def build_jira_coding_prompt(issue_key: str, summary: str, description: str | No
     )
 ```
 
-#### Coding Prompt (MR @mention, `discussion_handler.py`)
+#### Coding Prompt (MR @mention, `discussion_orchestrator.py`)
 ```python
 def build_mr_coding_prompt(instruction: str, mr_title: str, source_branch: str, target_branch: str) -> str:
     return (

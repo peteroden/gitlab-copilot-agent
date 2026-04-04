@@ -219,7 +219,7 @@ async def test_poll_loop_resets_failures_on_success(mock_hr: AsyncMock) -> None:
 @pytest.mark.asyncio
 @patch(_HANDLE_DISCUSSION, new_callable=AsyncMock)
 @patch(_HANDLE_REVIEW, new_callable=AsyncMock)
-async def test_note_discovery_triggers_discussion_handler(
+async def test_note_discovery_triggers_discussion_orchestrator(
     mock_hr: AsyncMock, mock_hd: AsyncMock
 ) -> None:
     poller, cl, _ = _poller()
@@ -391,7 +391,7 @@ async def test_poll_falls_back_to_none_when_not_in_registry(mock_hr: AsyncMock) 
 @pytest.mark.asyncio
 @patch(_HANDLE_DISCUSSION, new_callable=AsyncMock)
 @patch(_HANDLE_REVIEW, new_callable=AsyncMock)
-async def test_poll_passes_per_project_token_to_discussion_handler(
+async def test_poll_passes_per_project_token_to_discussion_orchestrator(
     mock_hr: AsyncMock, mock_hd: AsyncMock
 ) -> None:
     """Poller passes per-project token from registry to handle_discussion_interaction."""

@@ -43,7 +43,7 @@ CHANGES_PUSHED_MARKER = "✅ Changes pushed."
 GENERIC_ERROR_SNIPPET = "❌ Unable to process your request"
 
 # -- Module path prefix for patches --
-_MOD = "gitlab_copilot_agent.discussion_handler"
+_MOD = "gitlab_copilot_agent.discussion_orchestrator"
 
 
 # -- Factories --
@@ -144,7 +144,7 @@ async def test_qa_reply_no_code_changes(
     tmp_path: Path,
 ) -> None:
     """Happy path: Q&A reply with no code changes — reply posted, no push."""
-    from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 
     # GitLabClient instance
     gl_client = AsyncMock()
@@ -199,7 +199,7 @@ async def test_coding_reply_with_changes(
     tmp_path: Path,
 ) -> None:
     """Happy path: coding reply with patch — changes pushed."""
-    from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 
     gl_client = AsyncMock()
     mock_client_cls.return_value = gl_client
@@ -251,7 +251,7 @@ async def test_coding_reply_empty_patch(
     tmp_path: Path,
 ) -> None:
     """Coding result with empty patch — reply posted, no push."""
-    from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 
     gl_client = AsyncMock()
     mock_client_cls.return_value = gl_client
@@ -287,7 +287,7 @@ async def test_triggering_discussion_not_found(
     tmp_path: Path,
 ) -> None:
     """When the triggering note is not in any discussion, handler returns without posting."""
-    from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 
     gl_client = AsyncMock()
     mock_client_cls.return_value = gl_client
@@ -320,7 +320,7 @@ async def test_task_execution_error_posts_user_error(
     tmp_path: Path,
 ) -> None:
     """TaskExecutionError → user-friendly error comment on MR, exception re-raised."""
-    from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 
     gl_client = AsyncMock()
     mock_client_cls.return_value = gl_client
@@ -351,7 +351,7 @@ async def test_general_exception_posts_generic_error(
     tmp_path: Path,
 ) -> None:
     """General exception → generic error comment on MR, exception re-raised."""
-    from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 
     gl_client = AsyncMock()
     mock_client_cls.return_value = gl_client
@@ -380,7 +380,7 @@ async def test_cleanup_runs_on_failure(
     tmp_path: Path,
 ) -> None:
     """Repo cleanup runs even when the handler raises."""
-    from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 
     gl_client = AsyncMock()
     mock_client_cls.return_value = gl_client
@@ -414,7 +414,7 @@ async def test_repo_lock_used_when_provided(
     tmp_path: Path,
 ) -> None:
     """When repo_locks is provided, _execute runs inside the lock."""
-    from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 
     gl_client = AsyncMock()
     mock_client_cls.return_value = gl_client
@@ -468,7 +468,7 @@ async def test_deleted_branch_replies_with_warning(
     tmp_path: Path,
 ) -> None:
     """When the source branch is deleted, reply with a helpful warning."""
-    from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 
     gl_client = AsyncMock()
     mock_client_cls.return_value = gl_client

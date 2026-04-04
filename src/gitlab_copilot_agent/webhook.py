@@ -10,8 +10,8 @@ import structlog
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from gitlab_copilot_agent.concurrency import ReviewedMRTracker
-from gitlab_copilot_agent.discussion_handler import handle_discussion_interaction
 from gitlab_copilot_agent.discussion_models import AgentIdentity
+from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.metrics import webhook_errors_total, webhook_received_total
 from gitlab_copilot_agent.models import MergeRequestWebhookPayload, NoteWebhookPayload

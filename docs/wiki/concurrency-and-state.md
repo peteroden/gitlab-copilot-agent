@@ -122,7 +122,7 @@ async def acquire(self, key: str, ttl_seconds: int = 300) -> AsyncIterator[None]
 **Lock Key**: `git_http_url` (e.g., `https://gitlab.com/group/project.git`)
 
 **Operations Locked**:
-1. **MR @mention interaction** (`discussion_handler.py`):
+1. **MR @mention interaction** (`discussion_orchestrator.py`):
    - Clone → code → commit → push
    - Prevents concurrent pushes to same branch
 2. **Jira coding task** (`coding_orchestrator.py`):
@@ -350,7 +350,7 @@ Pod A: acquire lock → clone → code → commit → push → release
 Pod B: wait for lock ────────────────────────────────┘→ clone → ...
 ```
 
-**Code**: `discussion_handler.py`, `coding_orchestrator.py` both use `repo_locks.acquire()`.
+**Code**: `discussion_orchestrator.py`, `coding_orchestrator.py` both use `repo_locks.acquire()`.
 
 ---
 

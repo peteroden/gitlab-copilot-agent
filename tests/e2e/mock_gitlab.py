@@ -134,7 +134,7 @@ async def get_current_user() -> dict:
 
 @app.get("/api/v4/projects/{project_id}/merge_requests/{mr_iid}/discussions/{discussion_id}")
 async def get_discussion(project_id: int, mr_iid: int, discussion_id: str) -> dict:
-    """Return a single discussion by ID (used by discussion_handler to reply)."""
+    """Return a single discussion by ID (used by discussion_orchestrator to reply)."""
     for disc in _seeded_discussions:
         if disc.get("id") == discussion_id:
             return disc

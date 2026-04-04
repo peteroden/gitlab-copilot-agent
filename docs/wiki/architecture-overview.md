@@ -15,7 +15,7 @@ graph TB
         GLP[gitlab_poller.py<br/>Background Task]
         JP[jira_poller.py<br/>Background Task]
         ORCH[orchestrator.py<br/>Review Handler]
-        DISC[discussion_handler.py<br/>Thread Handler]
+        DISC[discussion_orchestrator.py<br/>Thread Handler]
         CODING[coding_orchestrator.py<br/>Coding Handler]
         EXEC[LocalTaskExecutor]
         COPILOT[copilot_session.py<br/>SDK Wrapper]
@@ -95,7 +95,7 @@ graph TB
 
 ### 2. Processing Layer
 - **`orchestrator.py`**: MR review orchestration (clone → review → parse → post)
-- **`discussion_handler.py`**: Unified @mention/thread interaction handler (clone → fetch context → LLM → reply ± commit/push)
+- **`discussion_orchestrator.py`**: Unified @mention/thread interaction handler (clone → fetch context → LLM → reply ± commit/push)
 - **`discussion_engine.py`**: Discussion prompt construction, structured response parsing (intent + reply + optional code changes)
 - **`coding_orchestrator.py`**: Jira issue implementation (clone → code → apply result → branch → MR)
 - **`coding_workflow.py`**: Shared helper for applying coding results (diff passback from k8s pods)
