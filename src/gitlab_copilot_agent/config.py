@@ -100,6 +100,14 @@ class Settings(BaseSettings):
         default=None,
         description="Base directory for repo clones. Defaults to system temp.",
     )
+    agent_author_name: str = Field(
+        default="Copilot Agent",
+        description="Git author name for agent commits",
+    )
+    agent_author_email: str = Field(
+        default="copilot-agent@noreply.gitlab.com",
+        description="Git author email for agent commits",
+    )
     shutdown_timeout: int = Field(
         default=30, gt=0, description="Graceful shutdown timeout in seconds"
     )

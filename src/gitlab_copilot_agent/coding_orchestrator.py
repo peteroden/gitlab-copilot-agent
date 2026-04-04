@@ -31,9 +31,6 @@ from gitlab_copilot_agent.telemetry import get_tracer
 log = structlog.get_logger()
 _tracer = get_tracer(__name__)
 
-AGENT_AUTHOR_NAME = "Copilot Agent"
-AGENT_AUTHOR_EMAIL = "copilot-agent@noreply.gitlab.com"
-
 
 class CodingOrchestrator:
     def __init__(
@@ -114,8 +111,8 @@ class CodingOrchestrator:
                     has_changes = await git_commit(
                         repo_path,
                         f"feat({issue.key.lower()}): {issue.fields.summary}",
-                        AGENT_AUTHOR_NAME,
-                        AGENT_AUTHOR_EMAIL,
+                        self._settings.agent_author_name,
+                        self._settings.agent_author_email,
                     )
                     if not has_changes:
                         await self._jira.add_comment(issue.key, "Agent found no changes to make.")

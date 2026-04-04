@@ -146,6 +146,7 @@ jobs:
             {
               "gitlab-token": "${{ secrets.GITLAB_TOKEN }}",
               "gitlab-token--e2e-aca-test": "${{ secrets.GITLAB_TOKEN__E2E_ACA_TEST }}",
+              "gitlab-token--copilot-demo": "${{ secrets.GITLAB_TOKEN__COPILOT_DEMO }}",
               "github-token": "${{ secrets.GH_PAT_FOR_COPILOT }}",
               "jira-api-token": "${{ secrets.JIRA_API_TOKEN }}"
             }

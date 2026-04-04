@@ -9,18 +9,19 @@ from __future__ import annotations
 import asyncio
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import gitlab
 import structlog
 
 from gitlab_copilot_agent.coding_workflow import apply_coding_result
+from gitlab_copilot_agent.concurrency import DistributedLock
+from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.discussion_engine import (
     build_discussion_prompt,
     parse_discussion_response,
     run_discussion,
 )
-from gitlab_copilot_agent.discussion_models import DiscussionHistory
+from gitlab_copilot_agent.discussion_models import AgentIdentity, Discussion, DiscussionHistory
 from gitlab_copilot_agent.error_messages import branch_deleted_message, user_error_message
 from gitlab_copilot_agent.git_operations import (
     TransientCloneError,
@@ -29,22 +30,17 @@ from gitlab_copilot_agent.git_operations import (
     validate_clone_url_host,
 )
 from gitlab_copilot_agent.gitlab_client import GitLabClient
+from gitlab_copilot_agent.models import NoteWebhookPayload
 from gitlab_copilot_agent.prompt_defaults import get_prompt
-from gitlab_copilot_agent.task_executor import CodingResult, TaskExecutionError
+from gitlab_copilot_agent.task_executor import (
+    CodingResult,
+    TaskExecutionError,
+    TaskExecutor,
+)
 from gitlab_copilot_agent.telemetry import get_tracer
-
-if TYPE_CHECKING:
-    from gitlab_copilot_agent.concurrency import DistributedLock
-    from gitlab_copilot_agent.config import Settings
-    from gitlab_copilot_agent.discussion_models import AgentIdentity, Discussion
-    from gitlab_copilot_agent.models import NoteWebhookPayload
-    from gitlab_copilot_agent.task_executor import TaskExecutor
 
 log = structlog.get_logger()
 _tracer = get_tracer(__name__)
-
-AGENT_AUTHOR_NAME = "Copilot Agent"
-AGENT_AUTHOR_EMAIL = "copilot-agent@noreply.gitlab.com"
 
 
 def _find_triggering_discussion(
@@ -166,8 +162,8 @@ async def handle_discussion_interaction(
                     has_changes = await git_commit(
                         repo_path,
                         f"fix: {payload.object_attributes.note[:50]}",
-                        AGENT_AUTHOR_NAME,
-                        AGENT_AUTHOR_EMAIL,
+                        settings.agent_author_name,
+                        settings.agent_author_email,
                     )
                     if has_changes:
                         await git_push(repo_path, "origin", mr.source_branch, token)
