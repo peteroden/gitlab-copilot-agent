@@ -243,9 +243,14 @@ class TableDedup:
             )
         except Exception as exc:
             exc_str = str(exc)
-            # ResourceNotFoundError is expected for unseen keys — don't log
-            if "ResourceNotFound" not in exc_str and "Not Found" not in exc_str:
-                log.warning("dedup_is_seen_error", key=key, error=exc_str[:200])
+            if "ResourceNotFound" in exc_str or "Not Found" in exc_str:
+                return False
+            # Fail closed on auth/permission errors (persistent — won't self-heal).
+            # Fail open on transient errors (network, throttling — will resolve on retry).
+            if "Authorization" in exc_str or "Forbidden" in exc_str or "Permission" in exc_str:
+                log.warning("dedup_is_seen_auth_error_fail_closed", key=key, error=exc_str[:200])
+                return True
+            log.warning("dedup_is_seen_transient_error", key=key, error=exc_str[:200])
             return False
         raw_ttl = entity.get("ttl_seconds")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
         ttl = raw_ttl if isinstance(raw_ttl, int) else 3600

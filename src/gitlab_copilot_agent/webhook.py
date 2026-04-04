@@ -79,6 +79,11 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
             credential_registry=credential_registry,
         )
         review_tracker.mark(project_id, mr.iid, head_sha)
+        # Also mark in shared dedup store so the poller won't re-review
+        dedup_store = getattr(request.app.state, "dedup_store", None)
+        if dedup_store is not None:
+            review_key = f"review:{project_id}:{mr.iid}:{head_sha}"
+            await dedup_store.mark_seen(review_key, ttl_seconds=86400)
         bound.info("background_review_completed")
     except Exception:
         webhook_errors_total.add(1, {"handler": "review"})
@@ -130,6 +135,7 @@ async def _process_discussion(
     request: Request,
     payload: NoteWebhookPayload,
     agent_identity: AgentIdentity,
+    note_key: str = "",
 ) -> None:
     """Process a discussion interaction in the background."""
     settings = request.app.state.settings
@@ -156,6 +162,11 @@ async def _process_discussion(
     except Exception:
         webhook_errors_total.add(1, {"handler": "discussion"})
         bound.exception("background_discussion_failed")
+    finally:
+        if note_key:
+            dedup_store = getattr(request.app.state, "dedup_store", None)
+            if dedup_store is not None:
+                await dedup_store.mark_seen(note_key, ttl_seconds=86400)
 
 
 @router.post("/webhook", status_code=200)
@@ -212,16 +223,24 @@ async def webhook(
         if note_payload.object_attributes.noteable_type != "MergeRequest":
             return {"status": "ignored", "reason": "not an MR note"}
 
-        # Self-comment detection via agent identity
+        # Self-comment detection via agent identity (per-project credential)
         credential_registry: CredentialRegistry | None = getattr(
             request.app.state, "credential_registry", None
         )
         if credential_registry is None:
             return {"status": "ignored", "reason": "no credential registry"}
 
+        # Resolve the credential_ref for this project (not always "default")
+        registry: ProjectRegistry | None = getattr(request.app.state, "project_registry", None)
+        credential_ref = "default"
+        if registry is not None:
+            resolved = registry.get_by_project_id(note_payload.project.id)
+            if resolved is not None:
+                credential_ref = resolved.credential_ref
+
         try:
             agent_identity = await credential_registry.resolve_identity(
-                "default", settings.gitlab_url
+                credential_ref, settings.gitlab_url
             )
         except Exception:
             await log.awarning("identity_resolution_failed", exc_info=True)
@@ -234,7 +253,17 @@ async def webhook(
         if not await _is_agent_directed(note_payload, agent_identity, request):
             return {"status": "ignored", "reason": "not directed at agent"}
 
-        background_tasks.add_task(_process_discussion, request, note_payload, agent_identity)
+        # Deduplicate — prevents reprocessing on duplicate webhook deliveries
+        dedup_store = getattr(request.app.state, "dedup_store", None)
+        note_id = note_payload.object_attributes.id
+        mr_iid = note_payload.merge_request.iid if note_payload.merge_request else 0
+        note_key = f"note:{note_payload.project.id}:{mr_iid}:{note_id}"
+        if dedup_store is not None and await dedup_store.is_seen(note_key):
+            return {"status": "skipped", "reason": "already processed"}
+
+        background_tasks.add_task(
+            _process_discussion, request, note_payload, agent_identity, note_key
+        )
         return {"status": "queued"}
 
     return {"status": "ignored", "reason": f"unhandled event: {object_kind}"}

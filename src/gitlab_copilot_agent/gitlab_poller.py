@@ -106,6 +106,7 @@ class GitLabPoller:
     async def _poll_once(self) -> None:
         poll_start = datetime.now(UTC).isoformat()
         await log.ainfo("gitlab_poll_cycle", project_count=len(self._project_ids))
+        all_succeeded = True
         for pid in self._project_ids:
             try:
                 client = self._client_for_project(pid)
@@ -117,6 +118,7 @@ class GitLabPoller:
                     await self._process_mr(pid, mr)
                 await self._process_notes(pid, all_open_mrs, client)
             except Exception as exc:
+                all_succeeded = False
                 ref = "default"
                 if self._project_registry is not None:
                     resolved = self._project_registry.get_by_project_id(pid)
@@ -130,8 +132,11 @@ class GitLabPoller:
                     hint="Check that the GitLab token for this credential_ref is valid, "
                     "has api + read_repository scopes, and uses Developer role or higher",
                 )
-        self._watermark = poll_start
-        self._note_watermark = poll_start
+        # Only advance watermarks if all projects were scanned successfully.
+        # Otherwise, notes from failed projects would be skipped on the next cycle.
+        if all_succeeded:
+            self._watermark = poll_start
+            self._note_watermark = poll_start
 
     def _resolve_token(self, project_id: int) -> str | None:
         """Return per-project token from registry, or None for global fallback."""

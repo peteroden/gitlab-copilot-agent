@@ -22,8 +22,14 @@ from gitlab_copilot_agent.discussion_engine import (
 )
 from gitlab_copilot_agent.discussion_models import DiscussionHistory
 from gitlab_copilot_agent.error_messages import branch_deleted_message, user_error_message
-from gitlab_copilot_agent.git_operations import TransientCloneError, git_commit, git_push
+from gitlab_copilot_agent.git_operations import (
+    TransientCloneError,
+    git_commit,
+    git_push,
+    validate_clone_url_host,
+)
 from gitlab_copilot_agent.gitlab_client import GitLabClient
+from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.task_executor import CodingResult, TaskExecutionError
 from gitlab_copilot_agent.telemetry import get_tracer
 
@@ -39,15 +45,6 @@ _tracer = get_tracer(__name__)
 
 AGENT_AUTHOR_NAME = "Copilot Agent"
 AGENT_AUTHOR_EMAIL = "copilot-agent@noreply.gitlab.com"
-
-# Resolve from prompt_defaults if available; fallback for parallel development.
-import gitlab_copilot_agent.prompt_defaults as _prompt_mod  # noqa: E402
-
-DEFAULT_DISCUSSION_PROMPT: str = getattr(
-    _prompt_mod,
-    "DEFAULT_DISCUSSION_PROMPT",
-    "You are a code assistant participating in a merge request discussion.",
-)
 
 
 def _find_triggering_discussion(
@@ -95,6 +92,7 @@ async def handle_discussion_interaction(
             try:
                 # 1. Clone repo (always — questions may need full context)
                 try:
+                    validate_clone_url_host(project.git_http_url, settings.gitlab_url)
                     repo_path = await gl_client.clone_repo(
                         project.git_http_url,
                         mr.source_branch,
@@ -147,7 +145,7 @@ async def handle_discussion_interaction(
                     settings,
                     str(repo_path),
                     project.git_http_url,
-                    system_prompt=DEFAULT_DISCUSSION_PROMPT,
+                    system_prompt=get_prompt(settings, "discussion"),
                     user_prompt=user_prompt,
                     source_branch=mr.source_branch,
                     note_id=note_id,
