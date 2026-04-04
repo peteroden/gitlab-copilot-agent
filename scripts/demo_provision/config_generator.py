@@ -61,6 +61,7 @@ def print_config_output(
     print("\n--- CONFIGURATION (add to .env) ---\n")
     print(f"GITLAB_URL={gitlab_url}")
     print("GITLAB_TOKEN=<your-token>")
+    # codeql[py/clear-text-logging-sensitive-data] — intentional user-facing output
     print(f"GITLAB_WEBHOOK_SECRET={webhook_secret}")
     print(f"JIRA_URL={jira_url}")
     print("JIRA_EMAIL=<your-email>")
@@ -73,6 +74,7 @@ def print_config_output(
     if not webhook_configured:
         print(f"{step}. Configure GitLab webhook:")
         print("   URL:    <your-agent-url>/webhook")
+        # codeql[py/clear-text-logging-sensitive-data]
         print(f"   Secret: {webhook_secret}")
         print("   Events: Merge request events, Comment events")
         print(f"   Go to:  {gitlab_project_url}/-/hooks")
@@ -81,6 +83,7 @@ def print_config_output(
     print(f"{step}. Start the agent service (polling mode, no webhooks needed):")
     print("   GITLAB_POLL=true \\")
     print(f"   GITLAB_PROJECTS={gitlab_project_path} \\")
+    # codeql[py/clear-text-logging-sensitive-data]
     print(f"   GITLAB_WEBHOOK_SECRET={webhook_secret} \\")
     print(f"   JIRA_PROJECT_MAP='{project_map}' \\")
     print("   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 \\")

@@ -9,13 +9,14 @@ Tracks received discussion posts in /discussions for test assertions.
 Usage: uv run python tests/e2e/mock_gitlab.py [--port 9999]
 """
 
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 from urllib.parse import unquote
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 
 app = FastAPI()
 
@@ -359,19 +360,24 @@ async def startup() -> None:
 @app.get("/repo.git/{path:path}")
 async def serve_git(path: str, request: Request) -> Response:
     """Serve bare git repo files. Smart HTTP for push, dumb HTTP for clone."""
+    assert _bare_repo is not None
+    base_path = str(_bare_repo)
+    fullpath = os.path.normpath(os.path.join(base_path, path))
+    if not fullpath.startswith(base_path):
+        return Response(status_code=403)
+
     if path == "info/refs" and request.query_params.get("service") == "git-receive-pack":
-        assert _bare_repo is not None
         result = subprocess.run(
-            ["git", "receive-pack", "--stateless-rpc", "--advertise-refs", str(_bare_repo)],
+            ["git", "receive-pack", "--stateless-rpc", "--advertise-refs", base_path],
             capture_output=True,
         )
         body = _pkt_line("# service=git-receive-pack\n") + PKT_FLUSH + result.stdout
         return Response(content=body, media_type="application/x-git-receive-pack-advertisement")
-    assert _bare_repo is not None
-    file_path = _bare_repo / path
-    if not file_path.is_file():
+    if not os.path.isfile(fullpath):
         return Response(status_code=404)
-    return FileResponse(file_path)
+    with open(fullpath, "rb") as f:  # noqa: PTH123
+        data = f.read()
+    return Response(content=data, media_type="application/octet-stream")
 
 
 @app.post("/repo.git/git-receive-pack")
