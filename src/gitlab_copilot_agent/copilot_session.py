@@ -9,12 +9,11 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import structlog
-from copilot import CopilotClient
-from copilot.types import (
+from copilot import CopilotClient, SubprocessConfig
+from copilot.session import (
     CustomAgentConfig,
     PermissionHandler,
     ProviderConfig,
-    SubprocessConfig,
     SystemMessageAppendConfig,
 )
 
