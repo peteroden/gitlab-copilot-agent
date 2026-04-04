@@ -20,6 +20,7 @@ spec:
           ports:
             - { containerPort: 10000, name: blob }
             - { containerPort: 10001, name: queue }
+            - { containerPort: 10002, name: table }
           args: ["azurite", "--blobHost", "0.0.0.0", "--queueHost", "0.0.0.0", "--skipApiVersionCheck", "--disableProductStyleUrl", "--location", "/data"]
           env:
             - name: AZURITE_ACCOUNTS
@@ -58,6 +59,7 @@ spec:
   ports:
     - { port: 10000, name: blob }
     - { port: 10001, name: queue }
+    - { port: 10002, name: table }
   selector: {{- include "app.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: azurite
 {{- end }}

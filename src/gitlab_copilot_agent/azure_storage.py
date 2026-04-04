@@ -306,5 +306,5 @@ def create_table_dedup_store(
     with contextlib.suppress(Exception):
         service.create_table_if_not_exists(table_name)  # pyright: ignore[reportUnknownMemberType]
 
-    table_client = service.get_table_client(table_name)
+    table_client = service.get_table_client(table_name)  # pyright: ignore[reportUnknownMemberType]
     return TableDedup(table_client)
