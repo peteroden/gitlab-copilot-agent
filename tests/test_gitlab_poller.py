@@ -170,8 +170,8 @@ async def test_per_project_error_is_logged_not_raised() -> None:
     # Should NOT raise — error is caught per-project
     await poller._poll_once()
 
-    # Watermarks still advance (poll completed)
-    assert poller._watermark is not None
+    # Watermarks do NOT advance when a project fails (all_succeeded is False)
+    assert poller._watermark is None
 
 
 @pytest.mark.asyncio

@@ -101,6 +101,22 @@ class TestTableDedupIsSeen:
 
         assert await store.is_seen(DEDUP_KEY) is True
 
+    async def test_auth_error_fails_closed(self) -> None:
+        """Auth/permission errors return True (fail closed) to prevent reprocessing loops."""
+        table = _make_table_client()
+        table.get_entity.side_effect = Exception("AuthorizationPermissionMismatch: Forbidden")
+        store = TableDedup(table)
+
+        assert await store.is_seen(DEDUP_KEY) is True
+
+    async def test_transient_error_fails_open(self) -> None:
+        """Transient errors (network, timeout) return False (fail open) to allow retry."""
+        table = _make_table_client()
+        table.get_entity.side_effect = Exception("Connection timed out")
+        store = TableDedup(table)
+
+        assert await store.is_seen(DEDUP_KEY) is False
+
 
 # -- TableDedup.mark_seen tests --
 
