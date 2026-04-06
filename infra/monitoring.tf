@@ -138,3 +138,25 @@ resource "azurerm_private_endpoint" "ampls" {
     azurerm_private_dns_zone_virtual_network_link.agentsvc,
   ]
 }
+
+# Route CAE container logs to LA via Diagnostic Settings.
+# Diagnostic Settings use a secure private Microsoft channel — not blocked by
+# internet_ingestion_enabled = false (AMPLS public-ingestion restriction).
+resource "azurerm_monitor_diagnostic_setting" "cae_logs" {
+  name                       = "cae-logs-to-law"
+  target_resource_id         = azurerm_container_app_environment.main.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+
+  enabled_log {
+    category = "ContainerAppConsoleLogs"
+  }
+
+  enabled_log {
+    category = "ContainerAppSystemLogs"
+  }
+
+  metric {
+    category = "AllMetrics"
+    enabled  = false
+  }
+}

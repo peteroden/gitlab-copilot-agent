@@ -106,11 +106,11 @@ locals {
 # --- Container Apps Environment ---
 
 resource "azurerm_container_app_environment" "main" {
-  name                       = "cae-${var.resource_group_name}"
-  location                   = azurerm_resource_group.main.location
-  resource_group_name        = azurerm_resource_group.main.name
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
-  infrastructure_subnet_id   = azurerm_subnet.infra.id
+  name                     = "cae-${var.resource_group_name}"
+  location                 = azurerm_resource_group.main.location
+  resource_group_name      = azurerm_resource_group.main.name
+  logs_destination         = "azure-monitor"
+  infrastructure_subnet_id = azurerm_subnet.infra.id
 
   tags = var.tags
 
@@ -121,7 +121,7 @@ resource "azurerm_container_app_environment" "main" {
 
 # Managed OTLP agent — forwards traces/metrics/logs to App Insights.
 # Not yet supported by azurerm; use azapi to patch the environment.
-# Must include logAnalyticsConfiguration to avoid API validation error on PATCH.
+# Logs routed via azure-monitor destination + Diagnostic Settings (bypasses AMPLS).
 resource "azapi_update_resource" "cae_otlp" {
   type        = "Microsoft.App/managedEnvironments@2024-08-02-preview"
   resource_id = azurerm_container_app_environment.main.id
@@ -129,11 +129,7 @@ resource "azapi_update_resource" "cae_otlp" {
   body = {
     properties = {
       appLogsConfiguration = {
-        destination = "log-analytics"
-        logAnalyticsConfiguration = {
-          customerId = azurerm_log_analytics_workspace.main.workspace_id
-          sharedKey  = azurerm_log_analytics_workspace.main.primary_shared_key
-        }
+        destination = "azure-monitor"
       }
       appInsightsConfiguration = {
         connectionString = azurerm_application_insights.main.connection_string
