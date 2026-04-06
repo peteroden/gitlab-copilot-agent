@@ -13,7 +13,9 @@ class TaskParams(BaseModel):
     """Parameters for a Copilot task execution."""
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
-    task_type: Literal["review", "coding"] = Field(description="Type of task to execute")
+    task_type: Literal["review", "coding", "discussion"] = Field(
+        description="Type of task to execute"
+    )
     task_id: str = Field(description="Unique identifier for this task")
     repo_url: str = Field(description="Git clone URL for the repository")
     branch: str = Field(description="Branch to review or work on")
