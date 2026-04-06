@@ -31,9 +31,9 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Functions**:
 - `webhook(request: Request, background_tasks: BackgroundTasks, x_gitlab_token: str | None) -> dict[str, str]`: POST endpoint, validates HMAC, dispatches to background handlers
 - `_validate_webhook_token(received: str | None, expected: str) -> None`: HMAC comparison using `hmac.compare_digest`
-- `_process_review(request: Request, payload: MergeRequestWebhookPayload) -> None`: Background task for MR review
+- `_process_review(request: Request, payload: MergeRequestWebhookPayload) -> None`: Background task for MR review. Resolves per-project `resolution_behavior` from project registry
 - `_is_agent_directed(payload: NoteWebhookPayload, agent_identity: AgentIdentity, request: Request) -> bool`: Check if note @mentions the agent
-- `_process_discussion(request: Request, payload: NoteWebhookPayload, agent_identity: AgentIdentity) -> None`: Background task for discussion interactions
+- `_process_discussion(request: Request, payload: NoteWebhookPayload, agent_identity: AgentIdentity) -> None`: Background task for discussion interactions. Resolves per-project `resolution_behavior` from project registry
 
 **Key Constants**:
 - `HANDLED_ACTIONS = frozenset({"open", "update"})`: MR actions that trigger review
@@ -92,7 +92,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Purpose**: MR review orchestration — clone, review, parse, post comments.
 
 **Key Functions**:
-- `handle_review(settings: Settings, payload: MergeRequestWebhookPayload, executor: TaskExecutor, project_token: str | None = None, credential_registry: CredentialRegistry | None = None) -> None`: Full review pipeline with OTEL span and metrics
+- `handle_review(settings: Settings, payload: MergeRequestWebhookPayload, executor: TaskExecutor, project_token: str | None = None, credential_registry: CredentialRegistry | None = None, resolution_behavior: str = "suggest") -> None`: Full review pipeline with OTEL span and metrics
   - Clones repo
   - Fetches MR details (title, description, diff_refs, changes)
   - If `credential_registry` provided: fetches discussions via `list_mr_discussions()`, resolves agent identity via `resolve_identity()`, builds `DiscussionHistory`
@@ -100,6 +100,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - Calls `run_review()` with diff text and discussion history
   - Parses structured review via `parse_review()`
   - Posts comments via `post_review()`
+  - Passes `resolution_behavior` to `post_review()` for prior feedback resolution
   - Emits `reviews_total` and `reviews_duration` metrics
 
 **Internal Imports**: `config`, `models`, `task_executor`, `gitlab_client`, `review_engine`, `comment_parser`, `comment_poster`, `metrics`, `telemetry`, `discussion_models`, `credential_registry`
@@ -116,7 +117,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `AGENT_AUTHOR_EMAIL = "copilot-agent@noreply.gitlab.com"`
 
 **Key Functions**:
-- `handle_discussion_interaction(settings: Settings, payload: NoteWebhookPayload, executor: TaskExecutor, agent_identity: AgentIdentity, project_token: str | None, repo_locks: DistributedLock | None) -> None`: Full discussion pipeline — clone → fetch MR details & discussions → find triggering thread → build prompt → run LLM → parse response → post reply (+ optional commit/push)
+- `handle_discussion_interaction(settings: Settings, payload: NoteWebhookPayload, executor: TaskExecutor, agent_identity: AgentIdentity, project_token: str | None = None, repo_locks: DistributedLock | None = None, resolution_behavior: str = "suggest") -> None`: Full discussion pipeline — clone → fetch MR details & discussions → find triggering thread → build prompt → run LLM → parse response → post reply (+ optional commit/push) → handle resolution per `resolution_behavior`
 - `_find_triggering_discussion(discussions: list[Discussion], note_id: int) -> Discussion | None`: Locate the discussion containing the triggering note
 
 **Internal Imports**: `discussion_engine`, `discussion_models`, `coding_workflow`, `git_operations`, `gitlab_client`, `task_executor`, `telemetry`, `concurrency`, `config`, `models`, `prompt_defaults`
@@ -134,14 +135,15 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `MAX_OTHER_NOTE_CHARS = 100`: Max characters per summarized note
 
 **Key Models**:
-- `DiscussionResponse`: Structured LLM response — `intent` (question, coding, resolution, mixed), `reply` (text to post), `code_changes` (optional file changes)
+- `DiscussionResponse`: Structured LLM response — `reply` (text to post), `has_code_changes` (bool), `resolution` (optional Resolution for thread resolution)
 
 **Key Functions**:
 - `build_discussion_prompt(mr_details: MRDetails, discussion_history: DiscussionHistory, triggering_discussion: Discussion) -> str`: Build user prompt with MR metadata, triggering thread, diff, and other discussion context
-- `parse_discussion_response(raw: str) -> DiscussionResponse`: Extract structured response from LLM output; falls back to question-intent reply if parsing fails
+- `parse_discussion_response(raw: str) -> DiscussionResponse`: Extract structured response from LLM output. Detects `files_changed` JSON blocks for code changes and `resolution` JSON blocks for thread resolution signals
 - `run_discussion(executor: TaskExecutor, settings: Settings, repo_path: str, repo_url: str, system_prompt: str, user_prompt: str, source_branch: str) -> TaskResult`: Execute discussion LLM session via executor
+- `_parse_resolution(data: dict[str, object]) -> Resolution | None`: Extract Resolution from parsed JSON if present
 
-**Internal Imports**: `task_executor`, `config`, `discussion_models`, `gitlab_client`
+**Internal Imports**: `task_executor`, `config`, `discussion_models`, `gitlab_client`, `comment_parser`
 
 **Depended On By**: `discussion_orchestrator.py`
 
@@ -180,6 +182,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `_SEVERITY_PREFIX_RE: re.Pattern`: Compiled regex to strip severity prefixes (e.g., `**[WARNING]**`) from comments
 - `_SUGGESTION_BLOCK_RE: re.Pattern`: Compiled regex to strip suggestion code blocks from comments
 - `_PRIOR_FEEDBACK_RULES: str`: Prompt rules instructing the LLM not to duplicate prior feedback
+- `_RESOLUTION_EVAL_INSTRUCTIONS`: Prompt instructions for LLM to evaluate whether prior feedback has been addressed
 
 **Key Models**:
 - `ReviewRequest`: MR metadata (title, description, source/target branches)
@@ -187,7 +190,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Functions**:
 - `build_review_prompt(req: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None) -> str`: Build user prompt; includes diff inline when available and injects prior unresolved feedback
 - `run_review(executor: TaskExecutor, settings: Settings, repo_path: str, repo_url: str, review_request: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None) -> TaskResult`: Execute review task and return structured result
-- `_format_prior_feedback(history: DiscussionHistory) -> str`: Render the agent's unresolved inline comments as a prompt section (grouped by file, sorted by line)
+- `_format_prior_feedback(history: DiscussionHistory) -> str`: Render agent's unresolved inline comments as a prompt section. Includes `[discussion: {id}]` tags for LLM resolution referencing
 - `_strip_comment_formatting(body: str) -> str`: Remove agent-added severity prefix and suggestion blocks from a comment
 
 **Internal Imports**: `config`, `prompt_defaults`, `task_executor`, `discussion_models` (TYPE_CHECKING)
@@ -384,6 +387,10 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - `list_project_mrs(project_id: int, state: str, updated_after: str | None) -> list[MRListItem]`: List MRs
   - `list_mr_notes(project_id: int, mr_iid: int, created_after: str | None) -> list[NoteListItem]`: List notes
   - `resolve_project(id_or_path: str | int) -> int`: Resolve project ID
+  - `list_mr_discussions(project_id: int, mr_iid: int) -> list[Discussion]`: List MR discussions with notes and resolution status
+  - `get_current_user() -> AgentIdentity`: Discover authenticated user identity
+  - `resolve_discussion(project_id: int, mr_iid: int, discussion_id: str) -> None`: Resolve a discussion thread (sets resolved=True)
+  - `reply_to_discussion(project_id: int, mr_iid: int, discussion_id: str, body: str) -> None`: Post a reply to an existing discussion thread
 
 **Internal Imports**: `git_operations`
 
@@ -446,24 +453,27 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Key Models**:
 - `ReviewComment`: file, line, severity, comment, suggestion, suggestion_start_offset, suggestion_end_offset
-- `ParsedReview`: comments, summary
+- `Resolution`: discussion_id, status (resolved/not_addressed/partial), message — resolution determination for prior feedback
+- `ParsedReview`: comments, summary, resolutions
 
 **Key Functions**:
-- `parse_review(raw: str) -> ParsedReview`: Extract JSON array from code fence or raw text, parse comments, extract summary
+- `parse_review(raw: str) -> ParsedReview`: Extract JSON object with `comments` and `resolutions` arrays from code fence or raw text, parse into models, extract summary
 
 **Internal Imports**: None
 
-**Depended On By**: `orchestrator.py`
+**Depended On By**: `orchestrator.py`, `discussion_engine.py`
 
 ---
 
 ### `comment_poster.py`
-**Purpose**: Post review comments to GitLab MR as inline discussions and summary.
+**Purpose**: Post review comments to GitLab MR as inline discussions and summary. Handles resolution actions for prior feedback.
 
 **Key Functions**:
-- `post_review(gitlab_client: gl.Gitlab, project_id: int, mr_iid: int, diff_refs: MRDiffRef, review: ParsedReview, changes: list[MRChange]) -> None`: Post inline + summary
+- `post_review(gitlab_client: gl.Gitlab, project_id: int, mr_iid: int, diff_refs: MRDiffRef, review: ParsedReview, changes: list[MRChange], resolution_behavior: str = "suggest") -> None`: Post inline comments + resolve/acknowledge prior feedback + summary
   - Validates comment positions against diff hunks
   - Falls back to note with file:line context if position invalid
+  - Processes resolutions via `_handle_resolutions()` before posting summary
+- `_handle_resolutions(mr: object, resolutions: list[Resolution], resolution_behavior: str) -> int`: Process resolutions per configured behavior (auto-resolve/suggest/off). Returns count of resolved threads
 - `_parse_hunk_lines(diff: str, new_path: str) -> set[tuple[str, int]]`: Extract valid (file, line) positions from unified diff
 - `_is_valid_position(file: str, line: int, valid_positions: set[tuple[str, int]]) -> bool`: Check if position valid
 

@@ -100,6 +100,12 @@ class GitLabClientProtocol(Protocol):
     async def resolve_project(self, id_or_path: str | int) -> int: ...
     async def list_mr_discussions(self, project_id: int, mr_iid: int) -> list[Discussion]: ...
     async def get_current_user(self) -> AgentIdentity: ...
+    async def resolve_discussion(
+        self, project_id: int, mr_iid: int, discussion_id: str
+    ) -> None: ...
+    async def reply_to_discussion(
+        self, project_id: int, mr_iid: int, discussion_id: str, body: str
+    ) -> None: ...
 
 
 class GitLabClient:
@@ -109,11 +115,28 @@ class GitLabClient:
 
     async def get_mr_details(self, project_id: int, mr_iid: int) -> MRDetails:
         def _fetch() -> MRDetails:
+            import time
+
             project = self._gl.projects.get(project_id)
             mr = project.mergerequests.get(mr_iid)
-            changes_data: dict[str, object] = mr.changes()  # pyright: ignore[reportAssignmentType]
 
-            diff_refs = MRDiffRef.model_validate(changes_data["diff_refs"])
+            # Retry when diff_refs is null (GitLab race on freshly-created MRs)
+            raw_diff_refs: object | None = None
+            changes_data: dict[str, object] = {}
+            for attempt in range(5):
+                changes_data = mr.changes()  # pyright: ignore[reportAssignmentType]
+                raw_diff_refs = changes_data.get("diff_refs")
+                if raw_diff_refs is not None:
+                    break
+                time.sleep(min(2**attempt, 8))
+
+            if raw_diff_refs is None:
+                msg = (
+                    f"diff_refs is null for MR !{mr_iid} in project {project_id} "
+                    f"after retries — GitLab may still be computing the diff"
+                )
+                raise RuntimeError(msg)
+            diff_refs = MRDiffRef.model_validate(raw_diff_refs)
 
             raw_changes = changes_data.get("changes", [])
             assert isinstance(raw_changes, list)
@@ -304,3 +327,28 @@ class GitLabClient:
             )
 
         return await asyncio.to_thread(_fetch)
+
+    async def resolve_discussion(self, project_id: int, mr_iid: int, discussion_id: str) -> None:
+        """Resolve a discussion thread via the GitLab API."""
+
+        def _resolve() -> None:
+            project = self._gl.projects.get(project_id)
+            mr = project.mergerequests.get(mr_iid)
+            disc = mr.discussions.get(discussion_id)
+            disc.resolved = True
+            disc.save()
+
+        await asyncio.to_thread(_resolve)
+
+    async def reply_to_discussion(
+        self, project_id: int, mr_iid: int, discussion_id: str, body: str
+    ) -> None:
+        """Post a reply to an existing discussion thread."""
+
+        def _reply() -> None:
+            project = self._gl.projects.get(project_id)
+            mr = project.mergerequests.get(mr_iid)
+            disc = mr.discussions.get(discussion_id)
+            disc.notes.create({"body": body})
+
+        await asyncio.to_thread(_reply)

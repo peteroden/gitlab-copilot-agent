@@ -169,6 +169,12 @@ variable "jira_in_review_status" {
   default     = "In Review"
 }
 
+variable "resolution_behavior" {
+  description = "Default behavior when agent feedback is addressed: auto-resolve, suggest, or off"
+  type        = string
+  default     = "suggest"
+}
+
 # --- Key Vault Bootstrap ---
 
 variable "kv_bootstrap" {

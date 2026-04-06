@@ -321,3 +321,56 @@ def test_format_prior_feedback_skips_null_position() -> None:
     history = _make_history(discussions=[disc])
 
     assert _format_prior_feedback(history) == ""
+
+
+# -- Discussion ID and resolution eval instruction tests --
+
+
+def test_prior_feedback_includes_discussion_id() -> None:
+    """Prior feedback lines contain [discussion: ...] tag."""
+    note = _make_agent_note(body="**[WARNING]** Consider error handling")
+    disc = _make_discussion(discussion_id="disc-tag-test", notes=[note])
+    history = _make_history(discussions=[disc])
+
+    result = _format_prior_feedback(history)
+
+    assert "[discussion: disc-tag-test]" in result
+    assert "Consider error handling" in result
+
+
+def test_resolution_eval_instructions_present_when_prior_feedback() -> None:
+    """Resolution evaluation instructions appended when prior feedback exists."""
+    note = _make_agent_note(body="**[WARNING]** Consider error handling")
+    disc = _make_discussion(notes=[note])
+    history = _make_history(discussions=[disc])
+
+    prompt = build_review_prompt(
+        _make_request(), diff_text="some diff", discussion_history=history
+    )
+
+    assert "## Resolution Evaluation" in prompt
+    assert "resolved|not_addressed|partial" in prompt
+    assert "discussion_id" in prompt
+
+
+def test_no_resolution_eval_instructions_without_prior_feedback() -> None:
+    """No resolution evaluation instructions when no prior feedback exists."""
+    # No discussion history at all
+    prompt = build_review_prompt(_make_request(), diff_text="some diff")
+    assert "Resolution Evaluation" not in prompt
+
+    # Empty discussions
+    history = _make_history(discussions=[])
+    prompt = build_review_prompt(
+        _make_request(), diff_text="some diff", discussion_history=history
+    )
+    assert "Resolution Evaluation" not in prompt
+
+    # All resolved discussions
+    note = _make_agent_note()
+    disc = _make_discussion(notes=[note], is_resolved=True)
+    history = _make_history(discussions=[disc])
+    prompt = build_review_prompt(
+        _make_request(), diff_text="some diff", discussion_history=history
+    )
+    assert "Resolution Evaluation" not in prompt

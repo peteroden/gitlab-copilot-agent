@@ -285,6 +285,31 @@ async def test_discussion_threads_flow_through_pipeline(
 
 
 @patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
+@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+async def test_resolution_behavior_flows_to_post_review(
+    mock_gl_class: MagicMock,
+    mock_client_class: MagicMock,
+    mock_run_review: AsyncMock,
+    mock_post_review: AsyncMock,
+) -> None:
+    """resolution_behavior parameter flows from handle_review to post_review."""
+    _setup_mocks(mock_client_class, mock_run_review)
+
+    await handle_review(
+        make_settings(),
+        make_webhook_payload(),
+        AsyncMock(),
+        resolution_behavior="auto-resolve",
+    )
+
+    mock_post_review.assert_awaited_once()
+    post_kwargs = mock_post_review.call_args[1]
+    assert post_kwargs["resolution_behavior"] == "auto-resolve"
+
+
+@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
 @patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
 async def test_prior_feedback_rendered_in_prompt(

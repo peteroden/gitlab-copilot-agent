@@ -389,13 +389,27 @@ See [configuration-reference.md](configuration-reference.md) for all fields.
 
 ---
 
-### `ParsedReview`
-**Purpose**: Structured review output with comments and a summary.
+### `Resolution`
+**Purpose**: A resolution determination for a prior feedback thread.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `comments` | `list[ReviewComment]` | List of review comments |
-| `summary` | `str` | Summary paragraph of the review |
+**Config**: `frozen=True` (immutable)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `discussion_id` | `str` | — | GitLab discussion ID of the prior feedback |
+| `status` | `str` | — | Resolution status: `resolved`, `not_addressed`, or `partial` |
+| `message` | `str` | — | Acknowledgment or explanation message |
+
+---
+
+### `ParsedReview`
+**Purpose**: Structured review output with comments, resolutions, and a summary.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `comments` | `list[ReviewComment]` | — | List of review comments |
+| `summary` | `str` | — | Summary paragraph of the review |
+| `resolutions` | `list[Resolution]` | `[]` | Resolution determinations for prior feedback threads |
 
 ---
 
@@ -617,8 +631,9 @@ graph TB
 |-------|------|---------|-------------|
 | `reply` | `str` | — | Reply text to post in the discussion thread |
 | `has_code_changes` | `bool` | `False` | True if the LLM output contained a `files_changed` JSON block |
+| `resolution` | `Resolution \| None` | `None` | Resolution determination for the triggering thread (from `comment_parser.Resolution`) |
 
-**Parsing**: If the LLM output ends with a fenced JSON block containing `files_changed` (same format as the coding prompt), the reply is the text before the block and `has_code_changes` is True. Otherwise the entire output is the reply. No structured intent classification — the handler uses `has_code_changes` to decide whether to commit/push.
+**Parsing**: If the LLM output ends with a fenced JSON block containing `files_changed` (same format as the coding prompt), the reply is the text before the block and `has_code_changes` is True. If the block contains a `resolution` key, it is parsed as a `Resolution` object. Otherwise the entire output is the reply. No structured intent classification — the handler uses `has_code_changes` to decide whether to commit/push.
 
 ---
 

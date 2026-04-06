@@ -293,6 +293,11 @@ resource "azurerm_container_app" "controller" {
         }
       }
 
+      env {
+        name  = "RESOLUTION_BEHAVIOR"
+        value = var.resolution_behavior
+      }
+
       # BYOK provider config (only set when copilot_auth='byok')
       dynamic "env" {
         for_each = var.copilot_auth == "byok" ? [1] : []

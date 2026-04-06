@@ -89,6 +89,7 @@ make k3d-deploy                 # deploy via Helm
 | `GITLAB_POLL_INTERVAL` | `30` | Polling interval in seconds |
 | `GITLAB_POLL_LOOKBACK` | `60` | Minutes to look back on startup for recent MRs |
 | `GITLAB_REVIEW_ON_PUSH` | `true` | Re-review MRs on each new commit. Set `false` to review once per MR |
+| `RESOLUTION_BEHAVIOR` | `suggest` | How to handle addressed feedback: `auto-resolve`, `suggest`, or `off` |
 | `GITLAB_PROJECTS` | `None` | Comma-separated project paths/IDs (required when polling) |
 
 ### Task Execution

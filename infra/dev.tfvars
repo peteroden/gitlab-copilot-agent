@@ -9,6 +9,7 @@ jira_email            = "__JIRA_EMAIL__"
 jira_project_map      = "{\"mappings\":{\"DEV\":{\"repo\":\"peteroden/gitlab-copilot-dev\",\"target_branch\":\"main\",\"credential_ref\":\"default\"},\"E2EACA\":{\"repo\":\"peteroden/e2e-aca-test\",\"target_branch\":\"main\",\"credential_ref\":\"e2e_aca_test\"}}}"
 jira_trigger_status   = "Selected for Development"
 jira_in_review_status = "Done"
+resolution_behavior   = "suggest"
 kv_bootstrap          = true
 # kv_bootstrap_secrets: injected via TF_VAR_kv_bootstrap_secrets in deploy.yml.
 # See docs/wiki/configuration-reference.md "Adding a per-project GitLab token".

@@ -315,6 +315,17 @@ Only used when `TASK_EXECUTOR=container_apps`.
 - **Default**: `True`
 - **Description**: When `true` (default), the agent re-reviews an MR each time a new commit is pushed. When `false`, each MR is reviewed only once regardless of subsequent commits. Useful for reducing noise when developers iterate frequently on an MR.
 
+### `RESOLUTION_BEHAVIOR`
+- **Type**: `str`
+- **Required**: ❌ No
+- **Default**: `"suggest"`
+- **Description**: Controls how the agent handles its prior feedback that has been addressed by new commits or developer replies. Three modes:
+  - `auto-resolve`: Resolves the thread via GitLab API with an acknowledgment reply (✅)
+  - `suggest`: Posts an acknowledgment reply but leaves the thread open for manual review (default)
+  - `off`: Takes no action on addressed feedback
+- **Per-project override**: Yes, via `resolution_behavior` in mapping YAML bindings
+- **Note**: Partially addressed feedback is never auto-resolved regardless of this setting
+
 ---
 
 ## Jira Integration
@@ -445,6 +456,26 @@ The global env vars `JIRA_TRIGGER_STATUS`, `JIRA_IN_PROGRESS_STATUS`, and
 `JIRA_IN_REVIEW_STATUS` act as a fallback when no YAML mapping is used. When a
 YAML mapping is present the per-binding (or per-defaults) values always take
 precedence.
+
+### Per-Project Resolution Behavior
+
+The `resolution_behavior` can be overridden per binding in the YAML mapping file:
+
+```yaml
+defaults:
+  resolution_behavior: suggest  # default for all projects
+
+bindings:
+  - jira_project: PROJ
+    repo: group/service-a
+    resolution_behavior: auto-resolve  # this team wants auto-resolution
+  - jira_project: OPS
+    repo: group/platform-tools
+    resolution_behavior: "off"  # this team manages threads manually
+```
+
+When a YAML mapping is present, the per-binding value takes precedence over the
+`RESOLUTION_BEHAVIOR` env var.
 
 ### Rendered JSON (env var value)
 
@@ -612,6 +643,8 @@ JIRA_IN_REVIEW_STATUS="In Review"
 JIRA_POLL_INTERVAL=30
 JIRA_PROJECT_MAP='{"mappings":{"PROJ":{"repo":"group/project","target_branch":"main","credential_ref":"default"}}}'
 
+RESOLUTION_BEHAVIOR=suggest
+
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 SERVICE_VERSION=1.0.0
 DEPLOYMENT_ENV=production
@@ -686,6 +719,7 @@ Helm `values.yaml` maps to env vars via `configmap.yaml` and `secret.yaml`:
 | `jira.inProgressStatus` | `JIRA_IN_PROGRESS_STATUS` | ❌ |
 | `jira.inReviewStatus` | `JIRA_IN_REVIEW_STATUS` | ❌ |
 | `jira.pollInterval` | `JIRA_POLL_INTERVAL` | ❌ |
+| `controller.resolutionBehavior` | `RESOLUTION_BEHAVIOR` | ❌ |
 | `extraEnv` | (arbitrary key-value pairs) | ❌ |
 | `hostAliases` | `K8S_JOB_HOST_ALIASES` (JSON for Job pods) | ❌ |
 | `hostAliases` | Pod `/etc/hosts` entries (controller pod) | ❌ |

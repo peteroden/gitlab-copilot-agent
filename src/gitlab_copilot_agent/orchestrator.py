@@ -26,6 +26,7 @@ from gitlab_copilot_agent.telemetry import get_tracer
 if TYPE_CHECKING:
     from gitlab_copilot_agent.config import Settings
     from gitlab_copilot_agent.credential_registry import CredentialRegistry
+    from gitlab_copilot_agent.mapping_models import ResolutionBehavior
     from gitlab_copilot_agent.models import MergeRequestWebhookPayload
     from gitlab_copilot_agent.task_executor import TaskExecutor
 
@@ -39,6 +40,8 @@ async def handle_review(
     executor: TaskExecutor,
     project_token: str | None = None,
     credential_registry: CredentialRegistry | None = None,
+    resolution_behavior: ResolutionBehavior = "suggest",
+    credential_ref: str = "default",
 ) -> None:
     """Full review pipeline: clone → review → parse → post comments."""
     mr = payload.object_attributes
@@ -74,7 +77,7 @@ async def handle_review(
                 try:
                     discussions = await gl_client.list_mr_discussions(project.id, mr.iid)
                     agent_identity = await credential_registry.resolve_identity(
-                        "default", settings.gitlab_url
+                        credential_ref, settings.gitlab_url
                     )
                     discussion_history = DiscussionHistory(
                         discussions=discussions, agent=agent_identity
@@ -109,6 +112,7 @@ async def handle_review(
                 review_req,
                 diff_text=diff_text,
                 discussion_history=discussion_history,
+                head_sha=mr.last_commit.id,
             )
             parsed = parse_review(raw_result.summary)
 
@@ -119,8 +123,28 @@ async def handle_review(
 
             gl = gitlab.Gitlab(settings.gitlab_url, private_token=token)
 
+            # Build allowlist of discussion IDs from agent's prior unresolved feedback.
+            # Fail closed: empty set when history unavailable (no resolutions attempted).
+            allowed_ids: set[str] = set()
+            if discussion_history:
+                for disc in discussion_history.discussions:
+                    if disc.is_resolved or not disc.is_inline:
+                        continue
+                    if not disc.notes:
+                        continue
+                    if disc.notes[0].author_id == discussion_history.agent.user_id:
+                        allowed_ids.add(disc.discussion_id)
+            allowed_discussion_ids = frozenset(allowed_ids)
+
             await post_review(
-                gl, project.id, mr.iid, mr_details.diff_refs, parsed, mr_details.changes
+                gl,
+                project.id,
+                mr.iid,
+                mr_details.diff_refs,
+                parsed,
+                mr_details.changes,
+                resolution_behavior=resolution_behavior,
+                allowed_discussion_ids=allowed_discussion_ids,
             )
             bound_log.info("comments_posted")
             outcome = "success"

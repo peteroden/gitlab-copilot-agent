@@ -24,6 +24,7 @@ GITLAB_TOKEN = "test-token"
 WEBHOOK_SECRET = "test-secret"
 GITHUB_TOKEN = "gho_test_token"
 HEADERS = {"X-Gitlab-Token": WEBHOOK_SECRET}
+RESOLUTION_BEHAVIOR = "suggest"
 
 # Jira constants
 JIRA_URL = "https://jira.example.com"
@@ -83,8 +84,8 @@ MR_PAYLOAD: dict[str, Any] = {
 
 FAKE_REVIEW_OUTPUT = (
     "```json\n"
-    '[{"file": "src/main.py", "line": 10, "severity": "warning", '
-    '"comment": "Consider error handling here"}]\n'
+    '{"comments": [{"file": "src/main.py", "line": 10, "severity": "warning", '
+    '"comment": "Consider error handling here"}], "resolutions": []}\n'
     "```\n"
     "Overall the changes look reasonable."
 )

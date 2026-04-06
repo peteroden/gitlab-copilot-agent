@@ -68,6 +68,14 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
     credential_registry: CredentialRegistry | None = getattr(
         request.app.state, "credential_registry", None
     )
+    resolution_behavior = settings.resolution_behavior
+    credential_ref = "default"
+    if registry is not None:
+        resolved = registry.get_by_project_id(project_id)
+        if resolved is not None:
+            resolution_behavior = resolved.resolution_behavior
+            credential_ref = resolved.credential_ref
+
     bound = log.bind(project_id=project_id, mr_iid=mr.iid, head_sha=head_sha)
     bound.info("background_review_starting")
     try:
@@ -77,6 +85,8 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
             executor,
             project_token=project_token,
             credential_registry=credential_registry,
+            resolution_behavior=resolution_behavior,
+            credential_ref=credential_ref,
         )
         review_tracker.mark(project_id, mr.iid, head_sha)
         # Also mark in shared dedup store so the poller won't re-review
@@ -143,6 +153,14 @@ async def _process_discussion(
     repo_locks = request.app.state.repo_locks
     registry: ProjectRegistry | None = getattr(request.app.state, "project_registry", None)
     project_token = _resolve_project_token(payload.project.id, registry, settings.gitlab_token)
+
+    # Resolve resolution behavior from project registry or global settings
+    resolution_behavior = settings.resolution_behavior
+    if registry is not None:
+        resolved_project = registry.get_by_project_id(payload.project.id)
+        if resolved_project is not None:
+            resolution_behavior = resolved_project.resolution_behavior
+
     bound = log.bind(
         project_id=payload.project.id,
         mr_iid=payload.merge_request.iid if payload.merge_request else None,
@@ -157,6 +175,7 @@ async def _process_discussion(
             agent_identity,
             project_token=project_token,
             repo_locks=repo_locks,
+            resolution_behavior=resolution_behavior,
         )
         bound.info("background_discussion_completed")
     except Exception:

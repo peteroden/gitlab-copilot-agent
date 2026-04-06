@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from gitlab_copilot_agent.comment_parser import Resolution
 from gitlab_copilot_agent.discussion_engine import DiscussionResponse
 from gitlab_copilot_agent.discussion_models import (
     AgentIdentity,
@@ -100,12 +101,13 @@ def _make_discussion_note(
 def _make_discussion(
     discussion_id: str = DISCUSSION_ID,
     notes: list[DiscussionNote] | None = None,
+    is_inline: bool = False,
 ) -> Discussion:
     return Discussion(
         discussion_id=discussion_id,
         notes=notes or [_make_discussion_note()],
         is_resolved=False,
-        is_inline=False,
+        is_inline=is_inline,
     )
 
 
@@ -499,3 +501,267 @@ async def test_deleted_branch_replies_with_warning(
     reply = disc_obj.notes.create.call_args[0][0]["body"]
     assert "deleted" in reply or "inaccessible" in reply
     assert SOURCE_BRANCH in reply
+
+
+# -- Resolution handling tests --
+
+RESOLUTION_DISCUSSION_ID = DISCUSSION_ID
+RESOLUTION_MESSAGE = "Fix confirmed."
+
+
+def _make_resolution(
+    discussion_id: str = RESOLUTION_DISCUSSION_ID,
+    status: str = "resolved",
+    message: str = RESOLUTION_MESSAGE,
+) -> Resolution:
+    return Resolution(discussion_id=discussion_id, status=status, message=message)
+
+
+@patch(f"{_MOD}.gitlab.Gitlab")
+@patch(f"{_MOD}.parse_discussion_response")
+@patch(f"{_MOD}.build_discussion_prompt")
+@patch(f"{_MOD}.run_discussion")
+@patch(f"{_MOD}.GitLabClient")
+async def test_discussion_interaction_auto_resolve(
+    mock_client_cls: MagicMock,
+    mock_run: AsyncMock,
+    mock_build: MagicMock,
+    mock_parse: MagicMock,
+    mock_gl_cls: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """resolution_behavior='auto-resolve' + resolved → thread resolved via API."""
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
+
+    gl_client = AsyncMock()
+    mock_client_cls.return_value = gl_client
+    gl_client.clone_repo.return_value = tmp_path
+    gl_client.get_mr_details.return_value = MagicMock()
+    # Triggering discussion must be agent-authored + inline for auto-resolve
+    gl_client.list_mr_discussions.return_value = [
+        _make_discussion(
+            notes=[_make_discussion_note(author_id=AGENT_USER_ID)],
+            is_inline=True,
+        )
+    ]
+
+    mock_run.return_value = ReviewResult(summary=REPLY_TEXT)
+    mock_build.return_value = "prompt"
+    mock_parse.return_value = DiscussionResponse(
+        reply=REPLY_TEXT,
+        resolution=_make_resolution(status="resolved"),
+    )
+
+    disc_obj = _gl_thread_mock()
+    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
+
+    executor = AsyncMock()
+    await handle_discussion_interaction(
+        make_settings(),
+        _make_payload(),
+        executor,
+        _make_agent(),
+        resolution_behavior="auto-resolve",
+    )
+
+    # Reply posted
+    disc_obj.notes.create.assert_called_once()
+    # Thread resolved
+    assert disc_obj.resolved is True
+    disc_obj.save.assert_called_once()
+
+
+@patch(f"{_MOD}.gitlab.Gitlab")
+@patch(f"{_MOD}.parse_discussion_response")
+@patch(f"{_MOD}.build_discussion_prompt")
+@patch(f"{_MOD}.run_discussion")
+@patch(f"{_MOD}.GitLabClient")
+async def test_discussion_interaction_suggest_no_resolve(
+    mock_client_cls: MagicMock,
+    mock_run: AsyncMock,
+    mock_build: MagicMock,
+    mock_parse: MagicMock,
+    mock_gl_cls: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """resolution_behavior='suggest' + resolved → reply posted, thread NOT resolved."""
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
+
+    gl_client = AsyncMock()
+    mock_client_cls.return_value = gl_client
+    gl_client.clone_repo.return_value = tmp_path
+    gl_client.get_mr_details.return_value = MagicMock()
+    gl_client.list_mr_discussions.return_value = [_make_discussion()]
+
+    mock_run.return_value = ReviewResult(summary=REPLY_TEXT)
+    mock_build.return_value = "prompt"
+    mock_parse.return_value = DiscussionResponse(
+        reply=REPLY_TEXT,
+        resolution=_make_resolution(status="resolved"),
+    )
+
+    disc_obj = _gl_thread_mock()
+    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
+
+    executor = AsyncMock()
+    await handle_discussion_interaction(
+        make_settings(),
+        _make_payload(),
+        executor,
+        _make_agent(),
+        resolution_behavior="suggest",
+    )
+
+    # Reply posted
+    disc_obj.notes.create.assert_called_once()
+    # Thread NOT resolved (suggest mode only posts reply)
+    disc_obj.save.assert_not_called()
+
+
+@patch(f"{_MOD}.gitlab.Gitlab")
+@patch(f"{_MOD}.parse_discussion_response")
+@patch(f"{_MOD}.build_discussion_prompt")
+@patch(f"{_MOD}.run_discussion")
+@patch(f"{_MOD}.GitLabClient")
+async def test_discussion_interaction_off_no_action(
+    mock_client_cls: MagicMock,
+    mock_run: AsyncMock,
+    mock_build: MagicMock,
+    mock_parse: MagicMock,
+    mock_gl_cls: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """resolution_behavior='off' → no resolution action at all."""
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
+
+    gl_client = AsyncMock()
+    mock_client_cls.return_value = gl_client
+    gl_client.clone_repo.return_value = tmp_path
+    gl_client.get_mr_details.return_value = MagicMock()
+    gl_client.list_mr_discussions.return_value = [_make_discussion()]
+
+    mock_run.return_value = ReviewResult(summary=REPLY_TEXT)
+    mock_build.return_value = "prompt"
+    mock_parse.return_value = DiscussionResponse(
+        reply=REPLY_TEXT,
+        resolution=_make_resolution(status="resolved"),
+    )
+
+    disc_obj = _gl_thread_mock()
+    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
+
+    executor = AsyncMock()
+    await handle_discussion_interaction(
+        make_settings(),
+        _make_payload(),
+        executor,
+        _make_agent(),
+        resolution_behavior="off",
+    )
+
+    # Reply still posted
+    disc_obj.notes.create.assert_called_once()
+    # No resolution action
+    disc_obj.save.assert_not_called()
+
+
+@patch(f"{_MOD}.gitlab.Gitlab")
+@patch(f"{_MOD}.parse_discussion_response")
+@patch(f"{_MOD}.build_discussion_prompt")
+@patch(f"{_MOD}.run_discussion")
+@patch(f"{_MOD}.GitLabClient")
+async def test_discussion_interaction_partial_never_resolved(
+    mock_client_cls: MagicMock,
+    mock_run: AsyncMock,
+    mock_build: MagicMock,
+    mock_parse: MagicMock,
+    mock_gl_cls: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Partial resolution → never auto-resolved regardless of behavior."""
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
+
+    gl_client = AsyncMock()
+    mock_client_cls.return_value = gl_client
+    gl_client.clone_repo.return_value = tmp_path
+    gl_client.get_mr_details.return_value = MagicMock()
+    gl_client.list_mr_discussions.return_value = [_make_discussion()]
+
+    mock_run.return_value = ReviewResult(summary=REPLY_TEXT)
+    mock_build.return_value = "prompt"
+    mock_parse.return_value = DiscussionResponse(
+        reply=REPLY_TEXT,
+        resolution=_make_resolution(status="partial"),
+    )
+
+    disc_obj = _gl_thread_mock()
+    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
+
+    executor = AsyncMock()
+    await handle_discussion_interaction(
+        make_settings(),
+        _make_payload(),
+        executor,
+        _make_agent(),
+        resolution_behavior="auto-resolve",
+    )
+
+    # Reply posted
+    disc_obj.notes.create.assert_called_once()
+    # Partial → never resolved
+    disc_obj.save.assert_not_called()
+
+
+@patch(f"{_MOD}.gitlab.Gitlab")
+@patch(f"{_MOD}.parse_discussion_response")
+@patch(f"{_MOD}.build_discussion_prompt")
+@patch(f"{_MOD}.run_discussion")
+@patch(f"{_MOD}.GitLabClient")
+async def test_discussion_interaction_resolution_error_logged(
+    mock_client_cls: MagicMock,
+    mock_run: AsyncMock,
+    mock_build: MagicMock,
+    mock_parse: MagicMock,
+    mock_gl_cls: MagicMock,
+    tmp_path: Path,
+) -> None:
+    """Exception during resolution → logged, not raised."""
+    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
+
+    gl_client = AsyncMock()
+    mock_client_cls.return_value = gl_client
+    gl_client.clone_repo.return_value = tmp_path
+    gl_client.get_mr_details.return_value = MagicMock()
+    gl_client.list_mr_discussions.return_value = [
+        _make_discussion(
+            notes=[_make_discussion_note(author_id=AGENT_USER_ID)],
+            is_inline=True,
+        )
+    ]
+
+    mock_run.return_value = ReviewResult(summary=REPLY_TEXT)
+    mock_build.return_value = "prompt"
+    mock_parse.return_value = DiscussionResponse(
+        reply=REPLY_TEXT,
+        resolution=_make_resolution(status="resolved"),
+    )
+
+    disc_obj = _gl_thread_mock()
+    # Make save() raise to simulate resolution failure
+    disc_obj.save.side_effect = RuntimeError("GitLab API error")
+    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
+
+    executor = AsyncMock()
+    # Should NOT raise — resolution errors are swallowed and logged
+    await handle_discussion_interaction(
+        make_settings(),
+        _make_payload(),
+        executor,
+        _make_agent(),
+        resolution_behavior="auto-resolve",
+    )
+
+    # Reply still posted successfully
+    disc_obj.notes.create.assert_called_once()
+    # save() was attempted
+    disc_obj.save.assert_called_once()

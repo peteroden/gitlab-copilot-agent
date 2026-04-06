@@ -350,3 +350,34 @@ async def test_get_current_user(mock_gl: MagicMock) -> None:
     assert isinstance(identity, AgentIdentity)
     assert identity.user_id == BOT_USER_ID
     assert identity.username == BOT_USERNAME
+
+
+# -- resolve_discussion / reply_to_discussion tests --
+
+RESOLVE_REPLY_BODY = "✅ Feedback addressed — marking resolved."
+
+
+async def test_resolve_discussion(mock_gl: MagicMock) -> None:
+    """Verify resolve_discussion sets resolved=True and calls save()."""
+    disc_mock = MagicMock()
+    mr_mock = mock_gl.projects.get.return_value.mergerequests.get.return_value
+    mr_mock.discussions.get.return_value = disc_mock
+
+    client = GitLabClient(GITLAB_URL, GITLAB_TOKEN)
+    await client.resolve_discussion(PROJECT_ID, MR_IID, DISCUSSION_ID)
+
+    mock_gl.projects.get.assert_called_with(PROJECT_ID)
+    assert disc_mock.resolved is True
+    disc_mock.save.assert_called_once()
+
+
+async def test_reply_to_discussion(mock_gl: MagicMock) -> None:
+    """Verify reply_to_discussion posts a note with the given body."""
+    disc_mock = MagicMock()
+    mr_mock = mock_gl.projects.get.return_value.mergerequests.get.return_value
+    mr_mock.discussions.get.return_value = disc_mock
+
+    client = GitLabClient(GITLAB_URL, GITLAB_TOKEN)
+    await client.reply_to_discussion(PROJECT_ID, MR_IID, DISCUSSION_ID, RESOLVE_REPLY_BODY)
+
+    disc_mock.notes.create.assert_called_once_with({"body": RESOLVE_REPLY_BODY})

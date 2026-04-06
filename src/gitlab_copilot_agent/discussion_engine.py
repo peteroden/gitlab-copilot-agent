@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from gitlab_copilot_agent.comment_parser import Resolution
 from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams, TaskResult
 
 if TYPE_CHECKING:
@@ -46,6 +47,9 @@ class DiscussionResponse(BaseModel):
     has_code_changes: bool = Field(
         default=False, description="True if the LLM output contained a files_changed JSON block"
     )
+    resolution: Resolution | None = Field(
+        default=None, description="Resolution determination for the triggering thread"
+    )
 
 
 def build_discussion_prompt(
@@ -66,7 +70,7 @@ def build_discussion_prompt(
     )
 
     # The triggering thread — this is the conversation the developer is in
-    prompt += "## Current Thread\n\n"
+    prompt += f"## Current Thread (discussion ID: {triggering_discussion.discussion_id})\n\n"
     for note in triggering_discussion.notes:
         role = (
             "Agent" if note.author_id == discussion_history.agent.user_id else note.author_username
@@ -101,14 +105,25 @@ def build_discussion_prompt(
     return prompt
 
 
+def _parse_resolution(data: dict[str, object]) -> Resolution | None:
+    """Extract a Resolution from a parsed JSON object, if present."""
+    raw_res = data.get("resolution")
+    if not isinstance(raw_res, dict):
+        return None
+    try:
+        return Resolution.model_validate(raw_res)
+    except (ValidationError, KeyError, ValueError):
+        return None
+
+
 def parse_discussion_response(raw: str) -> DiscussionResponse:
     """Parse the LLM's discussion response.
 
     If the output ends with a ``files_changed`` JSON block (same format as
     the coding prompt), the reply is the text before the block and
-    ``has_code_changes`` is True.  Otherwise the entire output is the reply.
+    ``has_code_changes`` is True.  If the JSON block contains a ``resolution``
+    key, it is parsed as a Resolution.  Otherwise the entire output is the reply.
     """
-    # Check for trailing JSON block with files_changed (coding prompt format)
     json_match = re.search(r"```json\s*\n(\{.*?\})\s*\n```\s*$", raw, re.DOTALL)
     if json_match:
         try:
@@ -117,7 +132,16 @@ def parse_discussion_response(raw: str) -> DiscussionResponse:
                 reply = raw[: json_match.start()].strip()
                 if not reply:
                     reply = data.get("summary", "Changes applied.")
-                return DiscussionResponse(reply=reply, has_code_changes=True)
+                resolution = _parse_resolution(data)
+                return DiscussionResponse(
+                    reply=reply, has_code_changes=True, resolution=resolution
+                )
+            if "resolution" in data:
+                reply = raw[: json_match.start()].strip()
+                if not reply:
+                    reply = "Acknowledged."
+                resolution = _parse_resolution(data)
+                return DiscussionResponse(reply=reply, resolution=resolution)
         except (json.JSONDecodeError, ValidationError):
             pass
 

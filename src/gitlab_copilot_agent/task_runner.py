@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -50,6 +51,40 @@ _RETRY_PROMPT = (
     '{"summary": "Brief description of changes", "files_changed": ["path/to/file.py"]}\n'
     "```"
 )
+
+_REVIEW_RETRY_PROMPT = (
+    "Your review output used a JSON array instead of a JSON object. "
+    "Reformat your ENTIRE review as a JSON object with 'comments' and "
+    "'resolutions' keys — do NOT use a bare array:\n\n"
+    "```json\n"
+    "{\n"
+    '  "comments": [{...}, ...],\n'
+    '  "resolutions": []\n'
+    "}\n"
+    "```\n\n"
+    "After the JSON object, add a brief summary paragraph."
+)
+
+
+def _review_response_validator(response: str) -> str | None:
+    """Return a follow-up prompt if the review response uses array instead of object format."""
+    if not response.strip():
+        return _REVIEW_RETRY_PROMPT
+
+    from gitlab_copilot_agent.comment_parser import parse_review
+
+    parsed = parse_review(response)
+    if parsed.comments:
+        return None
+    # Check if the LLM output a JSON array instead of an object
+    stripped = response.strip()
+    fence_match = re.search(r"```json\s*\n(\[.*?\])\s*\n```", stripped, re.DOTALL)
+    if fence_match:
+        return _REVIEW_RETRY_PROMPT
+    idx = stripped.find("[")
+    if idx != -1 and (stripped.find("{") == -1 or idx < stripped.find("{")):
+        return _REVIEW_RETRY_PROMPT
+    return None
 
 
 def _coding_response_validator(response: str) -> str | None:
@@ -316,7 +351,13 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
             prompt,
             user_prompt,
             task_type=task_type,
-            validate_response=_coding_response_validator if task_type == "coding" else None,
+            validate_response=(
+                _coding_response_validator
+                if task_type == "coding"
+                else _review_response_validator
+                if task_type == "review"
+                else None
+            ),
             plugins=plugins,
         )
         await bound_log.ainfo(
