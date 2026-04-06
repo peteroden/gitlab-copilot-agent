@@ -11,24 +11,15 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from gitlab_copilot_agent import metrics as app_metrics
 from gitlab_copilot_agent.gitlab_client import MRDetails
-from gitlab_copilot_agent.models import (
-    MergeRequestWebhookPayload,
-    MRLastCommit,
-    MRObjectAttributes,
-    WebhookProject,
-    WebhookUser,
-)
 from gitlab_copilot_agent.orchestrator import handle_review
 from gitlab_copilot_agent.task_executor import ReviewResult, TaskExecutionError
 from tests.conftest import (
     DIFF_REFS,
-    EXAMPLE_CLONE_URL,
     FAKE_REVIEW_OUTPUT,
     HEADERS,
-    MR_IID,
     MR_PAYLOAD,
-    PROJECT_ID,
     make_settings,
+    make_webhook_payload,
 )
 
 
@@ -115,28 +106,6 @@ def test_copilot_session_duration_records_task_type() -> None:
 # These patch the metric instruments at the call site to verify recording.
 
 
-def _make_payload() -> MergeRequestWebhookPayload:
-    return MergeRequestWebhookPayload(
-        object_kind="merge_request",
-        user=WebhookUser(id=1, username="jdoe"),
-        project=WebhookProject(
-            id=PROJECT_ID,
-            path_with_namespace="group/project",
-            git_http_url=EXAMPLE_CLONE_URL,
-        ),
-        object_attributes=MRObjectAttributes(
-            iid=MR_IID,
-            title="Add feature",
-            description="Implements X",
-            action="open",
-            source_branch="feature/x",
-            target_branch="main",
-            last_commit=MRLastCommit(id="abc123", message="feat: add X"),
-            url=f"{EXAMPLE_CLONE_URL.replace('.git', '')}/-/merge_requests/{MR_IID}",
-        ),
-    )
-
-
 @patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
@@ -163,7 +132,7 @@ async def test_review_pipeline_records_success_metrics(
         patch("gitlab_copilot_agent.orchestrator.reviews_total", mock_total),
         patch("gitlab_copilot_agent.orchestrator.reviews_duration", mock_duration),
     ):
-        await handle_review(make_settings(), _make_payload(), AsyncMock())
+        await handle_review(make_settings(), make_webhook_payload(), AsyncMock())
 
     mock_total.add.assert_called_once_with(1, {"outcome": "success"})
     mock_duration.record.assert_called_once()
@@ -193,7 +162,7 @@ async def test_review_pipeline_records_error_metrics(
         patch("gitlab_copilot_agent.orchestrator.reviews_duration", mock_duration),
         pytest.raises(RuntimeError),
     ):
-        await handle_review(make_settings(), _make_payload(), AsyncMock())
+        await handle_review(make_settings(), make_webhook_payload(), AsyncMock())
 
     mock_total.add.assert_called_once_with(1, {"outcome": "error"})
     mock_duration.record.assert_called_once()
@@ -219,7 +188,7 @@ async def test_review_task_execution_failure_posts_comment_without_raising(
     mock_run_review.side_effect = TaskExecutionError("Task failed: runner error")
 
     with pytest.raises(TaskExecutionError, match="runner error"):
-        await handle_review(make_settings(), _make_payload(), AsyncMock())
+        await handle_review(make_settings(), make_webhook_payload(), AsyncMock())
 
     mock_gl.post_mr_comment.assert_awaited_once()
     comment = mock_gl.post_mr_comment.call_args[0][2]

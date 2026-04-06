@@ -15,6 +15,7 @@ build/
 .env.k3d
 .env.aca
 demo.env
+.copilot-tracking/
 
 # Terraform (S2: state must never be committed)
 .terraform/

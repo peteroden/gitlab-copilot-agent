@@ -9,6 +9,12 @@ from httpx import ASGITransport, AsyncClient
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.gitlab_client import MRChange, MRDiffRef
 from gitlab_copilot_agent.main import app
+from gitlab_copilot_agent.models import (
+    MergeRequestWebhookPayload,
+    MRObjectAttributes,
+    WebhookProject,
+    WebhookUser,
+)
 from gitlab_copilot_agent.task_executor import LocalTaskExecutor
 
 # -- Constants --
@@ -119,6 +125,17 @@ def make_mr_changes(file_path: str = "src/main.py", diff: str = SAMPLE_DIFF) -> 
             renamed_file=False,
         )
     ]
+
+
+def make_webhook_payload(**attr_overrides: Any) -> MergeRequestWebhookPayload:
+    """Create a typed MR webhook payload. Override object_attributes fields."""
+    attrs = {**MR_PAYLOAD["object_attributes"], **attr_overrides}
+    return MergeRequestWebhookPayload(
+        object_kind="merge_request",
+        user=WebhookUser(**MR_PAYLOAD["user"]),
+        project=WebhookProject(**MR_PAYLOAD["project"]),
+        object_attributes=MRObjectAttributes(**attrs),
+    )
 
 
 # -- Fixtures --
