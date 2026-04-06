@@ -28,6 +28,11 @@ class CodingAgentOutput(BaseModel):
 _JSON_BLOCK_RE = re.compile(r"```json\s*\n(.*?)```", re.DOTALL)
 
 
+def strip_json_block(raw: str) -> str:
+    """Remove trailing JSON code-fence block from agent output."""
+    return _JSON_BLOCK_RE.sub("", raw).strip()
+
+
 def parse_agent_output(raw: str) -> CodingAgentOutput | None:
     """Extract and validate the JSON block from the agent's final message.
 

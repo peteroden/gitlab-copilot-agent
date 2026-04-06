@@ -265,7 +265,7 @@ class TestBuildCodingResult:
                 Path("/repo"), DELETED_FILE_OUTPUT, AsyncMock(), "abc123"
             )
         data = json.loads(result)
-        assert data["summary"] == "Removed old module"
+        assert data["summary"] == DELETED_FILE_OUTPUT
         # Both files staged regardless of whether they exist on disk
         assert git_mock.await_count == 2
         git_mock.assert_any_await(Path("/repo"), "add", "--", "src/old.py")

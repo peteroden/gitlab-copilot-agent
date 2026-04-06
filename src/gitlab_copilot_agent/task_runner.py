@@ -176,7 +176,6 @@ async def _build_coding_result(
 ) -> str:
     """Stage explicitly listed files, capture diff against pre-session HEAD."""
     agent_output = parse_agent_output(summary)
-    result_summary = agent_output.summary if agent_output else summary
     used_changed_paths_fallback = False
     if agent_output and agent_output.files_changed:
         for f in agent_output.files_changed:
@@ -197,7 +196,7 @@ async def _build_coding_result(
             return json.dumps(
                 {
                     "result_type": "coding",
-                    "summary": result_summary,
+                    "summary": summary,
                     "patch": "",
                     "base_sha": pre_session_sha,
                 }
@@ -240,7 +239,7 @@ async def _build_coding_result(
     return json.dumps(
         {
             "result_type": "coding",
-            "summary": result_summary,
+            "summary": summary,
             "patch": patch,
             "base_sha": pre_session_sha,
         }
