@@ -14,17 +14,20 @@ app = FastAPI()
 
 # Canned review matching comment_parser.py's expected format
 CANNED_REVIEW = json.dumps(
-    [
-        {
-            "file": "app.py",
-            "line": 1,
-            "severity": "info",
-            "comment": "E2E test review comment — import os is unused.",
-            "suggestion": None,
-            "suggestion_start_offset": 0,
-            "suggestion_end_offset": 0,
-        }
-    ]
+    {
+        "comments": [
+            {
+                "file": "app.py",
+                "line": 1,
+                "severity": "info",
+                "comment": "E2E test review comment — import os is unused.",
+                "suggestion": None,
+                "suggestion_start_offset": 0,
+                "suggestion_end_offset": 0,
+            }
+        ],
+        "resolutions": [],
+    }
 )
 
 CANNED_REVIEW_RESPONSE = f"""```json

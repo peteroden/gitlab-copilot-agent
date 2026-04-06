@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock
 
+from gitlab_copilot_agent.comment_parser import Resolution
 from gitlab_copilot_agent.discussion_engine import (
     DiscussionResponse,
     build_discussion_prompt,
@@ -169,6 +170,15 @@ class TestBuildDiscussionPrompt:
         prompt = build_discussion_prompt(_make_mr_details(), history, disc)
         assert prompt.endswith("Respond to the latest message in the Current Thread above.")
 
+    def test_build_discussion_prompt_includes_discussion_id(self) -> None:
+        """Prompt contains the triggering discussion ID for LLM reference."""
+        agent = _make_agent()
+        disc = _make_discussion(discussion_id="disc-xyz-999")
+        history = DiscussionHistory(discussions=[disc], agent=agent)
+        prompt = build_discussion_prompt(_make_mr_details(), history, disc)
+        assert "disc-xyz-999" in prompt
+        assert "discussion ID: disc-xyz-999" in prompt
+
 
 # -- Response parsing tests --
 
@@ -247,3 +257,96 @@ class TestRunDiscussion:
         assert task.user_prompt == user_prompt
         assert task.repo_url == EXAMPLE_CLONE_URL
         assert task.branch == SOURCE_BRANCH
+
+
+# -- Resolution parsing tests --
+
+RESOLUTION_DISCUSSION_ID = "disc-res-001"
+RESOLUTION_MESSAGE = "The input validation has been added."
+
+
+def _make_resolution(
+    discussion_id: str = RESOLUTION_DISCUSSION_ID,
+    status: str = "resolved",
+    message: str = RESOLUTION_MESSAGE,
+) -> Resolution:
+    return Resolution(discussion_id=discussion_id, status=status, message=message)
+
+
+class TestDiscussionResponseResolution:
+    def test_discussion_response_with_resolution(self) -> None:
+        """DiscussionResponse can be created with a Resolution field."""
+        res = _make_resolution()
+        resp = DiscussionResponse(reply="Got it.", resolution=res)
+        assert resp.resolution is not None
+        assert resp.resolution.discussion_id == RESOLUTION_DISCUSSION_ID
+        assert resp.resolution.status == "resolved"
+        assert resp.resolution.message == RESOLUTION_MESSAGE
+
+    def test_discussion_response_resolution_none_by_default(self) -> None:
+        """DiscussionResponse().resolution defaults to None."""
+        resp = DiscussionResponse(reply="Hello")
+        assert resp.resolution is None
+
+
+class TestParseDiscussionResponseResolution:
+    def test_parse_discussion_response_with_resolution_json(self) -> None:
+        """Raw output with resolution JSON → resolution parsed."""
+        raw = (
+            "I've verified the fix.\n\n"
+            "```json\n"
+            '{"resolution": {"discussion_id": "disc-res-001", '
+            '"status": "resolved", "message": "Fix confirmed."}}'
+            "\n```"
+        )
+        result = parse_discussion_response(raw)
+        assert result.has_code_changes is False
+        assert result.resolution is not None
+        assert result.resolution.discussion_id == RESOLUTION_DISCUSSION_ID
+        assert result.resolution.status == "resolved"
+        assert result.resolution.message == "Fix confirmed."
+        assert "verified the fix" in result.reply.lower()
+
+    def test_parse_discussion_response_without_resolution(self) -> None:
+        """Regular reply → resolution is None."""
+        raw = "This looks good to me."
+        result = parse_discussion_response(raw)
+        assert result.resolution is None
+        assert result.has_code_changes is False
+
+    def test_parse_discussion_response_with_files_and_resolution(self) -> None:
+        """JSON block with both files_changed and resolution → both extracted."""
+        raw = (
+            "Applied the fix.\n\n"
+            "```json\n"
+            '{"summary": "Added validation", "files_changed": ["src/app.py"], '
+            '"resolution": {"discussion_id": "disc-res-001", '
+            '"status": "resolved", "message": "Validation added."}}'
+            "\n```"
+        )
+        result = parse_discussion_response(raw)
+        assert result.has_code_changes is True
+        assert result.resolution is not None
+        assert result.resolution.status == "resolved"
+        assert "Applied the fix" in result.reply
+
+    def test_parse_resolution_only_json_no_text_before(self) -> None:
+        """Resolution-only JSON with no text before → reply defaults to 'Acknowledged.'."""
+        raw = (
+            "```json\n"
+            '{"resolution": {"discussion_id": "disc-res-001", '
+            '"status": "resolved", "message": "Done."}}'
+            "\n```"
+        )
+        result = parse_discussion_response(raw)
+        assert result.reply == "Acknowledged."
+        assert result.resolution is not None
+
+    def test_parse_resolution_invalid_resolution_ignored(self) -> None:
+        """Malformed resolution in JSON → resolution is None, reply extracted."""
+        raw = 'Checked.\n\n```json\n{"resolution": "not-a-dict"}\n```'
+        result = parse_discussion_response(raw)
+        # resolution key exists but value is not a dict → resolution is None
+        # but the JSON still had a "resolution" key, so reply is extracted
+        assert result.resolution is None
+        assert "Checked" in result.reply

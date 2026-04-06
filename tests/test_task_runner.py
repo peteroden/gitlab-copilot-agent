@@ -16,6 +16,7 @@ from gitlab_copilot_agent.task_runner import (
     _get_required_env,
     _list_changed_paths,
     _parse_task_payload,
+    _review_response_validator,
     _store_result,
     run_task,
 )
@@ -193,7 +194,39 @@ class TestCodingResponseValidator:
         assert result is not None
 
 
-class TestParseAgentOutput:
+class TestReviewResponseValidator:
+    def test_valid_object_format_returns_none(self) -> None:
+        raw = (
+            '```json\n{"comments": [{"file": "a.py", "line": 1, '
+            '"severity": "info", "comment": "ok"}], "resolutions": []}\n```\nSummary.'
+        )
+        assert _review_response_validator(raw) is None
+
+    def test_json_array_in_fence_returns_retry(self) -> None:
+        raw = (
+            '```json\n[{"file": "a.py", "line": 1, '
+            '"severity": "info", "comment": "ok"}]\n```\nSummary.'
+        )
+        result = _review_response_validator(raw)
+        assert result is not None
+        assert "JSON object" in result
+
+    def test_bare_json_array_returns_retry(self) -> None:
+        raw = '[{"file": "a.py", "line": 1, "severity": "info", "comment": "ok"}]\nSummary.'
+        result = _review_response_validator(raw)
+        assert result is not None
+
+    def test_empty_response_returns_retry(self) -> None:
+        result = _review_response_validator("")
+        assert result is not None
+
+    def test_whitespace_only_response_returns_retry(self) -> None:
+        result = _review_response_validator("   \n  ")
+        assert result is not None
+
+    def test_freetext_no_json_returns_none(self) -> None:
+        assert _review_response_validator("The code looks great, no issues.") is None
+
     def test_valid_block(self) -> None:
         out = parse_agent_output(VALID_AGENT_OUTPUT)
         assert out is not None

@@ -285,3 +285,25 @@ def test_no_deprecation_warning_without_agent_username() -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
         make_settings()  # should not raise
+
+
+# -- Resolution behavior config tests --
+
+
+def test_resolution_behavior_default() -> None:
+    """Settings with defaults has resolution_behavior='suggest'."""
+    settings = make_settings()
+    assert settings.resolution_behavior == "suggest"
+
+
+def test_resolution_behavior_valid_values() -> None:
+    """All valid resolution_behavior values are accepted."""
+    for value in ("auto-resolve", "suggest", "off"):
+        settings = make_settings(resolution_behavior=value)
+        assert settings.resolution_behavior == value
+
+
+def test_resolution_behavior_invalid() -> None:
+    """Settings with invalid resolution_behavior raises ValidationError."""
+    with pytest.raises(ValidationError, match="resolution_behavior"):
+        make_settings(resolution_behavior="invalid")

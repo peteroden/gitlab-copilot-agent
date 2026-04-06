@@ -2,8 +2,8 @@
 
 from unittest.mock import MagicMock
 
-from gitlab_copilot_agent.comment_parser import ParsedReview, ReviewComment
-from gitlab_copilot_agent.comment_poster import post_review
+from gitlab_copilot_agent.comment_parser import ParsedReview, Resolution, ReviewComment
+from gitlab_copilot_agent.comment_poster import _handle_resolutions, post_review
 from tests.conftest import DIFF_REFS, MR_IID, PROJECT_ID, make_mr_changes
 
 
@@ -213,3 +213,183 @@ async def test_file_not_in_changes_is_skipped() -> None:
     assert mr.discussions.create.call_count == 0
     # Only summary note (file not in diff is skipped, not posted as fallback)
     assert mr.notes.create.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Resolution handling tests
+# ---------------------------------------------------------------------------
+
+DISC_ID_ONE = "disc_res_001"
+DISC_ID_TWO = "disc_res_002"
+RESOLUTION_MSG_RESOLVED = "Fix verified — error handling added"
+RESOLUTION_MSG_PARTIAL = "Null check added but edge case remains"
+RESOLUTION_MSG_NOT_ADDRESSED = "Issue still present"
+
+
+def _make_resolution(
+    discussion_id: str = DISC_ID_ONE,
+    status: str = "resolved",
+    message: str = RESOLUTION_MSG_RESOLVED,
+) -> Resolution:
+    return Resolution(discussion_id=discussion_id, status=status, message=message)
+
+
+def test_handle_resolutions_off() -> None:
+    """resolution_behavior='off' → no actions taken."""
+    mr = MagicMock()
+    resolutions = [_make_resolution()]
+    result = _handle_resolutions(mr, resolutions, "off")
+    assert result == 0
+    mr.discussions.get.assert_not_called()
+
+
+def test_handle_resolutions_auto_resolve_resolved() -> None:
+    """auto-resolve + resolved → reply with ✅ + resolve thread."""
+    mr = MagicMock()
+    disc = mr.discussions.get.return_value
+    resolutions = [_make_resolution(status="resolved")]
+
+    result = _handle_resolutions(
+        mr,
+        resolutions,
+        "auto-resolve",
+        allowed_discussion_ids=frozenset({DISC_ID_ONE}),
+    )
+
+    assert result == 1
+    mr.discussions.get.assert_called_once_with(DISC_ID_ONE)
+    disc.notes.create.assert_called_once()
+    body = disc.notes.create.call_args[0][0]["body"]
+    assert "✅" in body
+    assert RESOLUTION_MSG_RESOLVED in body
+    assert disc.resolved is True
+    disc.save.assert_called_once()
+
+
+def test_handle_resolutions_auto_resolve_partial() -> None:
+    """auto-resolve + partial → reply with ⚠️, NO resolve."""
+    mr = MagicMock()
+    disc = mr.discussions.get.return_value
+    resolutions = [_make_resolution(status="partial", message=RESOLUTION_MSG_PARTIAL)]
+
+    result = _handle_resolutions(
+        mr,
+        resolutions,
+        "auto-resolve",
+        allowed_discussion_ids=frozenset({DISC_ID_ONE}),
+    )
+
+    assert result == 0
+    disc.notes.create.assert_called_once()
+    body = disc.notes.create.call_args[0][0]["body"]
+    assert "⚠️" in body
+    assert RESOLUTION_MSG_PARTIAL in body
+    disc.save.assert_not_called()
+
+
+def test_handle_resolutions_suggest_resolved() -> None:
+    """suggest + resolved → reply with ✅ only, no resolve."""
+    mr = MagicMock()
+    disc = mr.discussions.get.return_value
+    resolutions = [_make_resolution(status="resolved")]
+
+    result = _handle_resolutions(
+        mr,
+        resolutions,
+        "suggest",
+        allowed_discussion_ids=frozenset({DISC_ID_ONE}),
+    )
+
+    assert result == 0
+    disc.notes.create.assert_called_once()
+    body = disc.notes.create.call_args[0][0]["body"]
+    assert "✅" in body
+    disc.save.assert_not_called()
+
+
+def test_handle_resolutions_not_addressed_skipped() -> None:
+    """not_addressed → no action taken."""
+    mr = MagicMock()
+    resolutions = [_make_resolution(status="not_addressed", message=RESOLUTION_MSG_NOT_ADDRESSED)]
+
+    result = _handle_resolutions(
+        mr,
+        resolutions,
+        "auto-resolve",
+        allowed_discussion_ids=frozenset({DISC_ID_ONE}),
+    )
+
+    assert result == 0
+    mr.discussions.get.assert_not_called()
+
+
+def test_handle_resolutions_error_logged(caplog: object) -> None:
+    """Exception during resolve → logged, not raised."""
+    mr = MagicMock()
+    mr.discussions.get.side_effect = Exception("API error")
+    resolutions = [_make_resolution()]
+
+    result = _handle_resolutions(
+        mr,
+        resolutions,
+        "auto-resolve",
+        allowed_discussion_ids=frozenset({DISC_ID_ONE}),
+    )
+
+    assert result == 0
+
+
+async def test_post_review_with_resolution_behavior() -> None:
+    """resolution_behavior flows through post_review to _handle_resolutions."""
+    gl = MagicMock()
+    mr_mock = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+    disc_mock = mr_mock.discussions.get.return_value
+
+    resolutions = [_make_resolution()]
+    review = ParsedReview(
+        comments=[],
+        summary="Review complete.",
+        resolutions=resolutions,
+    )
+    await post_review(
+        gl,
+        PROJECT_ID,
+        MR_IID,
+        DIFF_REFS,
+        review,
+        make_mr_changes(),
+        resolution_behavior="auto-resolve",
+        allowed_discussion_ids=frozenset({DISC_ID_ONE}),
+    )
+
+    mr_mock.discussions.get.assert_called_once_with(DISC_ID_ONE)
+    disc_mock.notes.create.assert_called_once()
+    assert disc_mock.resolved is True
+    disc_mock.save.assert_called_once()
+    # Summary note still posted
+    assert mr_mock.notes.create.call_count == 1
+
+
+def test_handle_resolutions_rejects_unknown_discussion_id() -> None:
+    """Resolution with discussion_id not in allowlist is skipped with warning log."""
+    mr = MagicMock()
+    resolutions = [_make_resolution(discussion_id="disc_unknown")]
+    allowed = frozenset({DISC_ID_ONE, DISC_ID_TWO})
+
+    result = _handle_resolutions(mr, resolutions, "auto-resolve", allowed_discussion_ids=allowed)
+
+    assert result == 0
+    mr.discussions.get.assert_not_called()
+
+
+def test_handle_resolutions_empty_allowlist_blocks_all() -> None:
+    """When allowed_discussion_ids is empty, all resolutions are skipped (fail closed)."""
+    mr = MagicMock()
+    resolutions = [_make_resolution(status="resolved")]
+
+    result = _handle_resolutions(
+        mr, resolutions, "auto-resolve", allowed_discussion_ids=frozenset()
+    )
+
+    assert result == 0
+    mr.discussions.get.assert_not_called()

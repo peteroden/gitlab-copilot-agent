@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
 from gitlab_copilot_agent.gitlab_client import GitLabClient
-from gitlab_copilot_agent.mapping_models import RenderedMap
+from gitlab_copilot_agent.mapping_models import RenderedMap, ResolutionBehavior
 
 log = structlog.get_logger()
 
@@ -28,6 +28,9 @@ class ResolvedProject(BaseModel):
     trigger_status: str = Field(default="AI Ready", description="Jira trigger status")
     in_progress_status: str = Field(default="In Progress", description="Jira in-progress status")
     in_review_status: str = Field(default="In Review", description="Jira in-review status")
+    resolution_behavior: ResolutionBehavior = Field(
+        default="suggest", description="Resolution behavior for this project"
+    )
 
 
 class ProjectRegistry:
@@ -80,6 +83,7 @@ class ProjectRegistry:
                     trigger_status=binding.trigger_status,
                     in_progress_status=binding.in_progress_status,
                     in_review_status=binding.in_review_status,
+                    resolution_behavior=binding.resolution_behavior,
                 )
             )
         registry = cls(projects)

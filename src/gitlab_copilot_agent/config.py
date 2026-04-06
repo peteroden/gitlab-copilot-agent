@@ -6,6 +6,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
+from gitlab_copilot_agent.mapping_models import ResolutionBehavior
+
 
 class JiraSettings(BaseModel):
     """Jira configuration — all optional. Service runs review-only without these."""
@@ -195,6 +197,13 @@ class Settings(BaseSettings):
         default=True,
         description="Re-review MRs when new commits are pushed (dedup per commit). "
         "When false, each MR is reviewed only once (dedup per MR).",
+    )
+
+    # Resolution behavior
+    resolution_behavior: ResolutionBehavior = Field(
+        default="suggest",
+        description="Default behavior when agent feedback is addressed: "
+        "auto-resolve, suggest, or off",
     )
 
     # Jira (all optional — service runs review-only without these)

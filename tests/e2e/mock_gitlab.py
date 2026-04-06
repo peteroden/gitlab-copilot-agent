@@ -142,6 +142,16 @@ async def get_discussion(project_id: int, mr_iid: int, discussion_id: str) -> di
     return {"id": discussion_id, "notes": []}
 
 
+@app.put("/api/v4/projects/{project_id}/merge_requests/{mr_iid}/discussions/{discussion_id}")
+async def resolve_discussion(
+    project_id: int, mr_iid: int, discussion_id: str, request: Request
+) -> dict:
+    """Record a discussion resolution."""
+    body = await request.json()
+    discussions.append({"_type": "resolve", "discussion_id": discussion_id, **body})
+    return {"id": discussion_id, "resolved": body.get("resolved", True)}
+
+
 @app.post(
     "/api/v4/projects/{project_id}/merge_requests/{mr_iid}/discussions/{discussion_id}/notes"
 )

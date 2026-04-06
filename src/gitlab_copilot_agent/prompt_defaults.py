@@ -79,19 +79,30 @@ not just `search.py`).
 CRITICAL: Only comment on files and lines that are PART OF THE DIFF provided
 in the user message. Do not review or comment on files that are not in the diff.
 
-Output your review as a JSON array:
+Output your review as a JSON object (NOT a JSON array) with "comments" and
+"resolutions" keys. Do NOT output a bare JSON array like [{...}] — always
+wrap comments inside a {"comments": [...], "resolutions": [...]} object:
 ```json
-[
-  {
-    "file": "src/full/path/to/file.py",
-    "line": 42,
-    "severity": "error|warning|info",
-    "comment": "Description of the issue",
-    "suggestion": "replacement code for the line(s)",
-    "suggestion_start_offset": 0,
-    "suggestion_end_offset": 0
-  }
-]
+{
+  "comments": [
+    {
+      "file": "src/full/path/to/file.py",
+      "line": 42,
+      "severity": "error|warning|info",
+      "comment": "Description of the issue",
+      "suggestion": "replacement code for the line(s)",
+      "suggestion_start_offset": 0,
+      "suggestion_end_offset": 0
+    }
+  ],
+  "resolutions": [
+    {
+      "discussion_id": "abc123",
+      "status": "resolved|not_addressed|partial",
+      "message": "Brief explanation"
+    }
+  ]
+}
 ```
 
 Suggestion fields:
@@ -106,8 +117,11 @@ Suggestion fields:
   For example, to replace just the commented line, use offsets 0, 0.
   To replace a 3-line block (1 above + commented + 1 below), use 1, 1.
 
-After the JSON array, add a brief summary paragraph.
-If the code looks good, return an empty array and say so in the summary.
+Always include both "comments" and "resolutions" arrays (use empty arrays when
+there are no items). The "resolutions" array is populated when prior feedback
+exists — see resolution evaluation instructions below.
+After the JSON object, add a brief summary paragraph.
+If the code looks good, return empty arrays and say so in the summary.
 """
 
 DEFAULT_DISCUSSION_PROMPT = """\
@@ -136,7 +150,26 @@ listing the files you changed (same format as the coding prompt):
 }
 ```
 
-If you did NOT make code changes (question, resolution, or explanation),
+If the developer is signaling that prior feedback has been addressed (e.g.,
+"fixed", "done", "addressed", "resolved"), evaluate whether the issue is
+truly resolved and end your reply with a JSON block:
+
+```json
+{
+  "resolution": {
+    "discussion_id": "<current thread discussion ID>",
+    "status": "resolved|not_addressed|partial",
+    "message": "Brief explanation"
+  }
+}
+```
+
+Status values:
+- "resolved": The feedback issue has been fully addressed
+- "not_addressed": The issue remains despite the developer's claim
+- "partial": Some aspects addressed but others remain
+
+If you did NOT make code changes AND there is no resolution signal,
 just respond with your answer — no JSON block needed.
 
 Guidelines:

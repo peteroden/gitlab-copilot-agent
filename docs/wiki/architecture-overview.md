@@ -95,8 +95,8 @@ graph TB
 
 ### 2. Processing Layer
 - **`orchestrator.py`**: MR review orchestration (clone → review → parse → post)
-- **`discussion_orchestrator.py`**: Unified @mention/thread interaction handler (clone → fetch context → LLM → reply ± commit/push)
-- **`discussion_engine.py`**: Discussion prompt construction, structured response parsing (intent + reply + optional code changes)
+- **`discussion_orchestrator.py`**: Unified @mention/thread interaction handler (clone → fetch context → LLM → reply ± commit/push ± resolve feedback)
+- **`discussion_engine.py`**: Discussion prompt construction, structured response parsing (reply + optional code changes + optional resolution)
 - **`coding_orchestrator.py`**: Jira issue implementation (clone → code → apply result → branch → MR)
 - **`coding_workflow.py`**: Shared helper for applying coding results (diff passback from k8s pods)
 - **`review_engine.py`**: Review prompt construction and execution
@@ -110,13 +110,13 @@ graph TB
 - **`task_runner.py`**: K8s Job entrypoint (`python -m gitlab_copilot_agent.task_runner`)
 
 ### 4. External Service Clients
-- **`gitlab_client.py`**: GitLab REST API (MR details, comments, clone, create MR)
+- **`gitlab_client.py`**: GitLab REST API (MR details, comments, clone, create MR, resolve/reply to discussions)
 - **`jira_client.py`**: Jira REST API v3 (search, transitions, comments)
 
 ### 5. Shared Utilities
 - **`git_operations.py`**: Git CLI wrappers (clone, branch, commit, push)
-- **`comment_parser.py`**: Extract structured review from agent output
-- **`comment_poster.py`**: Post inline discussions to GitLab MR
+- **`comment_parser.py`**: Extract structured review (comments + resolutions) from agent output
+- **`comment_poster.py`**: Post inline discussions to GitLab MR, handle resolution actions for prior feedback
 - **`repo_config.py`**: Discover repo-level skills, agents, instructions
 
 ### 6. State & Concurrency

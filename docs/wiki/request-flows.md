@@ -38,7 +38,7 @@ sequenceDiagram
     
     Note over WH,POST: Background task starts
     
-    WH->>ORCH: handle_review(settings, payload, executor)
+    WH->>ORCH: handle_review(settings, payload, executor, resolution_behavior)
     ORCH->>GLCL: clone_repo(git_http_url, source_branch, token)
     GLCL->>GLCL: git_operations.git_clone()
     GLCL-->>ORCH: repo_path: Path
@@ -70,12 +70,12 @@ sequenceDiagram
     EXEC-->>ORCH: raw_review: TaskResult
     
     ORCH->>PARSE: parse_review(raw_review)
-    PARSE-->>ORCH: ParsedReview (comments, summary)
+    PARSE-->>ORCH: ParsedReview (comments, resolutions, summary)
     
     ORCH->>GLCL: get_mr_details(project_id, mr_iid)
     GLCL-->>ORCH: MRDetails (diff_refs, changes)
     
-    ORCH->>POST: post_review(gl, project_id, mr_iid, diff_refs, parsed, changes)
+    ORCH->>POST: post_review(gl, project_id, mr_iid, diff_refs, parsed, changes, resolution_behavior)
     POST->>POST: _parse_hunk_lines() for all changes
     loop For each comment
         POST->>POST: _is_valid_position()
@@ -83,6 +83,16 @@ sequenceDiagram
             POST->>GL: mr.discussions.create() (inline)
         else Invalid position
             POST->>GL: mr.notes.create() (fallback)
+        end
+    end
+    alt Has resolutions & behavior != "off"
+        loop For each resolution
+            alt auto-resolve & status=resolved
+                POST->>GL: disc.notes.create() (✅ ack)
+                POST->>GL: disc.resolved = True; disc.save()
+            else suggest & status in (resolved, partial)
+                POST->>GL: disc.notes.create() (✅/⚠️ ack)
+            end
         end
     end
     POST->>GL: mr.notes.create() (summary)
@@ -128,7 +138,7 @@ sequenceDiagram
 
     Note over WH,GIT: Background task starts
 
-    WH->>DH: handle_discussion_interaction(settings, payload, executor, agent_identity)
+    WH->>DH: handle_discussion_interaction(settings, payload, executor, agent_identity, resolution_behavior)
     alt repo_locks provided
         DH->>DH: async with repo_locks.acquire(git_http_url)
     end
@@ -149,9 +159,9 @@ sequenceDiagram
     EXEC-->>DE: result: TaskResult
     DE-->>DH: result: TaskResult
     DH->>DE: parse_discussion_response(result.summary)
-    DE-->>DH: DiscussionResponse (intent, reply, code_changes)
+    DE-->>DH: DiscussionResponse (reply, has_code_changes, resolution)
 
-    alt intent == "coding" or "mixed" with code_changes
+    alt has_code_changes
         DH->>DH: apply_coding_result(result, repo_path)
         DH->>GIT: git_commit(repo_path, message, author)
         alt has_changes
@@ -160,6 +170,11 @@ sequenceDiagram
     end
 
     DH->>GL: discussion.notes.create({"body": reply})
+    alt response.resolution & behavior != "off"
+        alt auto-resolve & status=resolved
+            DH->>GL: disc.resolved = True; disc.save()
+        end
+    end
     DH->>DH: shutil.rmtree(repo_path)
 ```
 

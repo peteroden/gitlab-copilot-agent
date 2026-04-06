@@ -67,6 +67,32 @@ jobs:
           echo "::error::Controller revision did not become healthy after 5 minutes"
           exit 1
 
+      - name: Verify deployed image versions
+        env:
+          EXPECTED_TAG: pr-${{ github.event.pull_request.number || github.run_number }}-${{ github.sha }}
+        run: |
+          echo "Expected image tag: ${EXPECTED_TAG}"
+
+          controller_image=$(az containerapp show \
+            -g rg-copilot-dev -n ca-controller \
+            --query 'properties.template.containers[0].image' -o tsv)
+          echo "Controller image: ${controller_image}"
+          if [[ "$controller_image" != *"${EXPECTED_TAG}"* ]]; then
+            echo "::error::Controller is running wrong image. Expected tag '${EXPECTED_TAG}' but got '${controller_image}'"
+            exit 1
+          fi
+          echo "✓ Controller image verified"
+
+          job_image=$(az containerapp job show \
+            -g rg-copilot-dev -n job-task-runner \
+            --query 'properties.template.containers[0].image' -o tsv)
+          echo "Task runner job image: ${job_image}"
+          if [[ "$job_image" != *"${EXPECTED_TAG}"* ]]; then
+            echo "::error::Task runner job is running wrong image. Expected tag '${EXPECTED_TAG}' but got '${job_image}'"
+            exit 1
+          fi
+          echo "✓ Task runner job image verified"
+
   integration-test:
     needs: [deploy, smoke-test]
     if: >-
@@ -82,7 +108,10 @@ jobs:
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
       - name: Record test start time
         id: test-time
-        run: echo "start=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+        run: |
+          # Use deploy completion time (smoke-test start) as lookback origin
+          # so we capture review task runner pods that finish before test timeout
+          echo "start=$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Run ACA integration tests
         env:
@@ -98,7 +127,7 @@ jobs:
         run: uv run python tests/e2e/aca_integration.py
 
       - name: Azure login (for log collection)
-        if: failure()
+        if: always()
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -106,20 +135,28 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Collect ACA logs
-        if: failure()
+        if: always()
         env:
           TEST_START: ${{ steps.test-time.outputs.start }}
         run: |
           mkdir -p /tmp/aca-logs
           echo "Collecting logs since ${TEST_START}"
 
-          # Controller live logs (capped at 300 lines by Azure CLI)
+          # Controller live logs (best-effort, last 300 lines only)
           az containerapp logs show \
             -n ca-controller -g rg-copilot-dev \
             --type console --tail 300 \
             > /tmp/aca-logs/controller-live.log 2>&1 || true
 
-          # Task runner job execution logs — executions started during this test run
+          # List all task runner job executions since test start (shows review + coding pods)
+          az containerapp job execution list \
+            -g rg-copilot-dev -n job-task-runner \
+            --query "[?properties.startTime>='${TEST_START}'].{name:name, status:properties.status, startTime:properties.startTime, endTime:properties.endTime}" \
+            -o table \
+            > /tmp/aca-logs/job-executions.log 2>&1 || true
+
+          # Task runner job execution logs — all executions since deploy
+          # (review pods may complete before test timeout, so broaden the window)
           for exec_name in $(az containerapp job execution list \
             -g rg-copilot-dev -n job-task-runner \
             --query "[?properties.startTime>='${TEST_START}'].name" \
@@ -131,7 +168,10 @@ jobs:
               > "/tmp/aca-logs/job-${exec_name}.log" 2>&1 || true
           done
 
-          # Full logs from Log Analytics (not truncated, survives pod cleanup)
+          # Full logs from Log Analytics (primary source — not truncated, survives pod cleanup)
+          # Wait for LA ingestion lag (typically 2-5 min, but can be longer)
+          echo "Waiting 60s for Log Analytics ingestion..."
+          sleep 60
           LA_WORKSPACE=$(az containerapp env show \
             -g rg-copilot-dev -n cae-rg-copilot-dev \
             --query 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId' \
@@ -176,7 +216,7 @@ jobs:
           ls -la /tmp/aca-logs/
 
       - name: Upload logs
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: aca-e2e-logs

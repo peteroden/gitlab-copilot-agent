@@ -10,7 +10,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from gitlab_copilot_agent.config import Settings
-from gitlab_copilot_agent.prompt_defaults import DEFAULT_REVIEW_PROMPT, get_prompt
+from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams, TaskResult
 
 if TYPE_CHECKING:
@@ -34,7 +34,32 @@ in Agent's Prior Feedback, even if line numbers have shifted.
 feedback still applies — do not re-comment.\
 """
 
-REVIEW_SYSTEM_PROMPT = DEFAULT_REVIEW_PROMPT
+_RESOLUTION_EVAL_INSTRUCTIONS = """\
+## Resolution Evaluation
+
+For each item in "Agent's Prior Feedback (Unresolved)" above, evaluate whether
+the new diff addresses the feedback. Include a "resolutions" array in your JSON
+output with one entry per prior feedback item:
+
+```json
+{
+  "resolutions": [
+    {
+      "discussion_id": "<discussion_id from prior feedback>",
+      "status": "resolved|not_addressed|partial",
+      "message": "Brief explanation of why the feedback is/isn't addressed"
+    }
+  ]
+}
+```
+
+Status values:
+- "resolved": The code change fully addresses the feedback
+- "not_addressed": The feedback issue remains in the code
+- "partial": Some aspects addressed but others remain (always explain what's left)
+
+If there is no prior feedback, return an empty resolutions array.\
+"""
 
 
 class ReviewRequest(BaseModel):
@@ -60,7 +85,7 @@ def _format_prior_feedback(history: DiscussionHistory) -> str:
     Returns the complete section (header + grouped comments + rules) or an
     empty string when no qualifying comments exist.
     """
-    comments_by_file: dict[str, list[tuple[int | None, str]]] = defaultdict(list)
+    comments_by_file: dict[str, list[tuple[int | None, str, str]]] = defaultdict(list)
 
     for disc in history.discussions:
         if disc.is_resolved or not disc.is_inline:
@@ -87,7 +112,7 @@ def _format_prior_feedback(history: DiscussionHistory) -> str:
             except ValueError:
                 line_num = None
         body = _strip_comment_formatting(first_note.body)
-        comments_by_file[file_path].append((line_num, body))
+        comments_by_file[file_path].append((line_num, body, disc.discussion_id))
 
     if not comments_by_file:
         return ""
@@ -95,11 +120,11 @@ def _format_prior_feedback(history: DiscussionHistory) -> str:
     lines = ["## Agent's Prior Feedback (Unresolved)\n"]
     for file_path in sorted(comments_by_file):
         lines.append(f"### {file_path}")
-        for line_num, body in sorted(
+        for line_num, body, disc_id in sorted(
             comments_by_file[file_path], key=lambda c: (c[0] is None, c[0] or 0)
         ):
             prefix = f"Line {line_num}" if line_num is not None else "General"
-            lines.append(f"- {prefix}: {body}")
+            lines.append(f"- {prefix}: {body} [discussion: {disc_id}]")
         lines.append("")  # blank line between files
 
     lines.append(_PRIOR_FEEDBACK_RULES)
@@ -139,6 +164,7 @@ def build_review_prompt(
         prior_section = _format_prior_feedback(discussion_history)
         if prior_section:
             prompt += f"\n\n{prior_section}"
+            prompt += f"\n\n{_RESOLUTION_EVAL_INSTRUCTIONS}"
     return prompt
 
 
@@ -150,11 +176,15 @@ async def run_review(
     review_request: ReviewRequest,
     diff_text: str | None = None,
     discussion_history: DiscussionHistory | None = None,
+    head_sha: str = "",
 ) -> TaskResult:
     """Run a Copilot agent review and return the structured result."""
+    task_id = f"review-{review_request.source_branch}"
+    if head_sha:
+        task_id = f"{task_id}-{head_sha[:12]}"
     task = TaskParams(
         task_type="review",
-        task_id=f"review-{review_request.source_branch}",
+        task_id=task_id,
         repo_url=repo_url,
         branch=review_request.source_branch,
         system_prompt=get_prompt(settings, "review"),

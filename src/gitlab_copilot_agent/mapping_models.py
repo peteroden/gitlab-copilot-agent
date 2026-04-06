@@ -12,7 +12,11 @@ models, and emits the rendered JSON that populates ``JIRA_PROJECT_MAP``.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+ResolutionBehavior = Literal["auto-resolve", "suggest", "off"]
 
 
 class Defaults(BaseModel):
@@ -42,6 +46,11 @@ class Defaults(BaseModel):
     in_review_status: str = Field(
         default="In Review",
         description="Default Jira status set after MR creation",
+    )
+    resolution_behavior: ResolutionBehavior = Field(
+        default="suggest",
+        description="Default behavior when agent feedback is addressed: "
+        "auto-resolve, suggest, or off",
     )
 
 
@@ -81,6 +90,10 @@ class Binding(BaseModel):
     in_review_status: str | None = Field(
         default=None,
         description="Override the in-review status for this binding",
+    )
+    resolution_behavior: ResolutionBehavior | None = Field(
+        default=None,
+        description="Override the resolution behavior for this binding",
     )
 
     @model_validator(mode="after")
@@ -153,6 +166,7 @@ class MappingFile(BaseModel):
                 trigger_status=b.trigger_status or self.defaults.trigger_status,
                 in_progress_status=b.in_progress_status or self.defaults.in_progress_status,
                 in_review_status=b.in_review_status or self.defaults.in_review_status,
+                resolution_behavior=b.resolution_behavior or self.defaults.resolution_behavior,
             )
         return RenderedMap(mappings=rendered_bindings)
 
@@ -179,6 +193,10 @@ class RenderedBinding(BaseModel):
     in_review_status: str = Field(
         default="In Review",
         description="Resolved Jira status set after MR creation",
+    )
+    resolution_behavior: ResolutionBehavior = Field(
+        default="suggest",
+        description="Resolved behavior when agent feedback is addressed",
     )
 
 

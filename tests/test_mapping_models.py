@@ -33,6 +33,8 @@ IN_REVIEW_STATUS = "In Review"
 CUSTOM_TRIGGER = "Ready for Dev"
 CUSTOM_IN_PROGRESS = "Development"
 CUSTOM_IN_REVIEW = "Code Review"
+RESOLUTION_BEHAVIOR_DEFAULT = "suggest"
+RESOLUTION_BEHAVIOR_AUTO = "auto-resolve"
 
 
 # ---------------------------------------------------------------------------
@@ -333,3 +335,49 @@ class TestStatusFields:
         rendered = m.render()
         assert rendered.mappings[JIRA_KEY_PROJ].trigger_status == CUSTOM_TRIGGER
         assert rendered.mappings[JIRA_KEY_OPS].trigger_status == TRIGGER_STATUS
+
+
+# ---------------------------------------------------------------------------
+# Resolution behavior
+# ---------------------------------------------------------------------------
+
+
+class TestResolutionBehavior:
+    def test_defaults_resolution_behavior_default(self) -> None:
+        d = Defaults()
+        assert d.resolution_behavior == RESOLUTION_BEHAVIOR_DEFAULT
+
+    def test_binding_resolution_behavior_override(self) -> None:
+        """Binding override flows through render()."""
+        data = _minimal_mapping(
+            bindings=[_minimal_binding(resolution_behavior=RESOLUTION_BEHAVIOR_AUTO)],
+        )
+        m = MappingFile(**data)
+        rendered = m.render()
+        assert rendered.mappings[JIRA_KEY_PROJ].resolution_behavior == RESOLUTION_BEHAVIOR_AUTO
+
+    def test_binding_resolution_behavior_none_uses_default(self) -> None:
+        """None binding falls back to defaults."""
+        data = _minimal_mapping()
+        m = MappingFile(**data)
+        rendered = m.render()
+        assert rendered.mappings[JIRA_KEY_PROJ].resolution_behavior == RESOLUTION_BEHAVIOR_DEFAULT
+
+    def test_rendered_binding_resolution_behavior(self) -> None:
+        rb = RenderedBinding(
+            repo=REPO_SERVICE_A,
+            target_branch=DEFAULT_BRANCH,
+            credential_ref=DEFAULT_CRED,
+            resolution_behavior=RESOLUTION_BEHAVIOR_AUTO,
+        )
+        assert rb.resolution_behavior == RESOLUTION_BEHAVIOR_AUTO
+
+    def test_defaults_invalid_resolution_behavior_rejected(self) -> None:
+        """Invalid resolution_behavior value raises ValidationError."""
+        with pytest.raises(ValidationError):
+            Defaults(resolution_behavior="invalid_value")  # type: ignore[arg-type]
+
+    def test_binding_invalid_resolution_behavior_rejected(self) -> None:
+        """Invalid resolution_behavior value on Binding raises ValidationError."""
+        with pytest.raises(ValidationError):
+            Binding(**_minimal_binding(resolution_behavior="invalid_value"))

@@ -30,6 +30,7 @@ from gitlab_copilot_agent.git_operations import (
     validate_clone_url_host,
 )
 from gitlab_copilot_agent.gitlab_client import GitLabClient
+from gitlab_copilot_agent.mapping_models import ResolutionBehavior
 from gitlab_copilot_agent.models import NoteWebhookPayload
 from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.task_executor import (
@@ -62,6 +63,7 @@ async def handle_discussion_interaction(
     agent_identity: AgentIdentity,
     project_token: str | None = None,
     repo_locks: DistributedLock | None = None,
+    resolution_behavior: ResolutionBehavior = "suggest",
 ) -> None:
     """Handle an @mention or thread-reply interaction on an MR.
 
@@ -178,6 +180,38 @@ async def handle_discussion_interaction(
                 disc_obj = gl_mr.discussions.get(triggering.discussion_id)
                 await asyncio.to_thread(disc_obj.notes.create, {"body": response.reply})
                 await bound_log.ainfo("discussion_reply_posted")
+
+                # 8. Handle resolution if the LLM determined one
+                # Only auto-resolve threads originally created by the agent
+                first_note = triggering.notes[0] if triggering.notes else None
+                is_agent_thread = (
+                    first_note is not None
+                    and triggering.is_inline
+                    and first_note.author_id == agent_identity.user_id
+                )
+                if response.resolution and resolution_behavior != "off" and is_agent_thread:
+                    try:
+                        if (
+                            response.resolution.status == "resolved"
+                            and resolution_behavior == "auto-resolve"
+                        ):
+                            disc_obj.resolved = True
+                            await asyncio.to_thread(disc_obj.save)
+                            await bound_log.ainfo(
+                                "discussion_auto_resolved",
+                                discussion_id=triggering.discussion_id,
+                            )
+                        elif response.resolution.status == "partial":
+                            await bound_log.ainfo(
+                                "discussion_partial_resolution",
+                                discussion_id=triggering.discussion_id,
+                            )
+                    except Exception:
+                        await bound_log.awarning(
+                            "discussion_resolution_failed",
+                            discussion_id=triggering.discussion_id,
+                            exc_info=True,
+                        )
 
             except TaskExecutionError as exc:
                 error_str = str(exc)
