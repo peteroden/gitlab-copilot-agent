@@ -192,15 +192,29 @@ class TestBlobResultStore:
         assert result == RESULT_VALUE
 
     async def test_get_returns_none_when_missing(self) -> None:
+        from azure.core.exceptions import ResourceNotFoundError
+
         _, blob_client = _make_clients()
         blob_ref = AsyncMock()
-        blob_ref.download_blob = AsyncMock(side_effect=Exception("BlobNotFound"))
+        blob_ref.download_blob = AsyncMock(side_effect=ResourceNotFoundError("BlobNotFound"))
         blob_client.get_blob_client.return_value = blob_ref
 
         store = BlobResultStore(blob_client)
         result = await store.get("nonexistent")
 
         assert result is None
+
+    async def test_get_raises_on_non_404_error(self) -> None:
+        from azure.core.exceptions import HttpResponseError
+
+        _, blob_client = _make_clients()
+        blob_ref = AsyncMock()
+        blob_ref.download_blob = AsyncMock(side_effect=HttpResponseError("auth failure"))
+        blob_client.get_blob_client.return_value = blob_ref
+
+        store = BlobResultStore(blob_client)
+        with pytest.raises(HttpResponseError):
+            await store.get("some-key")
 
     async def test_aclose_closes_client_and_credential(self) -> None:
         _, blob_client = _make_clients()
