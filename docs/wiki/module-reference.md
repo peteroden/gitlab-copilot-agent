@@ -92,14 +92,17 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Purpose**: MR review orchestration — clone, review, parse, post comments.
 
 **Key Functions**:
-- `handle_review(settings: Settings, payload: MergeRequestWebhookPayload, executor: TaskExecutor) -> None`: Full review pipeline with OTEL span and metrics
+- `handle_review(settings: Settings, payload: MergeRequestWebhookPayload, executor: TaskExecutor, project_token: str | None = None, credential_registry: CredentialRegistry | None = None) -> None`: Full review pipeline with OTEL span and metrics
   - Clones repo
-  - Calls `run_review()` via executor
-  - Parses structured review
-  - Fetches MR details and posts comments
+  - Fetches MR details (title, description, diff_refs, changes)
+  - If `credential_registry` provided: fetches discussions via `list_mr_discussions()`, resolves agent identity via `resolve_identity()`, builds `DiscussionHistory`
+  - Builds diff text from MR changes
+  - Calls `run_review()` with diff text and discussion history
+  - Parses structured review via `parse_review()`
+  - Posts comments via `post_review()`
   - Emits `reviews_total` and `reviews_duration` metrics
 
-**Internal Imports**: `config`, `models`, `task_executor`, `gitlab_client`, `review_engine`, `comment_parser`, `comment_poster`, `metrics`, `telemetry`
+**Internal Imports**: `config`, `models`, `task_executor`, `gitlab_client`, `review_engine`, `comment_parser`, `comment_poster`, `metrics`, `telemetry`, `discussion_models`, `credential_registry`
 
 **Depended On By**: `webhook.py`, `gitlab_poller.py`
 
@@ -173,15 +176,21 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Key Constants**:
 - `REVIEW_SYSTEM_PROMPT: str`: Review system prompt (re-exported from `prompt_defaults.DEFAULT_REVIEW_PROMPT`)
+- `MAX_DIFF_CHARS: int`: Maximum characters of diff to include in the prompt before truncation
+- `_SEVERITY_PREFIX_RE: re.Pattern`: Compiled regex to strip severity prefixes (e.g., `**[WARNING]**`) from comments
+- `_SUGGESTION_BLOCK_RE: re.Pattern`: Compiled regex to strip suggestion code blocks from comments
+- `_PRIOR_FEEDBACK_RULES: str`: Prompt rules instructing the LLM not to duplicate prior feedback
 
 **Key Models**:
 - `ReviewRequest`: MR metadata (title, description, source/target branches)
 
 **Key Functions**:
-- `build_review_prompt(req: ReviewRequest) -> str`: Build user prompt instructing agent to run `git diff`
-- `run_review(executor: TaskExecutor, settings: Settings, repo_path: str, repo_url: str, review_request: ReviewRequest) -> str`: Execute review task and return raw response
+- `build_review_prompt(req: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None) -> str`: Build user prompt; includes diff inline when available and injects prior unresolved feedback
+- `run_review(executor: TaskExecutor, settings: Settings, repo_path: str, repo_url: str, review_request: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None) -> TaskResult`: Execute review task and return structured result
+- `_format_prior_feedback(history: DiscussionHistory) -> str`: Render the agent's unresolved inline comments as a prompt section (grouped by file, sorted by line)
+- `_strip_comment_formatting(body: str) -> str`: Remove agent-added severity prefix and suggestion blocks from a comment
 
-**Internal Imports**: `config`, `prompt_defaults`, `task_executor`
+**Internal Imports**: `config`, `prompt_defaults`, `task_executor`, `discussion_models` (TYPE_CHECKING)
 
 **Depended On By**: `orchestrator.py`
 
@@ -738,7 +747,7 @@ All use `frozen=True` config.
 | `discussion_orchestrator.py` | Processing | 191 | Unified @mention/thread interaction handler |
 | `discussion_engine.py` | Processing | 147 | Discussion prompt construction & response parsing |
 | `coding_orchestrator.py` | Processing | 142 | Jira task implementation |
-| `review_engine.py` | Processing | 91 | Review prompt construction |
+| `review_engine.py` | Processing | 160 | Review prompt construction |
 | `coding_engine.py` | Processing | 109 | Coding prompt construction |
 | `prompt_defaults.py` | Processing | 164 | System prompt defaults & resolution |
 | `task_executor.py` | Execution | 53 | TaskExecutor protocol |
@@ -763,4 +772,4 @@ All use `frozen=True` config.
 | `process_sandbox.py` | Utils | 20 | CLI path resolution |
 | `plugin_manager.py` | Utils | 88 | Plugin installation |
 
-**Total: 33 modules, ~3,856 lines of code**
+**Total: 33 modules, ~3,925 lines of code**

@@ -52,6 +52,8 @@ sequenceDiagram
     
     ORCH->>ORCH: Build DiscussionHistory(discussions, agent)
     
+    Note over ORCH: build_review_prompt() renders<br/>prior feedback into prompt
+    
     ORCH->>EXEC: execute(TaskParams: review)
     alt LocalTaskExecutor
         EXEC->>COP: run_copilot_session(repo_path, prompts)

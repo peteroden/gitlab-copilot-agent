@@ -12,13 +12,6 @@ from gitlab_copilot_agent.discussion_models import (
     DiscussionNote,
 )
 from gitlab_copilot_agent.gitlab_client import MRDetails
-from gitlab_copilot_agent.models import (
-    MergeRequestWebhookPayload,
-    MRLastCommit,
-    MRObjectAttributes,
-    WebhookProject,
-    WebhookUser,
-)
 from gitlab_copilot_agent.orchestrator import handle_review
 from gitlab_copilot_agent.task_executor import ReviewResult
 from tests.conftest import (
@@ -30,7 +23,9 @@ from tests.conftest import (
     MR_IID,
     MR_PAYLOAD,
     PROJECT_ID,
+    make_mr_changes,
     make_settings,
+    make_webhook_payload,
 )
 
 
@@ -109,28 +104,8 @@ async def test_orchestrator_cleans_up_on_error(
     mock_gl_instance.get_mr_details = AsyncMock(side_effect=RuntimeError("SDK crashed"))
     mock_gl_instance.cleanup = AsyncMock()
 
-    payload = MergeRequestWebhookPayload(
-        object_kind="merge_request",
-        user=WebhookUser(id=1, username="jdoe"),
-        project=WebhookProject(
-            id=PROJECT_ID,
-            path_with_namespace="group/my-project",
-            git_http_url="https://gitlab.example.com/group/my-project.git",
-        ),
-        object_attributes=MRObjectAttributes(
-            iid=MR_IID,
-            title="Add feature",
-            description="Implements X",
-            action="open",
-            source_branch="feature/x",
-            target_branch="main",
-            last_commit=MRLastCommit(id="abc123", message="feat: add X"),
-            url="https://gitlab.example.com/group/my-project/-/merge_requests/7",
-        ),
-    )
-
     with pytest.raises(RuntimeError, match="SDK crashed"):
-        await handle_review(make_settings(), payload, AsyncMock())
+        await handle_review(make_settings(), make_webhook_payload(), AsyncMock())
 
     mock_gl_instance.cleanup.assert_awaited_once()
 
@@ -177,28 +152,6 @@ _SAMPLE_DISCUSSIONS = [
 ]
 
 
-def _make_payload() -> MergeRequestWebhookPayload:
-    return MergeRequestWebhookPayload(
-        object_kind="merge_request",
-        user=WebhookUser(id=1, username="jdoe"),
-        project=WebhookProject(
-            id=PROJECT_ID,
-            path_with_namespace="group/my-project",
-            git_http_url="https://gitlab.example.com/group/my-project.git",
-        ),
-        object_attributes=MRObjectAttributes(
-            iid=MR_IID,
-            title="Add feature",
-            description="Implements X",
-            action="open",
-            source_branch="feature/x",
-            target_branch="main",
-            last_commit=MRLastCommit(id="abc123", message="feat: add X"),
-            url="https://gitlab.example.com/group/my-project/-/merge_requests/7",
-        ),
-    )
-
-
 @patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
@@ -217,7 +170,7 @@ async def test_discussion_history_passed_with_credential_registry(
 
     await handle_review(
         make_settings(),
-        _make_payload(),
+        make_webhook_payload(),
         AsyncMock(),
         credential_registry=mock_registry,
     )
@@ -245,7 +198,7 @@ async def test_discussion_history_none_without_credential_registry(
     """Without credential_registry, discussion_history is None."""
     _setup_mocks(mock_client_class, mock_run_review)
 
-    await handle_review(make_settings(), _make_payload(), AsyncMock())
+    await handle_review(make_settings(), make_webhook_payload(), AsyncMock())
 
     review_kwargs = mock_run_review.call_args[1]
     assert review_kwargs["discussion_history"] is None
@@ -269,7 +222,7 @@ async def test_discussion_history_failure_is_non_fatal(
 
     await handle_review(
         make_settings(),
-        _make_payload(),
+        make_webhook_payload(),
         AsyncMock(),
         credential_registry=mock_registry,
     )
@@ -298,7 +251,7 @@ async def test_discussion_threads_flow_through_pipeline(
 
     await handle_review(
         make_settings(),
-        _make_payload(),
+        make_webhook_payload(),
         AsyncMock(),
         credential_registry=mock_registry,
     )
@@ -329,3 +282,53 @@ async def test_discussion_threads_flow_through_pipeline(
     # Verify agent can distinguish own comments
     assert root.author_id == history.agent.user_id
     assert reply.author_id != history.agent.user_id
+
+
+@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
+@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+async def test_prior_feedback_rendered_in_prompt(
+    mock_gl_class: MagicMock,
+    mock_client_class: MagicMock,
+    mock_post_review: AsyncMock,
+) -> None:
+    """Prior agent comments flow through orchestrator into the review prompt.
+
+    Unlike other integration tests that patch run_review, this test lets
+    run_review execute with a mock executor so we can inspect the actual
+    user_prompt in TaskParams — verifying the full chain:
+    orchestrator → run_review → build_review_prompt → prior feedback in prompt.
+    """
+    mock_gl_instance = mock_client_class.return_value
+    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
+    mock_gl_instance.cleanup = AsyncMock()
+    mock_gl_instance.get_mr_details = AsyncMock(
+        return_value=MRDetails(
+            title="Add feature",
+            description="Implements X",
+            diff_refs=DIFF_REFS,
+            changes=make_mr_changes(),
+        )
+    )
+    mock_gl_instance.list_mr_discussions = AsyncMock(return_value=_SAMPLE_DISCUSSIONS)
+
+    mock_executor = AsyncMock()
+    mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
+
+    mock_registry = AsyncMock()
+    mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
+
+    await handle_review(
+        make_settings(),
+        make_webhook_payload(),
+        mock_executor,
+        credential_registry=mock_registry,
+    )
+
+    # Inspect the TaskParams passed to the executor
+    task_params = mock_executor.execute.call_args[0][0]
+    prompt = task_params.user_prompt
+
+    assert "## Agent's Prior Feedback (Unresolved)" in prompt
+    assert "Consider adding a null check here." in prompt
+    assert "src/app.py" in prompt

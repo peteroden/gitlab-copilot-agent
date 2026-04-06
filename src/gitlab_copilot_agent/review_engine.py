@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from collections import defaultdict
 from typing import TYPE_CHECKING
 
 import structlog
@@ -20,6 +22,18 @@ log = structlog.get_logger()
 # truncated and the LLM is told to run git diff for the full picture.
 MAX_DIFF_CHARS = 120_000
 
+_SEVERITY_PREFIX_RE = re.compile(r"^\*\*\[(?:ERROR|WARNING|INFO)\]\*\*\s*")
+_SUGGESTION_BLOCK_RE = re.compile(r"\n\n```suggestion.*?```", re.DOTALL)
+# ↑ Formats coupled with comment_poster.py:89-93 — update in lockstep.
+
+_PRIOR_FEEDBACK_RULES = """\
+Rules:
+- Do NOT generate any comment that covers the same issue as any item \
+in Agent's Prior Feedback, even if line numbers have shifted.
+- If the code has changed but the underlying issue remains, the prior \
+feedback still applies — do not re-comment.\
+"""
+
 REVIEW_SYSTEM_PROMPT = DEFAULT_REVIEW_PROMPT
 
 
@@ -31,6 +45,65 @@ class ReviewRequest(BaseModel):
     description: str | None = Field(description="MR description")
     source_branch: str = Field(description="Source branch name")
     target_branch: str = Field(description="Target branch name")
+
+
+def _strip_comment_formatting(body: str) -> str:
+    """Remove agent-added severity prefix and suggestion blocks from a comment."""
+    body = _SEVERITY_PREFIX_RE.sub("", body)
+    body = _SUGGESTION_BLOCK_RE.sub("", body)
+    return body.strip()
+
+
+def _format_prior_feedback(history: DiscussionHistory) -> str:
+    """Render the agent's unresolved inline comments as a prompt section.
+
+    Returns the complete section (header + grouped comments + rules) or an
+    empty string when no qualifying comments exist.
+    """
+    comments_by_file: dict[str, list[tuple[int | None, str]]] = defaultdict(list)
+
+    for disc in history.discussions:
+        if disc.is_resolved or not disc.is_inline:
+            continue
+        if not disc.notes:
+            continue
+        first_note = disc.notes[0]
+        if first_note.author_id != history.agent.user_id:
+            continue
+
+        position = first_note.position or {}
+        raw_path = position.get("new_path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+        file_path = raw_path
+
+        raw_line = position.get("new_line")
+        line_num: int | None = None
+        if isinstance(raw_line, int):
+            line_num = raw_line
+        elif isinstance(raw_line, str):
+            try:
+                line_num = int(raw_line)
+            except ValueError:
+                line_num = None
+        body = _strip_comment_formatting(first_note.body)
+        comments_by_file[file_path].append((line_num, body))
+
+    if not comments_by_file:
+        return ""
+
+    lines = ["## Agent's Prior Feedback (Unresolved)\n"]
+    for file_path in sorted(comments_by_file):
+        lines.append(f"### {file_path}")
+        for line_num, body in sorted(
+            comments_by_file[file_path], key=lambda c: (c[0] is None, c[0] or 0)
+        ):
+            prefix = f"Line {line_num}" if line_num is not None else "General"
+            lines.append(f"- {prefix}: {body}")
+        lines.append("")  # blank line between files
+
+    lines.append(_PRIOR_FEEDBACK_RULES)
+    return "\n".join(lines)
 
 
 def build_review_prompt(
@@ -61,6 +134,11 @@ def build_review_prompt(
             f"Run `git diff {req.target_branch}...{req.source_branch}` to see "
             f"the changes, then read relevant files for context."
         )
+
+    if discussion_history:
+        prior_section = _format_prior_feedback(discussion_history)
+        if prior_section:
+            prompt += f"\n\n{prior_section}"
     return prompt
 
 
