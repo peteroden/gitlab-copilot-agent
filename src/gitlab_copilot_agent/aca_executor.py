@@ -119,11 +119,16 @@ class ContainerAppsTaskExecutor:
 
     async def _poll_blob_result(self, task: TaskParams) -> TaskResult:
         """Poll ResultStore for result blob (KEDA handles job lifecycle)."""
+        bound = log.bind(task_id=task.task_id)
         deadline = asyncio.get_event_loop().time() + self._settings.aca_job_timeout
+        polls = 0
         while asyncio.get_event_loop().time() < deadline:
             cached = await self._store.get(task.task_id)
             if cached is not None:
+                bound.info("aca_result_found", polls=polls)
                 return _parse_result(cached, task.task_type)
+            polls += 1
             await asyncio.sleep(_JOB_POLL_INTERVAL)
         msg = f"Task {task.task_id} timed out after {self._settings.aca_job_timeout}s"
+        bound.error("aca_result_timeout", polls=polls)
         raise TimeoutError(msg)

@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from azure.core.exceptions import ResourceNotFoundError
 
 from gitlab_copilot_agent.concurrency import QueueMessage, ResultStore, TaskQueue
 
@@ -140,7 +141,7 @@ class BlobResultStore:
             download = await blob.download_blob()
             content: bytes = await download.readall()
             return content.decode()
-        except Exception:
+        except ResourceNotFoundError:
             return None
 
     async def set(self, key: str, value: str, ttl: int = 3600) -> None:

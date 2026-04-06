@@ -172,20 +172,20 @@ jobs:
           # Wait for LA ingestion lag (typically 2-5 min, but can be longer)
           echo "Waiting 60s for Log Analytics ingestion..."
           sleep 60
-          LA_WORKSPACE=$(az containerapp env show \
-            -g rg-copilot-dev -n cae-rg-copilot-dev \
-            --query 'properties.appLogsConfiguration.logAnalyticsConfiguration.customerId' \
+          LA_WORKSPACE=$(az monitor log-analytics workspace show \
+            -g rg-copilot-dev -n log-rg-copilot-dev \
+            --query customerId \
             -o tsv 2>/dev/null || true)
           if [ -n "$LA_WORKSPACE" ]; then
             la_filter="where TimeGenerated >= datetime('${TEST_START}')"
             az monitor log-analytics query \
               --workspace "$LA_WORKSPACE" \
-              --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s contains 'controller' | ${la_filter} | project TimeGenerated, Log_s | order by TimeGenerated asc" \
+              --analytics-query "ContainerAppConsoleLogs | where ContainerGroupName contains 'controller' | ${la_filter} | project TimeGenerated, Log | order by TimeGenerated asc" \
               -o table \
               > /tmp/aca-logs/controller-la.log 2>&1 || true
             az monitor log-analytics query \
               --workspace "$LA_WORKSPACE" \
-              --analytics-query "ContainerAppConsoleLogs_CL | where ContainerGroupName_s contains 'task-runner' | ${la_filter} | project TimeGenerated, Log_s | order by TimeGenerated asc" \
+              --analytics-query "ContainerAppConsoleLogs | where ContainerGroupName contains 'task-runner' | ${la_filter} | project TimeGenerated, Log | order by TimeGenerated asc" \
               -o table \
               > /tmp/aca-logs/task-runner-la.log 2>&1 || true
           fi

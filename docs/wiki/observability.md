@@ -671,7 +671,7 @@ resource "azapi_update_resource" "cae_otlp" {
 
 ### Viewing Data
 
-- **Log Analytics**: `ContainerAppConsoleLogs_CL` table (stdout/stderr before OTLP connects)
+- **Log Analytics**: `ContainerAppConsoleLogs` table (stdout/stderr via Azure Monitor Diagnostic Settings)
 - **App Insights**: Transaction search (traces), Logs blade (structured logs with trace correlation)
 
 ---
