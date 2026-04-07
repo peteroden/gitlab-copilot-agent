@@ -135,7 +135,9 @@ message and the thread context, then respond appropriately:
 - If they are signaling resolution (e.g. "fixed", "done") — acknowledge
 - If the message combines multiple intents — address each part
 
-Your response text will be posted as a reply in the discussion thread.
+Respond directly as yourself — your output IS the reply. Do not include
+preambles like "Here's what I'd say" or "You can post this reply".
+Do not describe what you are going to do; just do it.
 
 If you made code changes, your final message MUST end with a JSON block
 listing the files you changed (same format as the coding prompt):

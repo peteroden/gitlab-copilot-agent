@@ -8,6 +8,7 @@ from gitlab_copilot_agent.coding_engine import (
     CODING_SYSTEM_PROMPT,
     ensure_git_exclude,
     run_coding_task,
+    strip_json_block,
 )
 from gitlab_copilot_agent.prompt_defaults import get_prompt
 from tests.conftest import EXAMPLE_CLONE_URL, make_settings
@@ -75,3 +76,23 @@ async def test_run_coding_task_delegates_to_executor(tmp_path: Path) -> None:
     assert task.system_prompt == get_prompt(make_settings(), "coding")
     assert "PROJ-789" in task.user_prompt
     assert (tmp_path / ".git" / "info" / "exclude").exists()
+
+
+class TestStripJsonBlock:
+    def test_strips_trailing_json_block(self) -> None:
+        raw = (
+            "Here is a detailed explanation.\n\n"
+            '```json\n{"summary": "Brief", "files_changed": []}\n```'
+        )
+        assert strip_json_block(raw) == "Here is a detailed explanation."
+
+    def test_returns_text_unchanged_without_json(self) -> None:
+        raw = "Plain text response with no JSON block."
+        assert strip_json_block(raw) == raw
+
+    def test_strips_embedded_json_block(self) -> None:
+        raw = 'Explanation.\n\n```json\n{"summary": "x"}\n```\n\nMore text.'
+        result = strip_json_block(raw)
+        assert "```json" not in result
+        assert "Explanation." in result
+        assert "More text." in result

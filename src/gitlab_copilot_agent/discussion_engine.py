@@ -164,7 +164,7 @@ async def run_discussion(
     ``get_prompt``).  This keeps the engine decoupled from prompt config.
     """
     task = TaskParams(
-        task_type="coding",  # use coding task type for repo access
+        task_type="discussion",
         task_id=f"discussion-{source_branch}-{note_id}",
         repo_url=repo_url,
         branch=source_branch,

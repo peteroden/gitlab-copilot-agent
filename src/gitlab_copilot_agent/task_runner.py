@@ -26,7 +26,7 @@ from gitlab_copilot_agent.prompt_defaults import get_prompt
 log = structlog.get_logger()
 ENV_TASK_TYPE, ENV_TASK_ID = "TASK_TYPE", "TASK_ID"
 ENV_TASK_PAYLOAD = "TASK_PAYLOAD"
-VALID_TASK_TYPES: frozenset[str] = frozenset({"review", "coding", "echo"})
+VALID_TASK_TYPES: frozenset[str] = frozenset({"review", "coding", "discussion", "echo"})
 _RESULT_TTL = 3600  # 1 hour
 
 
@@ -35,7 +35,7 @@ class QueueTaskPayload(BaseModel):
 
     model_config = ConfigDict(strict=True)
 
-    task_type: str = Field(description="Task type: review, coding, or echo")
+    task_type: str = Field(description="Task type: review, coding, discussion, or echo")
     task_id: str = Field(description="Unique task identifier for idempotency")
     repo_blob_key: str | None = Field(default=None, description="Blob key for repo tarball")
     system_prompt: str = Field(default="", description="System prompt for Copilot session")
@@ -176,7 +176,6 @@ async def _build_coding_result(
 ) -> str:
     """Stage explicitly listed files, capture diff against pre-session HEAD."""
     agent_output = parse_agent_output(summary)
-    result_summary = agent_output.summary if agent_output else summary
     used_changed_paths_fallback = False
     if agent_output and agent_output.files_changed:
         for f in agent_output.files_changed:
@@ -197,7 +196,7 @@ async def _build_coding_result(
             return json.dumps(
                 {
                     "result_type": "coding",
-                    "summary": result_summary,
+                    "summary": summary,
                     "patch": "",
                     "base_sha": pre_session_sha,
                 }
@@ -240,7 +239,7 @@ async def _build_coding_result(
     return json.dumps(
         {
             "result_type": "coding",
-            "summary": result_summary,
+            "summary": summary,
             "patch": patch,
             "base_sha": pre_session_sha,
         }
@@ -339,7 +338,7 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
         tarball = await task_queue.download_blob(repo_blob_key)
         repo_path = await extract_repo_tarball(tarball, settings.clone_dir)
         pre_session_sha: str | None = None
-        if task_type == "coding":
+        if task_type in ("coding", "discussion"):
             from gitlab_copilot_agent.coding_engine import ensure_git_exclude
 
             ensure_git_exclude(str(repo_path))
@@ -365,7 +364,7 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
             summary_length=len(summary),
             summary_empty=not summary,
         )
-        if task_type == "coding":
+        if task_type in ("coding", "discussion"):
             assert pre_session_sha is not None
             result = await _build_coding_result(repo_path, summary, bound_log, pre_session_sha)
         else:

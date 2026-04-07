@@ -251,7 +251,7 @@ class TestRunDiscussion:
 
         assert result == "Discussion result"
         task = mock_executor.execute.call_args[0][0]
-        assert task.task_type == "coding"
+        assert task.task_type == "discussion"
         assert task.task_id.startswith(f"discussion-{SOURCE_BRANCH}-")
         assert task.system_prompt == SYSTEM_PROMPT
         assert task.user_prompt == user_prompt

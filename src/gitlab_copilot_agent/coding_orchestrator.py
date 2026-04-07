@@ -9,7 +9,7 @@ from pathlib import Path
 
 import structlog
 
-from gitlab_copilot_agent.coding_engine import run_coding_task
+from gitlab_copilot_agent.coding_engine import run_coding_task, strip_json_block
 from gitlab_copilot_agent.coding_workflow import apply_coding_result
 from gitlab_copilot_agent.concurrency import DistributedLock, MemoryLock, ProcessedIssueTracker
 from gitlab_copilot_agent.config import Settings
@@ -126,7 +126,10 @@ class CodingOrchestrator:
                         project_mapping.token,
                     )
                     mr_title = f"feat({issue.key.lower()}): {issue.fields.summary}"
-                    mr_desc = f"Automated implementation for {issue.key}.\n\n{result.summary}"
+                    mr_desc = (
+                        f"Automated implementation for {issue.key}."
+                        f"\n\n{strip_json_block(result.summary)}"
+                    )
                     mr_iid = await self._gitlab.create_merge_request(
                         project_mapping.gitlab_project_id,
                         branch,
