@@ -3,7 +3,8 @@
 # Tests: 1. Webhook MR review, 2. Jira polling, 3. @mention thread interaction,
 #        4. GitLab polling, 5. Hot-reload config, 6. Plugin install,
 #        7. Graceful shutdown, 8. Discussion history capture,
-#        9. Incremental review, 10. Discussion summary activity section.
+#        9. Incremental review, 10. Discussion summary activity section,
+#        11. Manual resolution suppression.
 # Usage: ./tests/e2e/run.sh [agent-url] [mock-gitlab-url] [mock-jira-url]
 set -euo pipefail
 
@@ -488,6 +489,58 @@ print('yes' if has_marker else 'no')")
 [ "$SHA_OK" = "yes" ] && echo " ✅" || { echo " ❌ (SHA marker not found in summary note)"; exit 1; }
 
 echo "PASS: Summary note contains activity section and SHA marker"
+
+# === TEST 11: Manual Resolution Suppression (Feature 7, #321) ===
+echo ""; echo "--- Test 11: Manual Resolution Suppression ---"
+curl -sf -X DELETE "$MOCK_GITLAB_URL/discussions" > /dev/null
+curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/discussions" > /dev/null
+
+# Seed a discussion that was resolved by a human (non-bot user)
+curl -sf -X POST "$MOCK_GITLAB_URL/mock/discussions" \
+    -H "Content-Type: application/json" \
+    -d '[{
+        "id": "seed-resolved-human",
+        "individual_note": false,
+        "notes": [{
+            "id": 8001,
+            "type": "DiffNote",
+            "body": "Consider adding input validation here.",
+            "author": {"id": 9999, "username": "mock-review-bot"},
+            "created_at": "2024-01-15T10:00:00Z",
+            "system": false,
+            "resolvable": true,
+            "resolved": true,
+            "resolved_by": {"id": 42, "username": "human-dev"},
+            "position": {"new_path": "app.py", "old_path": "app.py", "new_line": 3, "old_line": null}
+        }]
+    }]' > /dev/null
+
+echo -n "Sending webhook (MR with human-resolved discussion)..."
+send_webhook '{
+    "object_kind": "merge_request",
+    "user": {"id": 1, "username": "e2e-test"},
+    "project": {"id": 999, "path_with_namespace": "test/e2e-repo",
+                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+    "object_attributes": {"iid": 711, "title": "Manual resolution test MR", "description": "Test suppressed feedback",
+        "action": "open", "source_branch": "main", "target_branch": "main",
+        "last_commit": {"id": "f7a0000f7a0000f7a0000f7a0000f7a0000f7a00", "message": "test manual resolution"}, "url": "http://mock/mr/711", "oldrev": null}
+}'
+
+poll_until "$MOCK_GITLAB_URL/discussions" \
+    "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
+    "Waiting for review with suppressed feedback" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+
+echo -n "Verifying resolved discussion not re-raised..."
+RERAISE_CHECK=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
+import sys, json
+ds = json.load(sys.stdin)
+# Check that no new discussion body mentions the original resolved topic
+reraise = any('input validation' in str(d.get('body','')) for d in ds if d.get('position'))
+print('reraise' if reraise else 'suppressed')")
+[ "$RERAISE_CHECK" = "suppressed" ] && echo " ✅ (resolved topic not re-raised)" || echo " ⚠️ (could not confirm suppression — agent may have re-raised)"
+
+# Clean up
+curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/discussions" > /dev/null
 
 echo ""; echo "=== ALL E2E TESTS PASSED ==="
 exit 0

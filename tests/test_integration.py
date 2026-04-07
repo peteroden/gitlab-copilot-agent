@@ -498,3 +498,120 @@ async def test_incremental_review_compare_fails_fallback(
     assert "Incremental Diff" not in prompt
     # Full diff from mr_details.changes is used instead
     assert DIFF_REFS.base_sha is not None  # sanity: details were loaded
+
+
+# -- Suppressed feedback integration tests (Feature 7) --
+
+_HUMAN_USER_ID = 42
+
+_HUMAN_RESOLVED_DISCUSSION = Discussion(
+    discussion_id="disc-resolved-human",
+    notes=[
+        DiscussionNote(
+            note_id=701,
+            author_id=_AGENT_IDENTITY.user_id,
+            author_username=_AGENT_IDENTITY.username,
+            body="Consider adding a null check here.",
+            created_at="2024-01-15T10:30:00Z",
+            is_system=False,
+            resolved=True,
+            resolved_by_id=_HUMAN_USER_ID,
+            resolvable=True,
+            position={
+                "new_path": "src/app.py",
+                "old_path": "src/app.py",
+                "new_line": 42,
+                "old_line": None,
+            },
+        ),
+    ],
+    is_resolved=True,
+    is_inline=True,
+)
+
+_DISMISSED_DISCUSSION = Discussion(
+    discussion_id="disc-dismissed",
+    notes=[
+        DiscussionNote(
+            note_id=702,
+            author_id=_AGENT_IDENTITY.user_id,
+            author_username=_AGENT_IDENTITY.username,
+            body="Potential security issue with user input.",
+            created_at="2024-01-15T10:30:00Z",
+            is_system=False,
+            resolved=False,
+            resolvable=True,
+            position={
+                "new_path": "src/handler.py",
+                "old_path": "src/handler.py",
+                "new_line": 15,
+                "old_line": None,
+            },
+        ),
+        DiscussionNote(
+            note_id=703,
+            author_id=_HUMAN_USER_ID,
+            author_username="developer",
+            body="This is intentional — we sanitize upstream.",
+            created_at="2024-01-15T11:00:00Z",
+            is_system=False,
+            resolved=None,
+            resolvable=False,
+            position=None,
+        ),
+    ],
+    is_resolved=False,
+    is_inline=True,
+)
+
+
+@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
+@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+async def test_suppressed_feedback_rendered_in_prompt(
+    mock_gl_class: MagicMock,
+    mock_client_class: MagicMock,
+    mock_post_review: AsyncMock,
+) -> None:
+    """Human-resolved and dismissed discussions flow through as suppressed feedback in prompt.
+
+    Verifies the full chain: orchestrator → run_review → build_review_prompt
+    → suppressed feedback section with [MANUALLY RESOLVED] and [DISMISSED] tags.
+    """
+    mock_gl_instance = mock_client_class.return_value
+    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
+    mock_gl_instance.cleanup = AsyncMock()
+    mock_gl_instance.get_mr_details = AsyncMock(
+        return_value=MRDetails(
+            title="Add feature",
+            description="Implements X",
+            diff_refs=DIFF_REFS,
+            changes=make_mr_changes(),
+        )
+    )
+    mock_gl_instance.list_mr_discussions = AsyncMock(
+        return_value=[_HUMAN_RESOLVED_DISCUSSION, _DISMISSED_DISCUSSION]
+    )
+
+    mock_executor = AsyncMock()
+    mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
+
+    mock_registry = AsyncMock()
+    mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
+
+    await handle_review(
+        make_settings(),
+        make_webhook_payload(),
+        mock_executor,
+        credential_registry=mock_registry,
+    )
+
+    # Inspect the TaskParams passed to the executor
+    task_params = mock_executor.execute.call_args[0][0]
+    prompt = task_params.user_prompt
+
+    assert "## Suppressed Feedback (Do Not Re-Raise)" in prompt
+    assert "[MANUALLY RESOLVED]" in prompt
+    assert "[DISMISSED]" in prompt
+    assert "Consider adding a null check here." in prompt
+    assert "Potential security issue with user input." in prompt

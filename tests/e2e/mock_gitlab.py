@@ -131,23 +131,24 @@ async def list_mr_discussions(project_id: int, mr_iid: int) -> list[dict]:
     for i, disc in enumerate(discussions):
         if disc.get("_type") == "note":
             continue
+        note: dict = {
+            "id": 1000 + i,
+            "type": "DiffNote" if disc.get("position") else "DiscussionNote",
+            "body": disc.get("body", ""),
+            "author": {"id": 9999, "username": "mock-review-bot"},
+            "created_at": "2024-01-15T10:30:00Z",
+            "system": False,
+            "resolvable": True,
+            "resolved": disc.get("resolved", False),
+            "position": disc.get("position"),
+        }
+        if "resolved_by" in disc:
+            note["resolved_by"] = disc["resolved_by"]
         result.append(
             {
                 "id": f"disc-{i}",
                 "individual_note": False,
-                "notes": [
-                    {
-                        "id": 1000 + i,
-                        "type": "DiffNote" if disc.get("position") else "DiscussionNote",
-                        "body": disc.get("body", ""),
-                        "author": {"id": 9999, "username": "mock-review-bot"},
-                        "created_at": "2024-01-15T10:30:00Z",
-                        "system": False,
-                        "resolvable": True,
-                        "resolved": False,
-                        "position": disc.get("position"),
-                    }
-                ],
+                "notes": [note],
             }
         )
     return result

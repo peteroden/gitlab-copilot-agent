@@ -14,7 +14,11 @@ from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams, TaskResult
 
 if TYPE_CHECKING:
-    from gitlab_copilot_agent.discussion_models import DiscussionHistory
+    from gitlab_copilot_agent.discussion_models import (
+        Discussion,
+        DiscussionHistory,
+        DiscussionNote,
+    )
 
 log = structlog.get_logger()
 
@@ -33,6 +37,49 @@ in Agent's Prior Feedback, even if line numbers have shifted.
 - If the code has changed but the underlying issue remains, the prior \
 feedback still applies — do not re-comment.\
 """
+
+_SUPPRESSED_FEEDBACK_RULES = """\
+Rules:
+- Do NOT re-raise, reference, or generate any comment covering the same \
+issue as any item listed below, even if the code pattern persists.
+- These items were reviewed by a human and intentionally resolved or \
+dismissed — respect the developer's decision.\
+"""
+
+_DISMISSAL_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(p, re.IGNORECASE)
+    for p in [
+        r"\bwon'?t\s+fix\b",
+        r"\bintentional\b",
+        r"\bby\s+design\b",
+        r"\bnot\s+a\s+bug\b",
+        r"\bfalse\s+positive\b",
+        r"\bnot\s+(?:an?\s+)?issue\b",
+        r"\bacceptable?\s+risk\b",
+        r"\bwontfix\b",
+    ]
+]
+
+
+def _is_human_resolved(disc: Discussion, agent_user_id: int) -> bool:
+    """True if a human (not the agent) resolved this discussion."""
+    if not disc.is_resolved:
+        return False
+    for note in disc.notes:
+        if note.resolved_by_id is not None and note.resolved_by_id != agent_user_id:
+            return True
+    return False
+
+
+def _is_dismissed(disc: Discussion, agent_user_id: int) -> bool:
+    """True if a developer replied with a dismissal phrase."""
+    for note in disc.notes:
+        if note.author_id == agent_user_id:
+            continue
+        if any(p.search(note.body) for p in _DISMISSAL_PATTERNS):
+            return True
+    return False
+
 
 _RESOLUTION_EVAL_INSTRUCTIONS = """\
 ## Resolution Evaluation
@@ -143,6 +190,49 @@ def _format_prior_feedback(history: DiscussionHistory, current_head_sha: str = "
     return "\n".join(lines)
 
 
+def _file_line(note: DiscussionNote) -> str:
+    """Format a note's file and line info for display."""
+    position = note.position or {}
+    raw_path = position.get("new_path")
+    file_path = raw_path if isinstance(raw_path, str) and raw_path.strip() else "unknown"
+    raw_line = position.get("new_line")
+    if isinstance(raw_line, int):
+        return f"{file_path}:{raw_line}"
+    return file_path
+
+
+def _format_suppressed_feedback(history: DiscussionHistory) -> str:
+    """Render human-resolved and dismissed items as a suppressed feedback prompt section.
+
+    Returns the complete section (header + items + rules) or an empty string
+    when no suppressed items exist.
+    """
+    suppressed: list[str] = []
+    for disc in history.discussions:
+        if not disc.is_inline:
+            continue
+        if not disc.notes:
+            continue
+        first = disc.notes[0]
+        if first.author_id != history.agent.user_id:
+            continue
+        if _is_human_resolved(disc, history.agent.user_id):
+            body = _strip_comment_formatting(first.body)
+            suppressed.append(f"- {_file_line(first)}: {body} [MANUALLY RESOLVED]")
+        elif _is_dismissed(disc, history.agent.user_id):
+            body = _strip_comment_formatting(first.body)
+            suppressed.append(f"- {_file_line(first)}: {body} [DISMISSED]")
+
+    if not suppressed:
+        return ""
+
+    lines = ["## Suppressed Feedback (Do Not Re-Raise)\n"]
+    lines.extend(suppressed)
+    lines.append("")
+    lines.append(_SUPPRESSED_FEEDBACK_RULES)
+    return "\n".join(lines)
+
+
 def build_review_prompt(
     req: ReviewRequest,
     diff_text: str | None = None,
@@ -187,6 +277,9 @@ def build_review_prompt(
         if prior_section:
             prompt += f"\n\n{prior_section}"
             prompt += f"\n\n{_RESOLUTION_EVAL_INSTRUCTIONS}"
+        suppressed_section = _format_suppressed_feedback(discussion_history)
+        if suppressed_section:
+            prompt += f"\n\n{suppressed_section}"
     return prompt
 
 

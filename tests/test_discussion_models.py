@@ -79,6 +79,14 @@ class TestDiscussionNote:
         unresolved = _make_note(resolvable=True, resolved=False)
         assert unresolved.resolved is False
 
+    def test_resolved_by_id_defaults_none(self) -> None:
+        note = _make_note()
+        assert note.resolved_by_id is None
+
+    def test_resolved_by_id_explicit_value(self) -> None:
+        note = _make_note(resolved_by_id=HUMAN_USER_ID)
+        assert note.resolved_by_id == HUMAN_USER_ID
+
 
 class TestDiscussion:
     def test_overview_discussion(self) -> None:

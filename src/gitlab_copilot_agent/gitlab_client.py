@@ -281,6 +281,12 @@ class GitLabClient:
                         }
 
                     author = raw_note.get("author", {})
+                    raw_resolved_by = raw_note.get("resolved_by")
+                    resolved_by_id: int | None = None
+                    if isinstance(raw_resolved_by, dict):
+                        _rbid = raw_resolved_by.get("id")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]
+                        if isinstance(_rbid, int):
+                            resolved_by_id = _rbid
                     notes.append(
                         DiscussionNote(
                             note_id=raw_note["id"],
@@ -290,6 +296,7 @@ class GitLabClient:
                             created_at=raw_note.get("created_at", ""),
                             is_system=False,  # already filtered above
                             resolved=raw_note.get("resolved"),
+                            resolved_by_id=resolved_by_id,
                             resolvable=raw_note.get("resolvable", False),
                             position=position,
                         )
