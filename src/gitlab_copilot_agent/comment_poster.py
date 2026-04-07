@@ -20,6 +20,32 @@ if TYPE_CHECKING:
 log = structlog.get_logger()
 
 
+def _build_activity_section(
+    posted_inline: int,
+    posted_fallback: int,
+    resolutions: list[Resolution],
+    resolved_count: int,
+) -> str:
+    """Compose a markdown activity summary from posting outcomes and resolution data.
+
+    Returns empty string when all counts are zero (clean review with no prior threads).
+    """
+    lines: list[str] = []
+    total_posted = posted_inline + posted_fallback
+    if total_posted:
+        lines.append(f"- **{total_posted}** new comment{'s' if total_posted != 1 else ''}")
+    if resolved_count:
+        lines.append(f"- **{resolved_count}** thread{'s' if resolved_count != 1 else ''} resolved")
+    partial_count = sum(1 for r in resolutions if r.status == "partial")
+    if partial_count:
+        lines.append(
+            f"- **{partial_count}** partial resolution{'s' if partial_count != 1 else ''}"
+        )
+    if not lines:
+        return ""
+    return "### 📊 Review Activity\n\n" + "\n".join(lines)
+
+
 def _parse_hunk_lines(diff: str, new_path: str) -> set[tuple[str, int]]:
     """Extract valid new_line positions from unified diff hunks.
 
@@ -133,6 +159,11 @@ async def post_review(
             diff_files.add(change.new_path)
             valid_positions |= _parse_hunk_lines(change.diff, change.new_path)
 
+        # Track posting outcomes for activity summary
+        posted_inline = 0
+        posted_fallback = 0
+        skipped = 0
+
         for c in review.comments:
             body = f"**[{c.severity.upper()}]** {c.comment}"
             if c.suggestion is not None:
@@ -143,6 +174,7 @@ async def post_review(
             # Skip comments on files not in the diff entirely
             if c.file not in diff_files:
                 log.info("comment_skipped_not_in_diff", file=c.file, line=c.line)
+                skipped += 1
                 continue
 
             # Validate position before attempting inline comment
@@ -154,8 +186,10 @@ async def post_review(
                 )
                 try:
                     mr.notes.create({"body": f"{body}\n\n`{c.file}:{c.line}`"})
+                    posted_fallback += 1
                 except Exception:
                     log.warning("fallback_note_failed", file=c.file, line=c.line, exc_info=True)
+                    skipped += 1
                 continue
 
             # Position is valid, attempt inline comment
@@ -174,10 +208,12 @@ async def post_review(
                         },
                     }
                 )
+                posted_inline += 1
             except Exception:
                 log.warning("inline_comment_failed", file=c.file, line=c.line, exc_info=True)
                 try:
                     mr.notes.create({"body": f"{body}\n\n`{c.file}:{c.line}`"})
+                    posted_fallback += 1
                 except Exception:
                     log.warning(
                         "fallback_note_also_failed",
@@ -185,8 +221,10 @@ async def post_review(
                         line=c.line,
                         exc_info=True,
                     )
+                    skipped += 1
 
         # Handle resolutions for prior feedback
+        resolved = 0
         if review.resolutions:
             resolved = _handle_resolutions(
                 mr, review.resolutions, resolution_behavior, allowed_discussion_ids
@@ -194,7 +232,13 @@ async def post_review(
             if resolved > 0:
                 log.info("discussions_resolved", count=resolved)
 
+        # Compose summary note with optional activity section
         summary_body = f"## Code Review Summary\n\n{review.summary}"
+        activity = _build_activity_section(
+            posted_inline, posted_fallback, review.resolutions or [], resolved
+        )
+        if activity:
+            summary_body += f"\n\n{activity}"
         if head_sha:
             summary_body += f"\n\n{format_sha_marker(head_sha)}"
         mr.notes.create({"body": summary_body})

@@ -3,7 +3,7 @@
 # Tests: 1. Webhook MR review, 2. Jira polling, 3. @mention thread interaction,
 #        4. GitLab polling, 5. Hot-reload config, 6. Plugin install,
 #        7. Graceful shutdown, 8. Discussion history capture,
-#        9. Incremental review.
+#        9. Incremental review, 10. Discussion summary activity section.
 # Usage: ./tests/e2e/run.sh [agent-url] [mock-gitlab-url] [mock-jira-url]
 set -euo pipefail
 
@@ -447,6 +447,47 @@ poll_until "$MOCK_GITLAB_URL/discussions" \
     "Waiting for incremental review comments" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
 
 echo "PASS: Incremental review posted comments"
+
+# === TEST 10: Discussion Summary — Activity Section (#321 Feature 6) ===
+echo ""; echo "--- Test 10: Discussion Summary Activity Section ---"
+curl -sf -X DELETE "$MOCK_GITLAB_URL/discussions" > /dev/null
+curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/discussions" > /dev/null
+
+echo -n "Sending webhook (MR with comments to trigger activity section)..."
+send_webhook '{
+    "object_kind": "merge_request",
+    "user": {"id": 1, "username": "e2e-test"},
+    "project": {"id": 999, "path_with_namespace": "test/e2e-repo",
+                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+    "object_attributes": {"iid": 610, "title": "Activity section test MR", "description": "Feature 6 E2E",
+        "action": "open", "source_branch": "main", "target_branch": "main",
+        "last_commit": {"id": "f6a610f6a610f6a610f6a610f6a610f6a610f6a6", "message": "test activity section"}, "url": "http://mock/mr/610", "oldrev": null}
+}'
+
+poll_until "$MOCK_GITLAB_URL/discussions" \
+    "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
+    "Waiting for review with activity section" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+
+echo -n "Verifying summary note contains Review Activity section..."
+ACTIVITY_OK=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
+import sys, json
+ds = json.load(sys.stdin)
+# Summary notes are recorded with _type='note' and contain the review summary header
+summary_notes = [d for d in ds if d.get('_type') == 'note' and 'Code Review Summary' in d.get('body', '')]
+has_activity = any('Review Activity' in d.get('body', '') for d in summary_notes)
+print('yes' if has_activity else 'no')")
+[ "$ACTIVITY_OK" = "yes" ] && echo " ✅" || { echo " ❌ (activity section not found in summary note)"; exit 1; }
+
+echo -n "Verifying SHA marker coexists in summary note..."
+SHA_OK=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
+import sys, json
+ds = json.load(sys.stdin)
+summary_notes = [d for d in ds if d.get('_type') == 'note' and 'Code Review Summary' in d.get('body', '')]
+has_marker = any('mr-review-agent: last_reviewed_sha=' in d.get('body', '') for d in summary_notes)
+print('yes' if has_marker else 'no')")
+[ "$SHA_OK" = "yes" ] && echo " ✅" || { echo " ❌ (SHA marker not found in summary note)"; exit 1; }
+
+echo "PASS: Summary note contains activity section and SHA marker"
 
 echo ""; echo "=== ALL E2E TESTS PASSED ==="
 exit 0

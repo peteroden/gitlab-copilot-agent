@@ -468,14 +468,17 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 ---
 
 ### `comment_poster.py`
-**Purpose**: Post review comments to GitLab MR as inline discussions and summary. Handles resolution actions for prior feedback. Embeds SHA marker in summary note for incremental review tracking.
+**Purpose**: Post review comments to GitLab MR as inline discussions and summary. Handles resolution actions for prior feedback. Embeds SHA marker in summary note for incremental review tracking. Composes a structured activity summary (posting outcomes + resolution stats) into the summary note.
 
 **Key Functions**:
-- `post_review(gitlab_client: gl.Gitlab, project_id: int, mr_iid: int, diff_refs: MRDiffRef, review: ParsedReview, changes: list[MRChange], resolution_behavior: str = "suggest", allowed_discussion_ids: frozenset[str] = frozenset(), head_sha: str = "") -> None`: Post inline comments + resolve/acknowledge prior feedback + summary with SHA marker
+- `post_review(gitlab_client: gl.Gitlab, project_id: int, mr_iid: int, diff_refs: MRDiffRef, review: ParsedReview, changes: list[MRChange], resolution_behavior: str = "suggest", allowed_discussion_ids: frozenset[str] = frozenset(), head_sha: str = "") -> None`: Post inline comments + resolve/acknowledge prior feedback + summary with SHA marker and activity section
   - Validates comment positions against diff hunks
   - Falls back to note with file:line context if position invalid
+  - Tracks posting outcomes (inline, fallback, skipped) via counters
   - Processes resolutions via `_handle_resolutions()` before posting summary
+  - When comments or resolutions are nonzero, inserts activity section between summary text and SHA marker
   - When `head_sha` provided, appends `format_sha_marker(head_sha)` to summary note body
+- `_build_activity_section(posted_inline: int, posted_fallback: int, resolutions: list[Resolution], resolved_count: int) -> str`: Compose markdown activity summary from posting outcomes and resolution data. Returns empty string when all counts are zero. Includes: new comments (inline + fallback total), threads resolved, partial resolutions — with singular/plural handling
 - `_handle_resolutions(mr: object, resolutions: list[Resolution], resolution_behavior: str) -> int`: Process resolutions per configured behavior (auto-resolve/suggest/off). Returns count of resolved threads
 - `_parse_hunk_lines(diff: str, new_path: str) -> set[tuple[str, int]]`: Extract valid (file, line) positions from unified diff
 - `_is_valid_position(file: str, line: int, valid_positions: set[tuple[str, int]]) -> bool`: Check if position valid
@@ -789,7 +792,7 @@ All use `frozen=True` config.
 | `jira_client.py` | Clients | 117 | Jira API client |
 | `git_operations.py` | Utils | 194 | Git CLI wrappers |
 | `comment_parser.py` | Utils | 75 | Review parsing |
-| `comment_poster.py` | Utils | 137 | Comment posting |
+| `comment_poster.py` | Utils | 184 | Comment posting + activity summary |
 | `repo_config.py` | Utils | 184 | Repo config discovery |
 | `models.py` | Data | 79 | Webhook models |
 | `jira_models.py` | Data | 87 | Jira API models |
