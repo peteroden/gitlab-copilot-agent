@@ -72,7 +72,7 @@ send_webhook '{
                 "git_http_url": "http://host.k3d.internal:9999/repo.git"},
     "object_attributes": {"iid": 1, "title": "E2E test MR", "description": "E2E test",
         "action": "open", "source_branch": "main", "target_branch": "main",
-        "last_commit": {"id": "abc123", "message": "test"}, "url": "http://mock/mr/1", "oldrev": null}
+        "last_commit": {"id": "abc123abc123abc123abc123abc123abc123abc1", "message": "test"}, "url": "http://mock/mr/1", "oldrev": null}
 }'
 
 poll_until "$MOCK_GITLAB_URL/discussions" \
@@ -253,7 +253,7 @@ send_webhook '{
                 "git_http_url": "http://host.k3d.internal:9999/repo.git"},
     "object_attributes": {"iid": 99, "title": "Plugin test MR", "description": "Verify plugins",
         "action": "open", "source_branch": "main", "target_branch": "main",
-        "last_commit": {"id": "plugin123", "message": "plugin test"}, "url": "http://mock/mr/99", "oldrev": null}
+        "last_commit": {"id": "aaa111bbb222ccc333ddd444eee555fff666aaa1", "message": "plugin test"}, "url": "http://mock/mr/99", "oldrev": null}
 }'
 
 # Wait for the task to complete (review posted)
@@ -350,7 +350,7 @@ send_webhook '{
                 "git_http_url": "http://host.k3d.internal:9999/repo.git"},
     "object_attributes": {"iid": 321, "title": "Discussion history test MR", "description": "Test with prior feedback",
         "action": "open", "source_branch": "main", "target_branch": "main",
-        "last_commit": {"id": "disc321", "message": "test discussions"}, "url": "http://mock/mr/321", "oldrev": null}
+        "last_commit": {"id": "d15c321d15c321d15c321d15c321d15c321d15c3", "message": "test discussions"}, "url": "http://mock/mr/321", "oldrev": null}
 }'
 
 poll_until "$MOCK_GITLAB_URL/discussions" \
