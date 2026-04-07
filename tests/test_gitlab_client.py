@@ -11,6 +11,7 @@ from gitlab_copilot_agent.gitlab_client import (
     GitLabClient,
     MRAuthor,
     MRChange,
+    MRCommit,
     MRDetails,
     MRDiffRef,
     MRListItem,
@@ -486,3 +487,87 @@ async def test_compare_commits_propagates_error(mock_gl: MagicMock) -> None:
 
     with pytest.raises(RuntimeError, match="API failure"):
         await client.compare_commits(PROJECT_ID, COMPARE_FROM_SHA, COMPARE_TO_SHA)
+
+
+# -- MRCommit model tests --
+
+COMMIT_SHA = "abc123def456"
+COMMIT_TITLE = "feat: add new feature"
+COMMIT_MESSAGE = "feat: add new feature\n\nDetailed description of the change."
+
+
+def test_mr_commit_model_validation() -> None:
+    """MRCommit validates correctly from a dict."""
+    data = {"id": COMMIT_SHA, "title": COMMIT_TITLE, "message": COMMIT_MESSAGE}
+    commit = MRCommit.model_validate(data)
+    assert commit.id == COMMIT_SHA
+    assert commit.title == COMMIT_TITLE
+    assert commit.message == COMMIT_MESSAGE
+
+
+def test_mr_commit_extra_fields_ignored() -> None:
+    """MRCommit ignores extra fields from the GitLab API."""
+    data = {
+        "id": COMMIT_SHA,
+        "title": COMMIT_TITLE,
+        "message": COMMIT_MESSAGE,
+        "author_name": "Test User",
+        "authored_date": "2024-01-01T00:00:00Z",
+        "committer_name": "Test User",
+    }
+    commit = MRCommit.model_validate(data)
+    assert commit.id == COMMIT_SHA
+    assert not hasattr(commit, "author_name")
+
+
+def test_mr_commit_frozen() -> None:
+    """MRCommit is immutable (frozen)."""
+    commit = MRCommit(id=COMMIT_SHA, title=COMMIT_TITLE, message=COMMIT_MESSAGE)
+    with pytest.raises(Exception):  # noqa: B017
+        commit.id = "new-sha"  # type: ignore[misc]
+
+
+# -- get_mr_commits tests --
+
+
+async def test_get_mr_commits_success(mock_gl: MagicMock) -> None:
+    """get_mr_commits returns list[MRCommit] from mr.commits()."""
+    commit_obj = MagicMock()
+    commit_obj.attributes = {
+        "id": COMMIT_SHA,
+        "title": COMMIT_TITLE,
+        "message": COMMIT_MESSAGE,
+    }
+    mock_gl.projects.get.return_value.mergerequests.get.return_value.commits.return_value = [
+        commit_obj
+    ]
+
+    client = GitLabClient(GITLAB_URL, GITLAB_TOKEN)
+    result = await client.get_mr_commits(PROJECT_ID, MR_IID)
+
+    assert len(result) == 1
+    assert isinstance(result[0], MRCommit)
+    assert result[0].id == COMMIT_SHA
+    assert result[0].message == COMMIT_MESSAGE
+
+
+async def test_get_mr_commits_empty(mock_gl: MagicMock) -> None:
+    """get_mr_commits returns empty list when no commits."""
+    mock_gl.projects.get.return_value.mergerequests.get.return_value.commits.return_value = []
+
+    client = GitLabClient(GITLAB_URL, GITLAB_TOKEN)
+    result = await client.get_mr_commits(PROJECT_ID, MR_IID)
+
+    assert result == []
+
+
+async def test_get_mr_commits_propagates_error(mock_gl: MagicMock) -> None:
+    """get_mr_commits propagates exceptions from the API."""
+    mock_gl.projects.get.return_value.mergerequests.get.return_value.commits.side_effect = (
+        RuntimeError("API failure")
+    )
+
+    client = GitLabClient(GITLAB_URL, GITLAB_TOKEN)
+
+    with pytest.raises(RuntimeError, match="API failure"):
+        await client.get_mr_commits(PROJECT_ID, MR_IID)

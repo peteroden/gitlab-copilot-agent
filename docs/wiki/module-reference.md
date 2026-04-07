@@ -180,6 +180,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Constants**:
 - `REVIEW_SYSTEM_PROMPT: str`: Review system prompt (re-exported from `prompt_defaults.DEFAULT_REVIEW_PROMPT`)
 - `MAX_DIFF_CHARS: int`: Maximum characters of diff to include in the prompt before truncation
+- `MAX_COMMIT_CHARS: int`: Maximum characters of commit messages to include in the prompt before truncation
 - `_SEVERITY_PREFIX_RE: re.Pattern`: Compiled regex to strip severity prefixes (e.g., `**[WARNING]**`) from comments
 - `_SUGGESTION_BLOCK_RE: re.Pattern`: Compiled regex to strip suggestion code blocks from comments
 - `_PRIOR_FEEDBACK_RULES: str`: Prompt rules instructing the LLM not to duplicate prior feedback
@@ -188,10 +189,10 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `_RESOLUTION_EVAL_INSTRUCTIONS`: Prompt instructions for LLM to evaluate whether prior feedback has been addressed
 
 **Key Models**:
-- `ReviewRequest`: MR metadata (title, description, source/target branches)
+- `ReviewRequest`: MR metadata (title, description, source/target branches, commit_messages)
 
 **Key Functions**:
-- `build_review_prompt(req: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None, is_incremental: bool = False, head_sha: str = "") -> str`: Build user prompt; includes diff inline when available, injects prior unresolved feedback with outdated position annotations, labels incremental diffs, and appends suppressed feedback section for human-resolved/dismissed items
+- `build_review_prompt(req: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None, is_incremental: bool = False, head_sha: str = "") -> str`: Build user prompt; includes commit messages section when available, diff inline when available, injects prior unresolved feedback with outdated position annotations, labels incremental diffs, and appends suppressed feedback section for human-resolved/dismissed items
 - `run_review(executor: TaskExecutor, settings: Settings, repo_path: str, repo_url: str, review_request: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None, head_sha: str = "", is_incremental: bool = False) -> TaskResult`: Execute review task and return structured result. Appends `head_sha` to task ID for dedup
 - `_format_prior_feedback(history: DiscussionHistory, current_head_sha: str = "") -> str`: Render agent's unresolved inline comments as a prompt section. Includes `[discussion: {id}]` tags for LLM resolution referencing. Annotates comments whose `position.head_sha` differs from `current_head_sha` as outdated
 - `_is_human_resolved(disc: Discussion, agent_user_id: int) -> bool`: Returns True when discussion is resolved and the resolver is not the agent (detected via `resolved_by_id` field)
@@ -379,6 +380,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `MRDiffRef`: base_sha, start_sha, head_sha
 - `MRChange`: old_path, new_path, diff, new_file, deleted_file, renamed_file
 - `MRDetails`: title, description, diff_refs, changes
+- `MRCommit`: id, title, message (frozen, extra="ignore")
 
 **Key Protocols**:
 - `GitLabClientProtocol`: Interface for all GitLab operations
@@ -399,6 +401,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - `resolve_discussion(project_id: int, mr_iid: int, discussion_id: str) -> None`: Resolve a discussion thread (sets resolved=True)
   - `reply_to_discussion(project_id: int, mr_iid: int, discussion_id: str, body: str) -> None`: Post a reply to an existing discussion thread
   - `compare_commits(project_id: int, from_sha: str, to_sha: str) -> list[MRChange]`: Compare two commits via the Repository Compare API. Returns file changes between SHAs in MRChange format for incremental diff computation
+  - `get_mr_commits(project_id: int, mr_iid: int) -> list[MRCommit]`: Fetch commits on a merge request for developer intent context
 
 **Internal Imports**: `git_operations`
 

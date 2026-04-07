@@ -4,7 +4,7 @@
 #        4. GitLab polling, 5. Hot-reload config, 6. Plugin install,
 #        7. Graceful shutdown, 8. Discussion history capture,
 #        9. Incremental review, 10. Discussion summary activity section,
-#        11. Manual resolution suppression.
+#        11. Manual resolution suppression, 12. Commit message awareness.
 # Usage: ./tests/e2e/run.sh [agent-url] [mock-gitlab-url] [mock-jira-url]
 set -euo pipefail
 
@@ -541,6 +541,39 @@ print('reraise' if reraise else 'suppressed')")
 
 # Clean up
 curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/discussions" > /dev/null
+
+# === TEST 12: Commit Message Awareness ===
+echo ""; echo "--- Test 12: Commit Message Awareness ---"
+curl -sf -X DELETE "$MOCK_GITLAB_URL/discussions" > /dev/null
+curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/commits" > /dev/null
+
+# Seed commits for the MR
+curl -sf -X POST "$MOCK_GITLAB_URL/mock/commits" \
+    -H "Content-Type: application/json" \
+    -d '[
+        {"id": "aaa111aaa111", "title": "feat: add auth", "message": "feat: add auth\n\nJWT flow."},
+        {"id": "bbb222bbb222", "title": "fix: null check", "message": "fix: null check"}
+    ]' > /dev/null
+
+echo -n "Sending webhook (MR with commits)..."
+send_webhook '{
+    "object_kind": "merge_request",
+    "user": {"id": 1, "username": "e2e-test"},
+    "project": {"id": 999, "path_with_namespace": "test/e2e-repo",
+                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+    "object_attributes": {"iid": 12, "title": "Commit aware MR", "description": "Test commit awareness",
+        "action": "open", "source_branch": "main", "target_branch": "main",
+        "last_commit": {"id": "ccc333ccc333ccc333ccc333ccc333ccc333ccc3", "message": "test commits"}, "url": "http://mock/mr/12", "oldrev": null}
+}'
+
+poll_until "$MOCK_GITLAB_URL/discussions" \
+    "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
+    "Waiting for review with commit context" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+
+echo "PASS: Review completed with commit awareness"
+
+# Clean up seeded commits
+curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/commits" > /dev/null
 
 echo ""; echo "=== ALL E2E TESTS PASSED ==="
 exit 0

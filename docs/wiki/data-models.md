@@ -191,6 +191,19 @@ All models use `extra="ignore"` to allow additional API fields.
 
 ---
 
+### `MRCommit`
+**Purpose**: A single commit on a merge request, used for developer intent context.
+
+**Config**: `frozen=True`, `extra="ignore"` (immutable, extra fields ignored)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `str` | Full commit SHA |
+| `title` | `str` | First line of the commit message |
+| `message` | `str` | Full commit message body |
+
+---
+
 ## Discussion Models (`discussion_models.py`)
 
 Models for MR discussion history, shared by review and discussion flows. All models use `frozen=True` (immutable).
@@ -461,6 +474,7 @@ See [configuration-reference.md](configuration-reference.md) for all fields.
 | `description` | `str \| None` | MR description |
 | `source_branch` | `str` | Source branch name |
 | `target_branch` | `str` | Target branch name |
+| `commit_messages` | `list[str]` | Commit messages for developer intent context (default: `[]`) |
 
 ---
 
@@ -564,6 +578,7 @@ graph TB
         MRD[MRDetails]
         MRD --> MDR[MRDiffRef]
         MRD --> MRC[MRChange]
+        MRCO[MRCommit]
         MRL[MRListItem]
         MRL --> MRA2[MRAuthor]
         NLI[NoteListItem]

@@ -11,7 +11,7 @@ from gitlab_copilot_agent.discussion_models import (
     DiscussionHistory,
     DiscussionNote,
 )
-from gitlab_copilot_agent.gitlab_client import MRChange, MRDetails
+from gitlab_copilot_agent.gitlab_client import MRChange, MRCommit, MRDetails
 from gitlab_copilot_agent.orchestrator import handle_review
 from gitlab_copilot_agent.task_executor import ReviewResult
 from tests.conftest import (
@@ -46,6 +46,7 @@ def _setup_mocks(
         )
     )
     mock_gl_instance.list_mr_discussions = AsyncMock(return_value=[])
+    mock_gl_instance.get_mr_commits = AsyncMock(return_value=[])
     mock_run_review.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
     return mock_gl_instance  # type: ignore[no-any-return]
 
@@ -245,6 +246,7 @@ async def test_discussion_threads_flow_through_pipeline(
     """Actual discussion data (threads, authors, positions) is preserved through the pipeline."""
     mock_gl_instance = _setup_mocks(mock_client_class, mock_run_review)
     mock_gl_instance.list_mr_discussions = AsyncMock(return_value=_SAMPLE_DISCUSSIONS)
+    mock_gl_instance.get_mr_commits = AsyncMock(return_value=[])
 
     mock_registry = AsyncMock()
     mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
@@ -336,6 +338,7 @@ async def test_prior_feedback_rendered_in_prompt(
         )
     )
     mock_gl_instance.list_mr_discussions = AsyncMock(return_value=_SAMPLE_DISCUSSIONS)
+    mock_gl_instance.get_mr_commits = AsyncMock(return_value=[])
 
     mock_executor = AsyncMock()
     mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
@@ -417,6 +420,7 @@ async def test_incremental_review_with_marker(
     mock_gl_instance.list_mr_discussions = AsyncMock(
         return_value=[_make_marker_discussion(_MARKER_SHA)]
     )
+    mock_gl_instance.get_mr_commits = AsyncMock(return_value=[])
     # compare_commits returns incremental changes
     mock_gl_instance.compare_commits = AsyncMock(
         return_value=[
@@ -477,6 +481,7 @@ async def test_incremental_review_compare_fails_fallback(
     mock_gl_instance.list_mr_discussions = AsyncMock(
         return_value=[_make_marker_discussion(_MARKER_SHA)]
     )
+    mock_gl_instance.get_mr_commits = AsyncMock(return_value=[])
     mock_gl_instance.compare_commits = AsyncMock(side_effect=RuntimeError("Compare API error"))
 
     mock_executor = AsyncMock()
@@ -592,6 +597,7 @@ async def test_suppressed_feedback_rendered_in_prompt(
     mock_gl_instance.list_mr_discussions = AsyncMock(
         return_value=[_HUMAN_RESOLVED_DISCUSSION, _DISMISSED_DISCUSSION]
     )
+    mock_gl_instance.get_mr_commits = AsyncMock(return_value=[])
 
     mock_executor = AsyncMock()
     mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
@@ -615,3 +621,89 @@ async def test_suppressed_feedback_rendered_in_prompt(
     assert "[DISMISSED]" in prompt
     assert "Consider adding a null check here." in prompt
     assert "Potential security issue with user input." in prompt
+
+
+# -- Commit message awareness integration tests --
+
+_SAMPLE_COMMITS = [
+    MRCommit(id="aaa111", title="feat: add auth", message="feat: add auth\n\nJWT flow."),
+    MRCommit(id="bbb222", title="fix: null check", message="fix: null check"),
+]
+
+
+@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
+@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+async def test_commit_messages_in_review_prompt(
+    mock_gl_class: MagicMock,
+    mock_client_class: MagicMock,
+    mock_post_review: AsyncMock,
+) -> None:
+    """Commit messages flow through orchestrator into the review prompt."""
+    mock_gl_instance = mock_client_class.return_value
+    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
+    mock_gl_instance.cleanup = AsyncMock()
+    mock_gl_instance.get_mr_details = AsyncMock(
+        return_value=MRDetails(
+            title="Add feature",
+            description="Implements X",
+            diff_refs=DIFF_REFS,
+            changes=make_mr_changes(),
+        )
+    )
+    mock_gl_instance.list_mr_discussions = AsyncMock(return_value=[])
+    mock_gl_instance.get_mr_commits = AsyncMock(return_value=_SAMPLE_COMMITS)
+
+    mock_executor = AsyncMock()
+    mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
+
+    await handle_review(
+        make_settings(),
+        make_webhook_payload(),
+        mock_executor,
+    )
+
+    task_params = mock_executor.execute.call_args[0][0]
+    prompt = task_params.user_prompt
+
+    assert "## Commit Messages" in prompt
+    assert "feat: add auth" in prompt
+    assert "fix: null check" in prompt
+
+
+@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
+@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+async def test_commit_fetch_failure_graceful_degradation(
+    mock_gl_class: MagicMock,
+    mock_client_class: MagicMock,
+    mock_post_review: AsyncMock,
+) -> None:
+    """get_mr_commits failure logs warning but review proceeds without commits."""
+    mock_gl_instance = mock_client_class.return_value
+    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
+    mock_gl_instance.cleanup = AsyncMock()
+    mock_gl_instance.get_mr_details = AsyncMock(
+        return_value=MRDetails(
+            title="Add feature",
+            description="Implements X",
+            diff_refs=DIFF_REFS,
+            changes=make_mr_changes(),
+        )
+    )
+    mock_gl_instance.list_mr_discussions = AsyncMock(return_value=[])
+    mock_gl_instance.get_mr_commits = AsyncMock(side_effect=RuntimeError("Commits API down"))
+
+    mock_executor = AsyncMock()
+    mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
+
+    await handle_review(
+        make_settings(),
+        make_webhook_payload(),
+        mock_executor,
+    )
+
+    # Review still ran — prompt should NOT contain commit section
+    task_params = mock_executor.execute.call_args[0][0]
+    prompt = task_params.user_prompt
+    assert "## Commit Messages" not in prompt

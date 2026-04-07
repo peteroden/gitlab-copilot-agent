@@ -10,6 +10,7 @@ from gitlab_copilot_agent.discussion_models import (
 )
 from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.review_engine import (
+    MAX_COMMIT_CHARS,
     ReviewRequest,
     _format_prior_feedback,
     _format_suppressed_feedback,
@@ -77,12 +78,13 @@ def _make_history(
     )
 
 
-def _make_request() -> ReviewRequest:
+def _make_request(commit_messages: list[str] | None = None) -> ReviewRequest:
     return ReviewRequest(
         title="Add feature X",
         description="Implements feature X",
         source_branch="feature/x",
         target_branch="main",
+        commit_messages=commit_messages or [],
     )
 
 
@@ -723,3 +725,62 @@ def test_build_review_prompt_omits_suppressed_when_empty() -> None:
     )
 
     assert "Suppressed Feedback" not in prompt
+
+
+# -- Commit message prompt tests --
+
+SAMPLE_COMMIT_MESSAGES = [
+    "feat: add user authentication\n\nImplement JWT-based auth flow.",
+    "fix: handle null pointer in parser",
+    "chore: update dependencies",
+]
+
+
+def test_build_review_prompt_includes_commit_messages() -> None:
+    """Commit messages appear in the prompt when provided."""
+    req = _make_request(commit_messages=SAMPLE_COMMIT_MESSAGES)
+    prompt = build_review_prompt(req, diff_text="some diff")
+
+    assert "## Commit Messages" in prompt
+    assert "feat: add user authentication" in prompt
+    assert "fix: handle null pointer in parser" in prompt
+    assert "chore: update dependencies" in prompt
+
+
+def test_build_review_prompt_omits_commit_section_when_empty() -> None:
+    """No commit section when commit_messages is empty."""
+    prompt = build_review_prompt(_make_request(), diff_text="some diff")
+
+    assert "## Commit Messages" not in prompt
+
+
+def test_build_review_prompt_truncates_commit_messages() -> None:
+    """Commit messages are truncated at MAX_COMMIT_CHARS."""
+    # Create messages that exceed the limit
+    long_msg = "x" * 500
+    many_messages = [f"commit {i}: {long_msg}" for i in range(20)]
+    req = _make_request(commit_messages=many_messages)
+
+    prompt = build_review_prompt(req, diff_text="some diff")
+
+    assert "## Commit Messages" in prompt
+    assert "truncated" in prompt
+    # The commit section should not exceed MAX_COMMIT_CHARS by much
+    commit_start = prompt.index("## Commit Messages")
+    # Find the end — next section header or end of string
+    next_section = prompt.find("## ", commit_start + 1)
+    if next_section == -1:
+        next_section = len(prompt)
+    commit_section = prompt[commit_start:next_section]
+    # Allow for header + truncation message overhead
+    assert len(commit_section) < MAX_COMMIT_CHARS + 500
+
+
+def test_build_review_prompt_commit_messages_before_diff() -> None:
+    """Commit messages section appears before the diff section."""
+    req = _make_request(commit_messages=["feat: something"])
+    prompt = build_review_prompt(req, diff_text="some diff")
+
+    commit_pos = prompt.index("## Commit Messages")
+    diff_pos = prompt.index("## Diff")
+    assert commit_pos < diff_pos
