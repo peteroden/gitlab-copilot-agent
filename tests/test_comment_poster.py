@@ -3,7 +3,11 @@
 from unittest.mock import MagicMock
 
 from gitlab_copilot_agent.comment_parser import ParsedReview, Resolution, ReviewComment
-from gitlab_copilot_agent.comment_poster import _handle_resolutions, post_review
+from gitlab_copilot_agent.comment_poster import (
+    _build_activity_section,
+    _handle_resolutions,
+    post_review,
+)
 from tests.conftest import DIFF_REFS, MR_IID, PROJECT_ID, make_mr_changes
 
 
@@ -438,3 +442,181 @@ async def test_summary_note_no_marker_when_empty_sha() -> None:
     mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
     body = mr.notes.create.call_args[0][0]["body"]
     assert "<!-- mr-review-agent:" not in body
+
+
+# -- Activity section tests --
+
+ACTIVITY_HEADER = "### 📊 Review Activity"
+
+
+def test_build_activity_section_all_zero() -> None:
+    """All counts zero → empty string."""
+    result = _build_activity_section(0, 0, [], 0)
+    assert result == ""
+
+
+def test_build_activity_section_comments_only() -> None:
+    """Only new comments → single bullet with count."""
+    result = _build_activity_section(3, 0, [], 0)
+    assert ACTIVITY_HEADER in result
+    assert "- **3** new comments" in result
+    assert "resolved" not in result
+    assert "partial" not in result
+
+
+def test_build_activity_section_single_comment() -> None:
+    """Singular form for 1 comment."""
+    result = _build_activity_section(1, 0, [], 0)
+    assert "- **1** new comment" in result
+    assert "comments" not in result
+
+
+def test_build_activity_section_inline_plus_fallback() -> None:
+    """Inline + fallback counts are summed for total."""
+    result = _build_activity_section(2, 1, [], 0)
+    assert "- **3** new comments" in result
+
+
+def test_build_activity_section_resolved_only() -> None:
+    """Only resolved threads → single bullet."""
+    result = _build_activity_section(0, 0, [], 5)
+    assert ACTIVITY_HEADER in result
+    assert "- **5** threads resolved" in result
+    assert "new comment" not in result
+
+
+def test_build_activity_section_single_resolved() -> None:
+    """Singular form for 1 thread resolved."""
+    result = _build_activity_section(0, 0, [], 1)
+    assert "- **1** thread resolved" in result
+    assert "threads" not in result
+
+
+def test_build_activity_section_partial_only() -> None:
+    """Only partial resolutions → single bullet."""
+    resolutions = [
+        _make_resolution(status="partial", message="Partially fixed"),
+        _make_resolution(discussion_id=DISC_ID_TWO, status="partial", message="Also partial"),
+    ]
+    result = _build_activity_section(0, 0, resolutions, 0)
+    assert ACTIVITY_HEADER in result
+    assert "- **2** partial resolutions" in result
+
+
+def test_build_activity_section_single_partial() -> None:
+    """Singular form for 1 partial resolution."""
+    resolutions = [_make_resolution(status="partial", message="Partial")]
+    result = _build_activity_section(0, 0, resolutions, 0)
+    assert "- **1** partial resolution" in result
+    assert "resolutions" not in result
+
+
+def test_build_activity_section_all_nonzero() -> None:
+    """All counts nonzero → all bullets present."""
+    resolutions = [
+        _make_resolution(status="partial", message="Partial"),
+        _make_resolution(discussion_id=DISC_ID_TWO, status="resolved", message="Fixed"),
+    ]
+    result = _build_activity_section(2, 1, resolutions, 3)
+    assert ACTIVITY_HEADER in result
+    assert "- **3** new comments" in result
+    assert "- **3** threads resolved" in result
+    assert "- **1** partial resolution" in result
+
+
+def test_build_activity_section_ignores_non_partial_resolutions() -> None:
+    """Only 'partial' status counted; resolved and not_addressed are not partial."""
+    resolutions = [
+        _make_resolution(status="resolved", message="Fixed"),
+        _make_resolution(discussion_id=DISC_ID_TWO, status="not_addressed", message="Nope"),
+    ]
+    result = _build_activity_section(0, 0, resolutions, 0)
+    assert result == ""
+
+
+# -- Summary composition with activity section --
+
+
+async def test_summary_contains_activity_section_with_comments() -> None:
+    """Summary note includes activity section when comments are posted."""
+    gl = MagicMock()
+    review = ParsedReview(
+        comments=[ReviewComment(file="src/main.py", line=2, severity="error", comment="Bug")],
+        summary="Issues found.",
+    )
+    await post_review(
+        gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes(), head_sha=SHA_MARKER_VALUE
+    )
+
+    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+    body = mr.notes.create.call_args[0][0]["body"]
+    # Activity section between summary and SHA marker
+    assert "Issues found." in body
+    assert ACTIVITY_HEADER in body
+    assert SHA_MARKER_COMMENT in body
+    # Verify order: summary → activity → sha marker
+    summary_pos = body.index("Issues found.")
+    activity_pos = body.index(ACTIVITY_HEADER)
+    marker_pos = body.index(SHA_MARKER_COMMENT)
+    assert summary_pos < activity_pos < marker_pos
+
+
+async def test_summary_omits_activity_section_when_zero() -> None:
+    """Summary note has no activity section when no comments and no resolutions."""
+    gl = MagicMock()
+    review = ParsedReview(comments=[], summary="All good.")
+    await post_review(
+        gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes(), head_sha=SHA_MARKER_VALUE
+    )
+
+    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+    body = mr.notes.create.call_args[0][0]["body"]
+    assert ACTIVITY_HEADER not in body
+    assert "All good." in body
+    assert SHA_MARKER_COMMENT in body
+
+
+async def test_summary_sha_marker_extractable_with_activity_section() -> None:
+    """SHA marker remains extractable even when activity section is present."""
+    from gitlab_copilot_agent.incremental import _SHA_MARKER_RE
+
+    gl = MagicMock()
+    review = ParsedReview(
+        comments=[ReviewComment(file="src/main.py", line=2, severity="error", comment="Bug")],
+        summary="Review.",
+    )
+    await post_review(
+        gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes(), head_sha=SHA_MARKER_VALUE
+    )
+
+    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+    body = mr.notes.create.call_args[0][0]["body"]
+    match = _SHA_MARKER_RE.search(body)
+    assert match is not None
+    assert match.group(1) == SHA_MARKER_VALUE
+
+
+async def test_summary_activity_section_with_resolutions() -> None:
+    """Activity section includes resolution stats when resolutions present."""
+    gl = MagicMock()
+    mr_mock = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+
+    resolutions = [_make_resolution(status="resolved")]
+    review = ParsedReview(comments=[], summary="Review.", resolutions=resolutions)
+    await post_review(
+        gl,
+        PROJECT_ID,
+        MR_IID,
+        DIFF_REFS,
+        review,
+        make_mr_changes(),
+        resolution_behavior="auto-resolve",
+        allowed_discussion_ids=frozenset({DISC_ID_ONE}),
+        head_sha=SHA_MARKER_VALUE,
+    )
+
+    body = mr_mock.notes.create.call_args[0][0]["body"]
+    assert ACTIVITY_HEADER in body
+    assert "thread" in body
+    assert "resolved" in body
+    assert SHA_MARKER_COMMENT in body
