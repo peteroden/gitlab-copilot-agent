@@ -106,6 +106,9 @@ class GitLabClientProtocol(Protocol):
     async def reply_to_discussion(
         self, project_id: int, mr_iid: int, discussion_id: str, body: str
     ) -> None: ...
+    async def compare_commits(
+        self, project_id: int, from_sha: str, to_sha: str
+    ) -> list[MRChange]: ...
 
 
 class GitLabClient:
@@ -274,6 +277,7 @@ class GitLabClient:
                             "old_path": raw_pos.get("old_path"),  # pyright: ignore[reportUnknownMemberType]
                             "new_line": raw_pos.get("new_line"),  # pyright: ignore[reportUnknownMemberType]
                             "old_line": raw_pos.get("old_line"),  # pyright: ignore[reportUnknownMemberType]
+                            "head_sha": raw_pos.get("head_sha"),  # pyright: ignore[reportUnknownMemberType]
                         }
 
                     author = raw_note.get("author", {})
@@ -352,3 +356,24 @@ class GitLabClient:
             disc.notes.create({"body": body})
 
         await asyncio.to_thread(_reply)
+
+    async def compare_commits(self, project_id: int, from_sha: str, to_sha: str) -> list[MRChange]:
+        """Compare two commits via the Repository Compare API.
+
+        Returns file changes between from_sha and to_sha in the same
+        shape as MR changes, enabling reuse of existing diff assembly.
+        """
+
+        def _compare() -> list[MRChange]:
+            project = self._gl.projects.get(project_id)
+            result: dict[str, object] = project.repository_compare(from_sha, to_sha)  # pyright: ignore[reportAssignmentType]
+            raw_diffs = result.get("diffs", [])
+            if not isinstance(raw_diffs, list):
+                return []
+            changes: list[MRChange] = []
+            for d in raw_diffs:  # pyright: ignore[reportUnknownVariableType]
+                if isinstance(d, dict):
+                    changes.append(MRChange.model_validate(d))
+            return changes
+
+        return await asyncio.to_thread(_compare)

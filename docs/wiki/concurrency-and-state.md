@@ -261,6 +261,28 @@ await dedup.mark_seen(key, ttl_seconds=86400)
 
 ---
 
+### 4. Incremental Review SHA Marker
+
+**Key**: Hidden HTML comment in summary note body (`<!-- mr-review-agent: last_reviewed_sha={sha} -->`)
+
+**Storage**: GitLab overview note (persisted by GitLab, not in-memory)
+
+**Purpose**: Track the last-reviewed commit SHA for incremental diff computation.
+
+**Mechanism**:
+1. After each review, the SHA marker is embedded in the summary note via `comment_poster.py`
+2. On subsequent reviews, `orchestrator.py` calls `extract_last_reviewed_sha()` to find the marker
+3. If found, the Compare API computes the diff between the marker SHA and current head SHA
+4. If not found (first review, deploy, or failed post), falls back to full MR diff
+
+**Self-Healing**: Absent marker → full review (correct behavior for first review or post-deploy).
+
+**Not a Dedup Mechanism**: The SHA marker does not prevent duplicate reviews — that's handled by `ReviewedMRTracker` and `DeduplicationStore`. The marker only controls diff scope.
+
+See ADR-0009 for the design decision.
+
+---
+
 ## ReviewedMRTracker
 
 **Purpose**: In-memory tracker for reviewed (project_id, mr_iid, head_sha) tuples.

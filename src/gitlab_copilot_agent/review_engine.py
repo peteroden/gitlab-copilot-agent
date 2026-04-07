@@ -79,13 +79,15 @@ def _strip_comment_formatting(body: str) -> str:
     return body.strip()
 
 
-def _format_prior_feedback(history: DiscussionHistory) -> str:
+def _format_prior_feedback(history: DiscussionHistory, current_head_sha: str = "") -> str:
     """Render the agent's unresolved inline comments as a prompt section.
 
     Returns the complete section (header + grouped comments + rules) or an
     empty string when no qualifying comments exist.
     """
-    comments_by_file: dict[str, list[tuple[int | None, str, str]]] = defaultdict(list)
+    comments_by_file: dict[str, list[tuple[int | None, str, str, dict[str, object] | None]]] = (
+        defaultdict(list)
+    )
 
     for disc in history.discussions:
         if disc.is_resolved or not disc.is_inline:
@@ -112,7 +114,9 @@ def _format_prior_feedback(history: DiscussionHistory) -> str:
             except ValueError:
                 line_num = None
         body = _strip_comment_formatting(first_note.body)
-        comments_by_file[file_path].append((line_num, body, disc.discussion_id))
+        comments_by_file[file_path].append(
+            (line_num, body, disc.discussion_id, first_note.position)
+        )
 
     if not comments_by_file:
         return ""
@@ -120,10 +124,18 @@ def _format_prior_feedback(history: DiscussionHistory) -> str:
     lines = ["## Agent's Prior Feedback (Unresolved)\n"]
     for file_path in sorted(comments_by_file):
         lines.append(f"### {file_path}")
-        for line_num, body, disc_id in sorted(
+        for line_num, body, disc_id, position in sorted(
             comments_by_file[file_path], key=lambda c: (c[0] is None, c[0] or 0)
         ):
+            position_head = position.get("head_sha") if position else None
+            is_outdated = (
+                current_head_sha
+                and isinstance(position_head, str)
+                and position_head != current_head_sha
+            )
             prefix = f"Line {line_num}" if line_num is not None else "General"
+            if is_outdated:
+                prefix += " (outdated position — line may have shifted)"
             lines.append(f"- {prefix}: {body} [discussion: {disc_id}]")
         lines.append("")  # blank line between files
 
@@ -135,6 +147,8 @@ def build_review_prompt(
     req: ReviewRequest,
     diff_text: str | None = None,
     discussion_history: DiscussionHistory | None = None,
+    is_incremental: bool = False,
+    head_sha: str = "",
 ) -> str:
     """Build the user prompt — includes the diff directly when available."""
     prompt = (
@@ -152,7 +166,15 @@ def build_review_prompt(
                 max_len=MAX_DIFF_CHARS,
             )
             diff_text = diff_text[:MAX_DIFF_CHARS] + "\n... (diff truncated)"
-        prompt += f"## Diff\n\n```diff\n{diff_text}\n```\n\n"
+        if is_incremental:
+            prompt += (
+                "## Incremental Diff (changes since last review)\n\n"
+                "You are reviewing ONLY the new changes since the last review. "
+                "Prior feedback on unchanged code is listed separately below.\n\n"
+            )
+        else:
+            prompt += "## Diff\n\n"
+        prompt += f"```diff\n{diff_text}\n```\n\n"
         prompt += "Review ONLY the changes shown in the diff above."
     else:
         prompt += (
@@ -161,7 +183,7 @@ def build_review_prompt(
         )
 
     if discussion_history:
-        prior_section = _format_prior_feedback(discussion_history)
+        prior_section = _format_prior_feedback(discussion_history, current_head_sha=head_sha)
         if prior_section:
             prompt += f"\n\n{prior_section}"
             prompt += f"\n\n{_RESOLUTION_EVAL_INSTRUCTIONS}"
@@ -177,6 +199,7 @@ async def run_review(
     diff_text: str | None = None,
     discussion_history: DiscussionHistory | None = None,
     head_sha: str = "",
+    is_incremental: bool = False,
 ) -> TaskResult:
     """Run a Copilot agent review and return the structured result."""
     task_id = f"review-{review_request.source_branch}"
@@ -188,7 +211,13 @@ async def run_review(
         repo_url=repo_url,
         branch=review_request.source_branch,
         system_prompt=get_prompt(settings, "review"),
-        user_prompt=build_review_prompt(review_request, diff_text, discussion_history),
+        user_prompt=build_review_prompt(
+            review_request,
+            diff_text,
+            discussion_history,
+            is_incremental=is_incremental,
+            head_sha=head_sha,
+        ),
         settings=settings,
         repo_path=repo_path,
     )

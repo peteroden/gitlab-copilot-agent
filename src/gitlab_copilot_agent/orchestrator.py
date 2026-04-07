@@ -18,6 +18,7 @@ from gitlab_copilot_agent.discussion_models import DiscussionHistory
 from gitlab_copilot_agent.error_messages import user_error_message
 from gitlab_copilot_agent.git_operations import validate_clone_url_host
 from gitlab_copilot_agent.gitlab_client import GitLabClient
+from gitlab_copilot_agent.incremental import extract_last_reviewed_sha
 from gitlab_copilot_agent.metrics import reviews_duration, reviews_total
 from gitlab_copilot_agent.review_engine import ReviewRequest, run_review
 from gitlab_copilot_agent.task_executor import TaskExecutionError
@@ -92,10 +93,36 @@ async def handle_review(
             else:
                 bound_log.debug("discussion_history_skipped", reason="no_credential_registry")
 
-            # Build diff text from MR changes so the LLM reviews only the diff
-            diff_text = "\n".join(
-                f"--- a/{c.old_path}\n+++ b/{c.new_path}\n{c.diff}" for c in mr_details.changes
-            )
+            # Build diff text — incremental when a prior review marker exists
+            head_sha = mr.last_commit.id
+            is_incremental = False
+            diff_text = ""
+            last_reviewed_sha = extract_last_reviewed_sha(discussion_history)
+
+            if last_reviewed_sha and last_reviewed_sha != head_sha:
+                try:
+                    incremental_changes = await gl_client.compare_commits(
+                        project.id, last_reviewed_sha, head_sha
+                    )
+                    if incremental_changes:
+                        diff_text = "\n".join(
+                            f"--- a/{c.old_path}\n+++ b/{c.new_path}\n{c.diff}"
+                            for c in incremental_changes
+                        )
+                        is_incremental = True
+                        bound_log.info(
+                            "incremental_review",
+                            from_sha=last_reviewed_sha[:12],
+                            to_sha=head_sha[:12],
+                            files_changed=len(incremental_changes),
+                        )
+                except Exception:
+                    bound_log.warning("incremental_diff_failed", exc_info=True)
+
+            if not is_incremental:
+                diff_text = "\n".join(
+                    f"--- a/{c.old_path}\n+++ b/{c.new_path}\n{c.diff}" for c in mr_details.changes
+                )
 
             review_req = ReviewRequest(
                 title=mr.title,
@@ -112,7 +139,8 @@ async def handle_review(
                 review_req,
                 diff_text=diff_text,
                 discussion_history=discussion_history,
-                head_sha=mr.last_commit.id,
+                head_sha=head_sha,
+                is_incremental=is_incremental,
             )
             parsed = parse_review(raw_result.summary)
 
@@ -145,6 +173,7 @@ async def handle_review(
                 mr_details.changes,
                 resolution_behavior=resolution_behavior,
                 allowed_discussion_ids=allowed_discussion_ids,
+                head_sha=head_sha,
             )
             bound_log.info("comments_posted")
             outcome = "success"

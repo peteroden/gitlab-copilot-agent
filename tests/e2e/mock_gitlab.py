@@ -29,6 +29,7 @@ pushes: list[dict] = []
 _open_mrs: list[dict] = []
 _mr_notes: dict[int, list[dict]] = {}  # mr_iid → notes list
 _seeded_discussions: list[dict] = []  # pre-seeded via POST /mock/discussions
+_compare_diffs: list[dict] = []  # controllable diffs for compare endpoint
 
 # Bare git repo created at startup
 _bare_repo: Path | None = None
@@ -91,6 +92,31 @@ async def get_mr(project_id: int, mr_iid: int) -> dict:
 async def get_mr_changes(project_id: int, mr_iid: int) -> dict:
     mr = await get_mr(project_id, mr_iid)
     return mr
+
+
+@app.get("/api/v4/projects/{project_id}/repository/compare")
+async def compare_commits(project_id: int, request: Request) -> dict:
+    """Mock Repository Compare API for incremental review."""
+    from_sha = request.query_params.get("from", "")
+    to_sha = request.query_params.get("to", "")
+    return {
+        "commit": {"id": to_sha},
+        "commits": [],
+        "diffs": _compare_diffs
+        if _compare_diffs
+        else [
+            {
+                "old_path": SAMPLE_FILE,
+                "new_path": SAMPLE_FILE,
+                "diff": SAMPLE_DIFF,
+                "new_file": False,
+                "deleted_file": False,
+                "renamed_file": False,
+            }
+        ],
+        "compare_timeout": False,
+        "compare_same_ref": from_sha == to_sha,
+    }
 
 
 @app.get("/api/v4/projects/{project_id}/merge_requests/{mr_iid}/discussions")
@@ -301,6 +327,21 @@ async def seed_discussions(request: Request) -> dict:
 async def clear_seeded_discussions() -> dict:
     """Clear pre-seeded discussions."""
     _seeded_discussions.clear()
+    return {"cleared": True}
+
+
+@app.post("/mock/compare-diffs")
+async def set_compare_diffs(request: Request) -> dict:
+    """Control what the compare endpoint returns."""
+    body = await request.json()
+    _compare_diffs.clear()
+    _compare_diffs.extend(body if isinstance(body, list) else [body])
+    return {"set": len(_compare_diffs)}
+
+
+@app.delete("/mock/compare-diffs")
+async def clear_compare_diffs() -> dict:
+    _compare_diffs.clear()
     return {"cleared": True}
 
 

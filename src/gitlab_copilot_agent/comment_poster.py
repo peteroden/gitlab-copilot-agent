@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from gitlab_copilot_agent.incremental import format_sha_marker
+
 if TYPE_CHECKING:
     import gitlab as gl
 
@@ -112,6 +114,7 @@ async def post_review(
     changes: list[MRChange],
     resolution_behavior: ResolutionBehavior = "suggest",
     allowed_discussion_ids: frozenset[str] = frozenset(),
+    head_sha: str = "",
 ) -> None:
     """Post inline comments and summary note to a GitLab MR.
 
@@ -191,6 +194,9 @@ async def post_review(
             if resolved > 0:
                 log.info("discussions_resolved", count=resolved)
 
-        mr.notes.create({"body": f"## Code Review Summary\n\n{review.summary}"})
+        summary_body = f"## Code Review Summary\n\n{review.summary}"
+        if head_sha:
+            summary_body += f"\n\n{format_sha_marker(head_sha)}"
+        mr.notes.create({"body": summary_body})
 
     await asyncio.to_thread(_post)

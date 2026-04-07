@@ -393,3 +393,48 @@ def test_handle_resolutions_empty_allowlist_blocks_all() -> None:
 
     assert result == 0
     mr.discussions.get.assert_not_called()
+
+
+# -- SHA marker embedding tests --
+
+SHA_MARKER_VALUE = "abc123def"
+SHA_MARKER_COMMENT = f"<!-- mr-review-agent: last_reviewed_sha={SHA_MARKER_VALUE} -->"
+
+
+async def test_summary_note_contains_sha_marker() -> None:
+    """post_review with head_sha embeds the SHA marker in the summary note."""
+    gl = MagicMock()
+    review = ParsedReview(comments=[], summary="Review complete.")
+    await post_review(
+        gl,
+        PROJECT_ID,
+        MR_IID,
+        DIFF_REFS,
+        review,
+        make_mr_changes(),
+        head_sha=SHA_MARKER_VALUE,
+    )
+
+    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+    assert mr.notes.create.call_count == 1
+    body = mr.notes.create.call_args[0][0]["body"]
+    assert SHA_MARKER_COMMENT in body
+
+
+async def test_summary_note_no_marker_when_empty_sha() -> None:
+    """post_review with empty head_sha does not embed a SHA marker."""
+    gl = MagicMock()
+    review = ParsedReview(comments=[], summary="Review complete.")
+    await post_review(
+        gl,
+        PROJECT_ID,
+        MR_IID,
+        DIFF_REFS,
+        review,
+        make_mr_changes(),
+        head_sha="",
+    )
+
+    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+    body = mr.notes.create.call_args[0][0]["body"]
+    assert "<!-- mr-review-agent:" not in body
