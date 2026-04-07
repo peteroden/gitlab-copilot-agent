@@ -539,3 +539,26 @@ async def test_is_agent_directed_thread_participation(
     ]
     with patch("gitlab_copilot_agent.webhook.GitLabClient", return_value=mock_gl):
         assert await _is_agent_directed(payload, identity, request) is expected
+
+
+# -- Reopen event tests --
+
+
+async def test_reopen_triggers_review(client: AsyncClient) -> None:
+    """Webhook with action='reopen' is queued for review."""
+    payload = make_mr_payload(action="reopen")
+    resp = await client.post("/webhook", json=payload, headers=HEADERS)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "queued"}
+
+
+async def test_reopen_no_oldrev_check(client: AsyncClient) -> None:
+    """Reopen with oldrev=None is still queued (not ignored like update)."""
+    payload = make_mr_payload(action="reopen")
+    # Ensure no oldrev key in the payload
+    payload["object_attributes"].pop("oldrev", None)
+    resp = await client.post("/webhook", json=payload, headers=HEADERS)
+
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "queued"}

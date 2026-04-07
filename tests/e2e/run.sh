@@ -2,7 +2,8 @@
 # E2E test: deploy agent to k3d, run all test flows against mock services.
 # Tests: 1. Webhook MR review, 2. Jira polling, 3. @mention thread interaction,
 #        4. GitLab polling, 5. Hot-reload config, 6. Plugin install,
-#        7. Graceful shutdown, 8. Discussion history capture.
+#        7. Graceful shutdown, 8. Discussion history capture,
+#        9. Incremental review.
 # Usage: ./tests/e2e/run.sh [agent-url] [mock-gitlab-url] [mock-jira-url]
 set -euo pipefail
 
@@ -366,6 +367,93 @@ print('yes' if has_review else 'no')")
 
 # Clean up seeded discussions
 curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/discussions" > /dev/null
+
+# === TEST 9: Incremental Review with SHA Marker ===
+echo ""; echo "--- Test 9: Incremental Review ---"
+curl -sf "$MOCK_GITLAB_URL/discussions" -X DELETE > /dev/null
+curl -sf "$MOCK_GITLAB_URL/mock/discussions" -X DELETE > /dev/null
+curl -sf "$MOCK_GITLAB_URL/mock/compare-diffs" -X DELETE > /dev/null
+
+# 9a: First review — open event, should do full review
+FIRST_SHA="aaa111aaa111aaa111aaa111aaa111aaa111aaa1"
+echo -n "Sending first review webhook (open)..."
+send_webhook '{
+    "object_kind": "merge_request",
+    "user": {"id": 1, "username": "dev"},
+    "project": {"id": 999, "path_with_namespace": "test/repo",
+                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+    "object_attributes": {
+        "iid": 9,
+        "title": "Incremental test",
+        "description": "Test incremental review",
+        "action": "open",
+        "source_branch": "feature",
+        "target_branch": "main",
+        "last_commit": {"id": "'"$FIRST_SHA"'", "message": "first commit"},
+        "url": "'"$INTERNAL_GITLAB_URL"'/test/repo/-/merge_requests/9",
+        "oldrev": null
+    }
+}'
+
+poll_until "$MOCK_GITLAB_URL/discussions" \
+    "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
+    "Waiting for first review comments" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+
+# Check summary note contains SHA marker
+echo -n "Checking summary note has SHA marker..."
+SUMMARY=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
+import sys, json
+ds = json.load(sys.stdin)
+count = sum(1 for d in ds if d.get('_type') == 'note' and 'mr-review-agent: last_reviewed_sha=' in d.get('body', ''))
+print(count)")
+[ "$SUMMARY" -gt 0 ] && echo " ✅" || { echo " ❌ Summary note missing SHA marker"; exit 1; }
+
+# 9b: Seed the marker for second review
+curl -sf "$MOCK_GITLAB_URL/mock/discussions" -X POST -H 'Content-Type: application/json' -d '[{
+    "id": "incremental-marker-disc",
+    "individual_note": true,
+    "notes": [{
+        "id": 5000,
+        "type": "DiscussionNote",
+        "body": "## Code Review Summary\n\nLooks good.\n\n<!-- mr-review-agent: last_reviewed_sha='"$FIRST_SHA"' -->",
+        "author": {"id": 9999, "username": "mock-review-bot"},
+        "created_at": "2024-01-15T10:30:00Z",
+        "system": false,
+        "resolvable": false,
+        "resolved": false,
+        "position": null
+    }]
+}]' > /dev/null
+
+# Clear previous discussions for clean second review
+curl -sf "$MOCK_GITLAB_URL/discussions" -X DELETE > /dev/null
+
+# 9c: Second review — update event, should do incremental review
+SECOND_SHA="bbb222bbb222bbb222bbb222bbb222bbb222bbb2"
+echo -n "Sending second review webhook (update)..."
+send_webhook '{
+    "object_kind": "merge_request",
+    "user": {"id": 1, "username": "dev"},
+    "project": {"id": 999, "path_with_namespace": "test/repo",
+                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+    "object_attributes": {
+        "iid": 9,
+        "title": "Incremental test",
+        "description": "Test incremental review",
+        "action": "update",
+        "source_branch": "feature",
+        "target_branch": "main",
+        "last_commit": {"id": "'"$SECOND_SHA"'", "message": "second commit"},
+        "url": "'"$INTERNAL_GITLAB_URL"'/test/repo/-/merge_requests/9",
+        "oldrev": "'"$FIRST_SHA"'"
+    }
+}'
+
+poll_until "$MOCK_GITLAB_URL/discussions" \
+    "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
+    "Waiting for incremental review comments" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+
+echo "PASS: Incremental review posted comments"
 
 echo ""; echo "=== ALL E2E TESTS PASSED ==="
 exit 0

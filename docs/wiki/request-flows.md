@@ -6,7 +6,7 @@ End-to-end data flows with sequence diagrams for each major operation.
 
 ## 1. Webhook MR Review
 
-Triggered when GitLab sends `merge_request` webhook with action `open` or `update` (with new commits).
+Triggered when GitLab sends `merge_request` webhook with action `open`, `update` (with new commits), or `reopen`.
 
 ```mermaid
 sequenceDiagram
@@ -52,7 +52,15 @@ sequenceDiagram
     
     ORCH->>ORCH: Build DiscussionHistory(discussions, agent)
     
-    Note over ORCH: build_review_prompt() renders<br/>prior feedback into prompt
+    ORCH->>ORCH: extract_last_reviewed_sha(discussion_history)
+    alt SHA marker found
+        ORCH->>GLCL: compare_commits(project_id, last_reviewed_sha, head_sha)
+        GLCL-->>ORCH: incremental changes (diff since last review)
+    else No marker (first review / post-deploy / failed post)
+        Note over ORCH: Use full MR diff
+    end
+    
+    Note over ORCH: build_review_prompt() renders<br/>prior feedback + outdated annotations into prompt
     
     ORCH->>EXEC: execute(TaskParams: review)
     alt LocalTaskExecutor
@@ -75,7 +83,7 @@ sequenceDiagram
     ORCH->>GLCL: get_mr_details(project_id, mr_iid)
     GLCL-->>ORCH: MRDetails (diff_refs, changes)
     
-    ORCH->>POST: post_review(gl, project_id, mr_iid, diff_refs, parsed, changes, resolution_behavior)
+    ORCH->>POST: post_review(gl, project_id, mr_iid, diff_refs, parsed, changes, resolution_behavior, head_sha)
     POST->>POST: _parse_hunk_lines() for all changes
     loop For each comment
         POST->>POST: _is_valid_position()
@@ -95,7 +103,7 @@ sequenceDiagram
             end
         end
     end
-    POST->>GL: mr.notes.create() (summary)
+    POST->>GL: mr.notes.create() (summary + SHA marker)
     POST-->>ORCH: Done
     
     ORCH->>GLCL: cleanup(repo_path)

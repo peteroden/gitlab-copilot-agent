@@ -210,7 +210,7 @@ Models for MR discussion history, shared by review and discussion flows. All mod
 | `is_system` | `bool` | — | True for system-generated notes |
 | `resolved` | `bool \| None` | `None` | Resolution status (None if not resolvable) |
 | `resolvable` | `bool` | `False` | Whether the note can be resolved |
-| `position` | `dict[str, object] \| None` | `None` | Diff position: new_path, old_path, new_line, old_line |
+| `position` | `dict[str, object] \| None` | `None` | Diff position: new_path, old_path, new_line, old_line, head_sha |
 
 ---
 

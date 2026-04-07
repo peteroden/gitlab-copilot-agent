@@ -25,7 +25,7 @@ log = structlog.get_logger()
 
 router = APIRouter()
 
-HANDLED_ACTIONS = frozenset({"open", "update"})
+HANDLED_ACTIONS = frozenset({"open", "update", "reopen"})
 
 
 def _resolve_project_token(
@@ -217,7 +217,9 @@ async def webhook(
         if action not in HANDLED_ACTIONS:
             return {"status": "ignored", "reason": f"action '{action}' not handled"}
 
-        # Skip title/description-only updates (no new commits)
+        # Skip title/description-only updates (no new commits).
+        # Note: "reopen" has no oldrev — it passes through to review.
+        # Diff scope is determined by SHA marker presence in orchestrator.py.
         if action == "update" and mr.oldrev is None:
             return {"status": "ignored", "reason": "no new commits"}
 

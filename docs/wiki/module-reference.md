@@ -36,7 +36,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `_process_discussion(request: Request, payload: NoteWebhookPayload, agent_identity: AgentIdentity) -> None`: Background task for discussion interactions. Resolves per-project `resolution_behavior` from project registry
 
 **Key Constants**:
-- `HANDLED_ACTIONS = frozenset({"open", "update"})`: MR actions that trigger review
+- `HANDLED_ACTIONS = frozenset({"open", "update", "reopen"})`: MR actions that trigger review
 
 **Internal Imports**: `models`, `orchestrator`, `discussion_orchestrator`, `discussion_models`, `metrics`, `concurrency`, `project_registry`, `credential_registry`
 
@@ -96,6 +96,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - Clones repo
   - Fetches MR details (title, description, diff_refs, changes)
   - If `credential_registry` provided: fetches discussions via `list_mr_discussions()`, resolves agent identity via `resolve_identity()`, builds `DiscussionHistory`
+  - Extracts last-reviewed SHA marker via `extract_last_reviewed_sha()`; calls `compare_commits()` for incremental diff when marker found, falls back to full MR diff otherwise
   - Builds diff text from MR changes
   - Calls `run_review()` with diff text and discussion history
   - Parses structured review via `parse_review()`
@@ -103,7 +104,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - Passes `resolution_behavior` to `post_review()` for prior feedback resolution
   - Emits `reviews_total` and `reviews_duration` metrics
 
-**Internal Imports**: `config`, `models`, `task_executor`, `gitlab_client`, `review_engine`, `comment_parser`, `comment_poster`, `metrics`, `telemetry`, `discussion_models`, `credential_registry`
+**Internal Imports**: `config`, `models`, `task_executor`, `gitlab_client`, `review_engine`, `comment_parser`, `comment_poster`, `metrics`, `telemetry`, `discussion_models`, `credential_registry`, `incremental`
 
 **Depended On By**: `webhook.py`, `gitlab_poller.py`
 
@@ -188,9 +189,9 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `ReviewRequest`: MR metadata (title, description, source/target branches)
 
 **Key Functions**:
-- `build_review_prompt(req: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None) -> str`: Build user prompt; includes diff inline when available and injects prior unresolved feedback
-- `run_review(executor: TaskExecutor, settings: Settings, repo_path: str, repo_url: str, review_request: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None) -> TaskResult`: Execute review task and return structured result
-- `_format_prior_feedback(history: DiscussionHistory) -> str`: Render agent's unresolved inline comments as a prompt section. Includes `[discussion: {id}]` tags for LLM resolution referencing
+- `build_review_prompt(req: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None, is_incremental: bool = False, head_sha: str = "") -> str`: Build user prompt; includes diff inline when available, injects prior unresolved feedback with outdated position annotations, and labels incremental diffs
+- `run_review(executor: TaskExecutor, settings: Settings, repo_path: str, repo_url: str, review_request: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None, head_sha: str = "", is_incremental: bool = False) -> TaskResult`: Execute review task and return structured result. Appends `head_sha` to task ID for dedup
+- `_format_prior_feedback(history: DiscussionHistory, current_head_sha: str = "") -> str`: Render agent's unresolved inline comments as a prompt section. Includes `[discussion: {id}]` tags for LLM resolution referencing. Annotates comments whose `position.head_sha` differs from `current_head_sha` as outdated
 - `_strip_comment_formatting(body: str) -> str`: Remove agent-added severity prefix and suggestion blocks from a comment
 
 **Internal Imports**: `config`, `prompt_defaults`, `task_executor`, `discussion_models` (TYPE_CHECKING)
@@ -391,6 +392,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - `get_current_user() -> AgentIdentity`: Discover authenticated user identity
   - `resolve_discussion(project_id: int, mr_iid: int, discussion_id: str) -> None`: Resolve a discussion thread (sets resolved=True)
   - `reply_to_discussion(project_id: int, mr_iid: int, discussion_id: str, body: str) -> None`: Post a reply to an existing discussion thread
+  - `compare_commits(project_id: int, from_sha: str, to_sha: str) -> list[MRChange]`: Compare two commits via the Repository Compare API. Returns file changes between SHAs in MRChange format for incremental diff computation
 
 **Internal Imports**: `git_operations`
 
@@ -466,20 +468,39 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 ---
 
 ### `comment_poster.py`
-**Purpose**: Post review comments to GitLab MR as inline discussions and summary. Handles resolution actions for prior feedback.
+**Purpose**: Post review comments to GitLab MR as inline discussions and summary. Handles resolution actions for prior feedback. Embeds SHA marker in summary note for incremental review tracking.
 
 **Key Functions**:
-- `post_review(gitlab_client: gl.Gitlab, project_id: int, mr_iid: int, diff_refs: MRDiffRef, review: ParsedReview, changes: list[MRChange], resolution_behavior: str = "suggest") -> None`: Post inline comments + resolve/acknowledge prior feedback + summary
+- `post_review(gitlab_client: gl.Gitlab, project_id: int, mr_iid: int, diff_refs: MRDiffRef, review: ParsedReview, changes: list[MRChange], resolution_behavior: str = "suggest", allowed_discussion_ids: frozenset[str] = frozenset(), head_sha: str = "") -> None`: Post inline comments + resolve/acknowledge prior feedback + summary with SHA marker
   - Validates comment positions against diff hunks
   - Falls back to note with file:line context if position invalid
   - Processes resolutions via `_handle_resolutions()` before posting summary
+  - When `head_sha` provided, appends `format_sha_marker(head_sha)` to summary note body
 - `_handle_resolutions(mr: object, resolutions: list[Resolution], resolution_behavior: str) -> int`: Process resolutions per configured behavior (auto-resolve/suggest/off). Returns count of resolved threads
 - `_parse_hunk_lines(diff: str, new_path: str) -> set[tuple[str, int]]`: Extract valid (file, line) positions from unified diff
 - `_is_valid_position(file: str, line: int, valid_positions: set[tuple[str, int]]) -> bool`: Check if position valid
 
-**Internal Imports**: `comment_parser`, `gitlab_client`
+**Internal Imports**: `comment_parser`, `gitlab_client`, `incremental`
 
 **Depended On By**: `orchestrator.py`
+
+---
+
+### `incremental.py`
+**Purpose**: SHA marker utilities for incremental MR review. Embeds and extracts a hidden HTML comment in overview notes to track the last-reviewed commit SHA.
+
+**Key Functions**:
+- `extract_last_reviewed_sha(discussion_history: DiscussionHistory | None) -> str | None`: Scans overview notes in reverse chronological order for the SHA marker
+- `format_sha_marker(head_sha: str) -> str`: Generates the hidden HTML comment marker
+
+**Key Constants**:
+- `_SHA_MARKER_RE`: Regex matching `<!-- mr-review-agent: last_reviewed_sha=([a-f0-9]{7,40}) -->`
+
+**Internal Imports**: `discussion_models` (TYPE_CHECKING only)
+
+**Depended On By**: `orchestrator.py` (extraction), `comment_poster.py` (formatting)
+
+**ADR**: 0009-incremental-review-sha-marker.md
 
 ---
 

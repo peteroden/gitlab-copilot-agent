@@ -374,3 +374,59 @@ def test_no_resolution_eval_instructions_without_prior_feedback() -> None:
         _make_request(), diff_text="some diff", discussion_history=history
     )
     assert "Resolution Evaluation" not in prompt
+
+
+# -- Incremental diff header tests --
+
+INCREMENTAL_HEADER = "Incremental Diff"
+
+
+def test_build_prompt_incremental_header() -> None:
+    """is_incremental=True adds 'Incremental Diff' header to the prompt."""
+    prompt = build_review_prompt(_make_request(), diff_text="some diff", is_incremental=True)
+
+    assert INCREMENTAL_HEADER in prompt
+    assert "changes since last review" in prompt
+
+
+def test_build_prompt_full_no_header() -> None:
+    """is_incremental=False does NOT include 'Incremental Diff' header."""
+    prompt = build_review_prompt(_make_request(), diff_text="some diff", is_incremental=False)
+
+    assert INCREMENTAL_HEADER not in prompt
+
+
+# -- Outdated position annotation tests --
+
+OUTDATED_ANNOTATION = "(outdated position"
+POSITION_HEAD_SHA = "pos_head_abc"
+CURRENT_HEAD_SHA = "current_head_xyz"
+
+
+def test_prior_feedback_outdated_annotation() -> None:
+    """Position head_sha != current_head_sha adds '(outdated position' annotation."""
+    note = _make_agent_note()
+    note_dict = note.model_dump()
+    note_dict["position"]["head_sha"] = POSITION_HEAD_SHA
+    patched_note = DiscussionNote(**note_dict)
+    disc = _make_discussion(notes=[patched_note])
+    history = _make_history(discussions=[disc])
+
+    result = _format_prior_feedback(history, current_head_sha=CURRENT_HEAD_SHA)
+
+    assert OUTDATED_ANNOTATION in result
+
+
+def test_prior_feedback_current_no_annotation() -> None:
+    """Position head_sha == current_head_sha has no outdated annotation."""
+    note = _make_agent_note()
+    note_dict = note.model_dump()
+    note_dict["position"]["head_sha"] = CURRENT_HEAD_SHA
+    patched_note = DiscussionNote(**note_dict)
+    disc = _make_discussion(notes=[patched_note])
+    history = _make_history(discussions=[disc])
+
+    result = _format_prior_feedback(history, current_head_sha=CURRENT_HEAD_SHA)
+
+    assert OUTDATED_ANNOTATION not in result
+    assert "Consider error handling" in result

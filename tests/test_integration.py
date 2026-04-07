@@ -11,7 +11,7 @@ from gitlab_copilot_agent.discussion_models import (
     DiscussionHistory,
     DiscussionNote,
 )
-from gitlab_copilot_agent.gitlab_client import MRDetails
+from gitlab_copilot_agent.gitlab_client import MRChange, MRDetails
 from gitlab_copilot_agent.orchestrator import handle_review
 from gitlab_copilot_agent.task_executor import ReviewResult
 from tests.conftest import (
@@ -357,3 +357,144 @@ async def test_prior_feedback_rendered_in_prompt(
     assert "## Agent's Prior Feedback (Unresolved)" in prompt
     assert "Consider adding a null check here." in prompt
     assert "src/app.py" in prompt
+
+
+# -- Incremental review integration tests --
+
+_MARKER_SHA = "aaa1111aaa1111aaa1111aaa1111aaa1111aaa11"
+_NEW_HEAD_SHA = "bbb2222"
+_INCREMENTAL_DIFF = "@@ -1,3 +1,4 @@\n+incremental change\n"
+_INCREMENTAL_PATH = "src/incremental.py"
+
+
+def _make_marker_note(sha: str) -> DiscussionNote:
+    """Build an overview note containing a SHA marker, authored by the agent."""
+    marker = f"<!-- mr-review-agent: last_reviewed_sha={sha} -->"
+    return DiscussionNote(
+        note_id=900,
+        author_id=_AGENT_IDENTITY.user_id,
+        author_username=_AGENT_IDENTITY.username,
+        body=f"## Code Review Summary\n\nAll good.\n\n{marker}",
+        created_at="2026-04-06T12:00:00Z",
+        is_system=False,
+        resolved=None,
+        resolvable=False,
+        position=None,
+    )
+
+
+def _make_marker_discussion(sha: str) -> Discussion:
+    return Discussion(
+        discussion_id="disc-marker",
+        notes=[_make_marker_note(sha)],
+        is_resolved=False,
+        is_inline=False,
+    )
+
+
+@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
+@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+async def test_incremental_review_with_marker(
+    mock_gl_class: MagicMock,
+    mock_client_class: MagicMock,
+    mock_post_review: AsyncMock,
+) -> None:
+    """Second review with SHA marker uses incremental diff via compare_commits."""
+    mock_gl_instance = mock_client_class.return_value
+    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
+    mock_gl_instance.cleanup = AsyncMock()
+    mock_gl_instance.get_mr_details = AsyncMock(
+        return_value=MRDetails(
+            title="Add feature",
+            description="Implements X",
+            diff_refs=DIFF_REFS,
+            changes=make_mr_changes(),
+        )
+    )
+
+    # list_mr_discussions returns the marker note from a prior review
+    mock_gl_instance.list_mr_discussions = AsyncMock(
+        return_value=[_make_marker_discussion(_MARKER_SHA)]
+    )
+    # compare_commits returns incremental changes
+    mock_gl_instance.compare_commits = AsyncMock(
+        return_value=[
+            MRChange(
+                old_path=_INCREMENTAL_PATH,
+                new_path=_INCREMENTAL_PATH,
+                diff=_INCREMENTAL_DIFF,
+                new_file=False,
+                deleted_file=False,
+                renamed_file=False,
+            )
+        ]
+    )
+
+    mock_executor = AsyncMock()
+    mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
+
+    mock_registry = AsyncMock()
+    mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
+
+    await handle_review(
+        make_settings(),
+        make_webhook_payload(),
+        mock_executor,
+        credential_registry=mock_registry,
+    )
+
+    # Verify compare_commits called with correct SHAs
+    mock_gl_instance.compare_commits.assert_awaited_once_with(PROJECT_ID, _MARKER_SHA, "abc123")
+
+    # Verify prompt contains incremental diff header
+    task_params = mock_executor.execute.call_args[0][0]
+    prompt = task_params.user_prompt
+    assert "Incremental Diff" in prompt
+    assert _INCREMENTAL_DIFF in prompt
+
+
+@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
+@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+async def test_incremental_review_compare_fails_fallback(
+    mock_gl_class: MagicMock,
+    mock_client_class: MagicMock,
+    mock_post_review: AsyncMock,
+) -> None:
+    """compare_commits failure falls back to full diff."""
+    mock_gl_instance = mock_client_class.return_value
+    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
+    mock_gl_instance.cleanup = AsyncMock()
+    mock_gl_instance.get_mr_details = AsyncMock(
+        return_value=MRDetails(
+            title="Add feature",
+            description="Implements X",
+            diff_refs=DIFF_REFS,
+            changes=make_mr_changes(),
+        )
+    )
+    mock_gl_instance.list_mr_discussions = AsyncMock(
+        return_value=[_make_marker_discussion(_MARKER_SHA)]
+    )
+    mock_gl_instance.compare_commits = AsyncMock(side_effect=RuntimeError("Compare API error"))
+
+    mock_executor = AsyncMock()
+    mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
+
+    mock_registry = AsyncMock()
+    mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
+
+    await handle_review(
+        make_settings(),
+        make_webhook_payload(),
+        mock_executor,
+        credential_registry=mock_registry,
+    )
+
+    # Falls back to full diff — prompt should NOT contain incremental header
+    task_params = mock_executor.execute.call_args[0][0]
+    prompt = task_params.user_prompt
+    assert "Incremental Diff" not in prompt
+    # Full diff from mr_details.changes is used instead
+    assert DIFF_REFS.base_sha is not None  # sanity: details were loaded

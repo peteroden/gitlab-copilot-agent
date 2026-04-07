@@ -381,3 +381,58 @@ async def test_reply_to_discussion(mock_gl: MagicMock) -> None:
     await client.reply_to_discussion(PROJECT_ID, MR_IID, DISCUSSION_ID, RESOLVE_REPLY_BODY)
 
     disc_mock.notes.create.assert_called_once_with({"body": RESOLVE_REPLY_BODY})
+
+
+# -- compare_commits tests --
+
+COMPARE_FROM_SHA = "from111"
+COMPARE_TO_SHA = "to222"
+COMPARE_DIFF = "@@ -1,3 +1,4 @@\n+added\n"
+COMPARE_PATH = "src/compare.py"
+
+
+async def test_compare_commits_returns_mr_changes(mock_gl: MagicMock) -> None:
+    """repository_compare returning diffs produces a list[MRChange]."""
+    mock_gl.projects.get.return_value.repository_compare.return_value = {
+        "diffs": [
+            {
+                "old_path": COMPARE_PATH,
+                "new_path": COMPARE_PATH,
+                "diff": COMPARE_DIFF,
+                "new_file": False,
+                "deleted_file": False,
+                "renamed_file": False,
+            }
+        ]
+    }
+
+    client = GitLabClient(GITLAB_URL, GITLAB_TOKEN)
+    result = await client.compare_commits(PROJECT_ID, COMPARE_FROM_SHA, COMPARE_TO_SHA)
+
+    assert len(result) == 1
+    assert isinstance(result[0], MRChange)
+    assert result[0].new_path == COMPARE_PATH
+    assert result[0].diff == COMPARE_DIFF
+    mock_gl.projects.get.return_value.repository_compare.assert_called_once_with(
+        COMPARE_FROM_SHA, COMPARE_TO_SHA
+    )
+
+
+async def test_compare_commits_empty_diffs(mock_gl: MagicMock) -> None:
+    """repository_compare with no diffs returns empty list."""
+    mock_gl.projects.get.return_value.repository_compare.return_value = {"diffs": []}
+
+    client = GitLabClient(GITLAB_URL, GITLAB_TOKEN)
+    result = await client.compare_commits(PROJECT_ID, COMPARE_FROM_SHA, COMPARE_TO_SHA)
+
+    assert result == []
+
+
+async def test_compare_commits_propagates_error(mock_gl: MagicMock) -> None:
+    """repository_compare raising an exception propagates to caller."""
+    mock_gl.projects.get.return_value.repository_compare.side_effect = RuntimeError("API failure")
+
+    client = GitLabClient(GITLAB_URL, GITLAB_TOKEN)
+
+    with pytest.raises(RuntimeError, match="API failure"):
+        await client.compare_commits(PROJECT_ID, COMPARE_FROM_SHA, COMPARE_TO_SHA)
