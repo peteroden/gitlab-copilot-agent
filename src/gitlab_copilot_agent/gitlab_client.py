@@ -368,7 +368,8 @@ class GitLabClient:
             project = self._gl.projects.get(project_id)
             result: dict[str, object] = project.repository_compare(from_sha, to_sha)  # pyright: ignore[reportAssignmentType]
             raw_diffs = result.get("diffs", [])
-            assert isinstance(raw_diffs, list)
+            if not isinstance(raw_diffs, list):
+                return []
             changes: list[MRChange] = []
             for d in raw_diffs:  # pyright: ignore[reportUnknownVariableType]
                 if isinstance(d, dict):
