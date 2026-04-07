@@ -376,6 +376,24 @@ async def test_poll_passes_per_project_token_to_review(mock_hr: AsyncMock) -> No
 
 @pytest.mark.asyncio
 @patch(_HANDLE_REVIEW, new_callable=AsyncMock)
+async def test_poll_passes_credential_registry_and_ref_to_review(mock_hr: AsyncMock) -> None:
+    """Poller passes credential_registry, credential_ref, and resolution_behavior."""
+    registry = _make_project_registry()
+    creds = _mock_credential_registry()
+    poller, cl, _ = _poller(credential_registry=creds)
+    poller._project_registry = registry
+    poller._project_clients["default"] = cl
+    cl.list_project_mrs.return_value = [_mr_item()]
+    await poller._poll_once()
+    mock_hr.assert_called_once()
+    _, kwargs = mock_hr.call_args
+    assert kwargs["credential_registry"] is creds
+    assert kwargs["credential_ref"] == "default"
+    assert kwargs["resolution_behavior"] == "suggest"
+
+
+@pytest.mark.asyncio
+@patch(_HANDLE_REVIEW, new_callable=AsyncMock)
 async def test_poll_falls_back_to_none_when_not_in_registry(mock_hr: AsyncMock) -> None:
     """Poller passes None token when project not in registry (global fallback)."""
     registry = _make_project_registry(project_id=9999)

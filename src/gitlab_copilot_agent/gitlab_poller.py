@@ -198,12 +198,22 @@ class GitLabPoller:
                 oldrev=None,
             ),
         )
+        credential_ref = "default"
+        resolution_behavior = self._settings.resolution_behavior
+        if self._project_registry is not None:
+            resolved = self._project_registry.get_by_project_id(project_id)
+            if resolved is not None:
+                credential_ref = resolved.credential_ref
+                resolution_behavior = resolved.resolution_behavior
         try:
             await handle_review(
                 self._settings,
                 payload,
                 self._executor,
                 project_token=self._resolve_token(project_id),
+                credential_registry=self._credential_registry,
+                resolution_behavior=resolution_behavior,
+                credential_ref=credential_ref,
             )
         except TaskExecutionError:
             await log.awarning("gitlab_review_task_failed", project_id=project_id, mr_iid=mr.iid)
