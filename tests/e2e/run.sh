@@ -396,17 +396,10 @@ send_webhook '{
 }'
 
 poll_until "$MOCK_GITLAB_URL/discussions" \
-    "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
+    "import sys,json; ds=json.load(sys.stdin); print(sum(1 for d in ds if d.get('_type')=='note' and 'mr-review-agent: last_reviewed_sha=' in d.get('body','')))" \
     "Waiting for first review comments" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
 
-# Check summary note contains SHA marker
-echo -n "Checking summary note has SHA marker..."
-SUMMARY=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
-import sys, json
-ds = json.load(sys.stdin)
-count = sum(1 for d in ds if d.get('_type') == 'note' and 'mr-review-agent: last_reviewed_sha=' in d.get('body', ''))
-print(count)")
-[ "$SUMMARY" -gt 0 ] && echo " ✅" || { echo " ❌ Summary note missing SHA marker"; exit 1; }
+echo "PASS: Summary note contains SHA marker"
 
 # 9b: Seed the marker for second review
 curl -sf "$MOCK_GITLAB_URL/mock/discussions" -X POST -H 'Content-Type: application/json' -d '[{
