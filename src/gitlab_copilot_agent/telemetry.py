@@ -29,9 +29,13 @@ def configure_logging() -> None:
     """Set up all logging: structlog processors and stdlib routing.
 
     Call once at module load before any log output.
+    Reads LOG_LEVEL env var (default: INFO).
     """
     # Suppress gRPC C-core abseil noise (init warnings before absl::InitializeLog)
     os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+
+    level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
 
     renderer = structlog.dev.ConsoleRenderer()
 
@@ -62,7 +66,7 @@ def configure_logging() -> None:
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
-    root.setLevel(logging.INFO)
+    root.setLevel(level)
 
     # Suppress OTEL SDK exporter retry noise (transient gRPC errors logged at WARNING)
     for name in (

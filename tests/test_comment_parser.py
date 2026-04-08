@@ -4,6 +4,7 @@ from gitlab_copilot_agent.comment_parser import (
     ParsedReview,
     Resolution,
     ReviewComment,
+    _is_bare_comment,
     parse_review,
 )
 
@@ -222,3 +223,78 @@ def test_parse_review_bare_json_with_braces_in_summary() -> None:
     assert result.comments[0].comment == "Missing validation"
     assert "braces" in result.summary
     assert "{ return y; }" in result.summary
+
+
+# ── Bare comment object edge cases ──────────────────────────────────────
+
+
+def test_is_bare_comment_detects_single_comment_object() -> None:
+    """Dict with file+line but no comments key is a bare comment."""
+    assert _is_bare_comment({"file": "a.py", "line": 1, "comment": "x"})
+
+
+def test_is_bare_comment_rejects_wrapped_format() -> None:
+    """Dict with 'comments' key is not a bare comment."""
+    assert not _is_bare_comment({"comments": [], "resolutions": []})
+
+
+def test_is_bare_comment_rejects_unrelated_dict() -> None:
+    """Dict without file+line is not a bare comment."""
+    assert not _is_bare_comment({"summary": "looks good"})
+
+
+def test_parse_bare_comment_in_code_fence() -> None:
+    """LLM returns a single comment object in a code fence instead of wrapped format."""
+    raw = (
+        "Here is the finding:\n\n```json\n"
+        "{\n"
+        '  "file": "src/demo_app/main.py",\n'
+        '  "line": 13,\n'
+        '  "severity": "warning",\n'
+        '  "comment": "Missing length constraints on q parameter"\n'
+        "}\n"
+        "```\n\n"
+        "The query parameter needs validation."
+    )
+    result = parse_review(raw)
+    assert len(result.comments) == 1
+    assert result.comments[0].file == "src/demo_app/main.py"
+    assert result.comments[0].line == 13
+    assert result.comments[0].severity == "warning"
+    assert "length constraints" in result.comments[0].comment
+    assert "validation" in result.summary
+
+
+def test_parse_bare_comment_with_suggestion_in_code_fence() -> None:
+    """Bare comment object with suggestion fields is correctly extracted."""
+    raw = (
+        "```json\n"
+        "{\n"
+        '  "file": "src/app.py",\n'
+        '  "line": 5,\n'
+        '  "severity": "error",\n'
+        '  "comment": "SQL injection via f-string",\n'
+        '  "suggestion": "cursor.execute(\\"SELECT * FROM t WHERE id = ?\\", (uid,))",\n'
+        '  "suggestion_start_offset": 0,\n'
+        '  "suggestion_end_offset": 0\n'
+        "}\n"
+        "```\n"
+        "Fix the SQL injection."
+    )
+    result = parse_review(raw)
+    assert len(result.comments) == 1
+    assert result.comments[0].suggestion is not None
+    assert "execute" in result.comments[0].suggestion
+
+
+def test_parse_bare_comment_via_raw_decode() -> None:
+    """Bare comment object without code fence is extracted via raw_decode path."""
+    raw = (
+        '{"file": "src/search.py", "line": 11, "severity": "error", '
+        '"comment": "SQL injection"}\n'
+        "This is a critical finding."
+    )
+    result = parse_review(raw)
+    assert len(result.comments) == 1
+    assert result.comments[0].file == "src/search.py"
+    assert result.comments[0].line == 11

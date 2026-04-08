@@ -295,23 +295,41 @@ async def run_review(
     is_incremental: bool = False,
 ) -> TaskResult:
     """Run a Copilot agent review and return the structured result."""
+    import hashlib
+
     task_id = f"review-{review_request.source_branch}"
     if head_sha:
         task_id = f"{task_id}-{head_sha[:12]}"
+
+    user_prompt = build_review_prompt(
+        review_request,
+        diff_text,
+        discussion_history,
+        is_incremental=is_incremental,
+        head_sha=head_sha,
+    )
+    log.debug(
+        "review_prompt_built",
+        prompt_length=len(user_prompt),
+        prompt_hash=hashlib.sha256(user_prompt.encode()).hexdigest()[:16],
+        is_incremental=is_incremental,
+    )
+
     task = TaskParams(
         task_type="review",
         task_id=task_id,
         repo_url=repo_url,
         branch=review_request.source_branch,
         system_prompt=get_prompt(settings, "review"),
-        user_prompt=build_review_prompt(
-            review_request,
-            diff_text,
-            discussion_history,
-            is_incremental=is_incremental,
-            head_sha=head_sha,
-        ),
+        user_prompt=user_prompt,
         settings=settings,
         repo_path=repo_path,
     )
-    return await executor.execute(task)
+    result = await executor.execute(task)
+
+    log.debug(
+        "review_raw_response",
+        response_length=len(result.summary),
+        response_preview=result.summary[:500],
+    )
+    return result

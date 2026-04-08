@@ -18,6 +18,7 @@ from gitlab_copilot_agent.review_engine import (
     build_review_prompt,
     run_review,
 )
+from gitlab_copilot_agent.task_executor import ReviewResult
 from tests.conftest import EXAMPLE_CLONE_URL, make_settings
 
 # -- Agent note & discussion helpers for prior-feedback tests --
@@ -105,13 +106,14 @@ def test_build_review_prompt_handles_no_description() -> None:
 
 async def test_run_review_delegates_to_executor() -> None:
     mock_executor = AsyncMock()
-    mock_executor.execute.return_value = "Review result"
+    expected = ReviewResult(summary="Review result")
+    mock_executor.execute.return_value = expected
 
     settings = make_settings()
     req = _make_request()
     result = await run_review(mock_executor, settings, "/tmp/repo", EXAMPLE_CLONE_URL, req)
 
-    assert result == "Review result"
+    assert result == expected
     task = mock_executor.execute.call_args[0][0]
     assert task.system_prompt == get_prompt(settings, "review")
     assert "Add feature X" in task.user_prompt
@@ -136,7 +138,8 @@ def test_build_review_prompt_includes_prior_feedback() -> None:
 async def test_run_review_forwards_discussion_history() -> None:
     """run_review passes discussion_history through to build_review_prompt."""
     mock_executor = AsyncMock()
-    mock_executor.execute.return_value = "Review result"
+    expected = ReviewResult(summary="Review result")
+    mock_executor.execute.return_value = expected
 
     settings = make_settings()
     req = _make_request()
@@ -153,7 +156,7 @@ async def test_run_review_forwards_discussion_history() -> None:
         discussion_history=history,
     )
 
-    assert result == "Review result"
+    assert result == expected
     # Verify executor was called (prompt content tested separately)
     mock_executor.execute.assert_awaited_once()
 

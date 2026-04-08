@@ -22,6 +22,7 @@ from gitlab_copilot_agent.git_operations import (
     git_head_sha,
 )
 from gitlab_copilot_agent.prompt_defaults import get_prompt
+from gitlab_copilot_agent.telemetry import configure_logging
 
 log = structlog.get_logger()
 ENV_TASK_TYPE, ENV_TASK_ID = "TASK_TYPE", "TASK_ID"
@@ -402,6 +403,7 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
 
 
 def main() -> None:
+    configure_logging()
     sys.exit(asyncio.run(run_task()))
 
 
