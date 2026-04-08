@@ -333,16 +333,21 @@ def test_manual_resolution(project: Any, mr_iid: int) -> None:
     log.info("test: manual resolution suppression", mr_iid=mr_iid)
     mr = project.mergerequests.get(mr_iid)
 
-    # Find an agent-authored inline discussion to resolve
+    # Find an agent-authored inline discussion to resolve.
+    # Skip the *first* inline discussion — test 1c (@mention reply) will use it.
     discussions = mr.discussions.list(get_all=True)
     target_disc = None
     resolved_topic = ""
+    skipped_first = False
     for d in discussions:
         if d.attributes.get("individual_note"):
             continue
         notes = d.attributes.get("notes", [])
         first_note = notes[0] if notes else {}
         if first_note.get("position") and not first_note.get("system"):
+            if not skipped_first:
+                skipped_first = True
+                continue
             resolved_topic = first_note.get("body", "")[:80]
             target_disc = d
             break
