@@ -60,7 +60,7 @@ sequenceDiagram
         Note over ORCH: Use full MR diff
     end
     
-    Note over ORCH: build_review_prompt() renders<br/>prior feedback + outdated annotations into prompt
+    Note over ORCH: build_review_prompt() renders<br/>prior feedback + outdated annotations<br/>+ suppressed feedback (human-resolved/dismissed) into prompt
     
     ORCH->>EXEC: execute(TaskParams: review)
     alt LocalTaskExecutor
@@ -114,6 +114,15 @@ sequenceDiagram
 **Error Handling**:
 - On exception in background task: log, emit `webhook_errors_total`, post failure comment to MR, re-raise
 - Cleanup: `repo_path` removed in finally block
+
+**Suppressed Feedback Flow** (Feature 7):
+1. `build_review_prompt()` calls `_format_suppressed_feedback(discussion_history)`
+2. For each inline discussion authored by the agent:
+   - If `_is_human_resolved(disc, agent_user_id)` → tagged `[MANUALLY RESOLVED]` (discussion resolved by a non-agent user, detected via `resolved_by_id` field)
+   - Else if `_is_dismissed(disc, agent_user_id)` → tagged `[DISMISSED]` (developer replied with a dismissal phrase matching `_DISMISSAL_PATTERNS`)
+3. Qualifying items rendered under `## Suppressed Feedback (Do Not Re-Raise)` prompt section
+4. Section omitted entirely when no items qualify
+5. LLM instructed via `_SUPPRESSED_FEEDBACK_RULES` to never re-raise listed items
 
 ---
 

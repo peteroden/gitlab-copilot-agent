@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from typing import TYPE_CHECKING
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from gitlab_copilot_agent.config import Settings
+from gitlab_copilot_agent.discussion_models import (
+    Discussion,
+    DiscussionHistory,
+    DiscussionNote,
+)
 from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams, TaskResult
-
-if TYPE_CHECKING:
-    from gitlab_copilot_agent.discussion_models import DiscussionHistory
 
 log = structlog.get_logger()
 
@@ -33,6 +34,49 @@ in Agent's Prior Feedback, even if line numbers have shifted.
 - If the code has changed but the underlying issue remains, the prior \
 feedback still applies — do not re-comment.\
 """
+
+_SUPPRESSED_FEEDBACK_RULES = """\
+Rules:
+- Do NOT re-raise, reference, or generate any comment covering the same \
+issue as any item listed below, even if the code pattern persists.
+- These items were reviewed by a human and intentionally resolved or \
+dismissed — respect the developer's decision.\
+"""
+
+_DISMISSAL_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(p, re.IGNORECASE)
+    for p in [
+        r"\bwon'?t\s+fix\b",
+        r"\bintentional\b",
+        r"\bby\s+design\b",
+        r"\bnot\s+a\s+bug\b",
+        r"\bfalse\s+positive\b",
+        r"\bnot\s+(?:an?\s+)?issue\b",
+        r"\bacceptable?\s+risk\b",
+        r"\bwontfix\b",
+    ]
+]
+
+
+def _is_human_resolved(disc: Discussion, agent_user_id: int) -> bool:
+    """True if a human (not the agent) resolved this discussion."""
+    if not disc.is_resolved:
+        return False
+    for note in disc.notes:
+        if note.resolved_by_id is not None and note.resolved_by_id != agent_user_id:
+            return True
+    return False
+
+
+def _is_dismissed(disc: Discussion, agent_user_id: int) -> bool:
+    """True if a developer replied with a dismissal phrase."""
+    for note in disc.notes:
+        if note.author_id == agent_user_id:
+            continue
+        if any(p.search(note.body) for p in _DISMISSAL_PATTERNS):
+            return True
+    return False
+
 
 _RESOLUTION_EVAL_INSTRUCTIONS = """\
 ## Resolution Evaluation
@@ -143,6 +187,49 @@ def _format_prior_feedback(history: DiscussionHistory, current_head_sha: str = "
     return "\n".join(lines)
 
 
+def _file_line(note: DiscussionNote) -> str:
+    """Format a note's file and line info for display."""
+    position = note.position or {}
+    raw_path = position.get("new_path")
+    file_path = raw_path if isinstance(raw_path, str) and raw_path.strip() else "unknown"
+    raw_line = position.get("new_line")
+    if isinstance(raw_line, int):
+        return f"{file_path}:{raw_line}"
+    return file_path
+
+
+def _format_suppressed_feedback(history: DiscussionHistory) -> str:
+    """Render human-resolved and dismissed items as a suppressed feedback prompt section.
+
+    Returns the complete section (header + items + rules) or an empty string
+    when no suppressed items exist.
+    """
+    suppressed: list[str] = []
+    for disc in history.discussions:
+        if not disc.is_inline:
+            continue
+        if not disc.notes:
+            continue
+        first = disc.notes[0]
+        if first.author_id != history.agent.user_id:
+            continue
+        if _is_human_resolved(disc, history.agent.user_id):
+            body = _strip_comment_formatting(first.body)
+            suppressed.append(f"- {_file_line(first)}: {body} [MANUALLY RESOLVED]")
+        elif _is_dismissed(disc, history.agent.user_id):
+            body = _strip_comment_formatting(first.body)
+            suppressed.append(f"- {_file_line(first)}: {body} [DISMISSED]")
+
+    if not suppressed:
+        return ""
+
+    lines = ["## Suppressed Feedback (Do Not Re-Raise)\n"]
+    lines.extend(suppressed)
+    lines.append("")
+    lines.append(_SUPPRESSED_FEEDBACK_RULES)
+    return "\n".join(lines)
+
+
 def build_review_prompt(
     req: ReviewRequest,
     diff_text: str | None = None,
@@ -187,6 +274,9 @@ def build_review_prompt(
         if prior_section:
             prompt += f"\n\n{prior_section}"
             prompt += f"\n\n{_RESOLUTION_EVAL_INSTRUCTIONS}"
+        suppressed_section = _format_suppressed_feedback(discussion_history)
+        if suppressed_section:
+            prompt += f"\n\n{suppressed_section}"
     return prompt
 
 
@@ -202,23 +292,41 @@ async def run_review(
     is_incremental: bool = False,
 ) -> TaskResult:
     """Run a Copilot agent review and return the structured result."""
+    import hashlib
+
     task_id = f"review-{review_request.source_branch}"
     if head_sha:
         task_id = f"{task_id}-{head_sha[:12]}"
+
+    user_prompt = build_review_prompt(
+        review_request,
+        diff_text,
+        discussion_history,
+        is_incremental=is_incremental,
+        head_sha=head_sha,
+    )
+    log.debug(
+        "review_prompt_built",
+        prompt_length=len(user_prompt),
+        prompt_hash=hashlib.sha256(user_prompt.encode()).hexdigest()[:16],
+        is_incremental=is_incremental,
+    )
+
     task = TaskParams(
         task_type="review",
         task_id=task_id,
         repo_url=repo_url,
         branch=review_request.source_branch,
         system_prompt=get_prompt(settings, "review"),
-        user_prompt=build_review_prompt(
-            review_request,
-            diff_text,
-            discussion_history,
-            is_incremental=is_incremental,
-            head_sha=head_sha,
-        ),
+        user_prompt=user_prompt,
         settings=settings,
         repo_path=repo_path,
     )
-    return await executor.execute(task)
+    result = await executor.execute(task)
+
+    log.debug(
+        "review_raw_response",
+        response_length=len(result.summary),
+        response_preview=result.summary[:500],
+    )
+    return result

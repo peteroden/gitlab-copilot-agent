@@ -183,15 +183,21 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `_SEVERITY_PREFIX_RE: re.Pattern`: Compiled regex to strip severity prefixes (e.g., `**[WARNING]**`) from comments
 - `_SUGGESTION_BLOCK_RE: re.Pattern`: Compiled regex to strip suggestion code blocks from comments
 - `_PRIOR_FEEDBACK_RULES: str`: Prompt rules instructing the LLM not to duplicate prior feedback
+- `_SUPPRESSED_FEEDBACK_RULES: str`: Prompt rules instructing the LLM not to re-raise human-resolved or dismissed items
+- `_DISMISSAL_PATTERNS: list[re.Pattern]`: Compiled regexes for dismissal phrase detection (case-insensitive): "won't fix", "intentional", "by design", "not a bug", "false positive", "not an issue", "acceptable risk", "wontfix"
 - `_RESOLUTION_EVAL_INSTRUCTIONS`: Prompt instructions for LLM to evaluate whether prior feedback has been addressed
 
 **Key Models**:
 - `ReviewRequest`: MR metadata (title, description, source/target branches)
 
 **Key Functions**:
-- `build_review_prompt(req: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None, is_incremental: bool = False, head_sha: str = "") -> str`: Build user prompt; includes diff inline when available, injects prior unresolved feedback with outdated position annotations, and labels incremental diffs
+- `build_review_prompt(req: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None, is_incremental: bool = False, head_sha: str = "") -> str`: Build user prompt; includes diff inline when available, injects prior unresolved feedback with outdated position annotations, labels incremental diffs, and appends suppressed feedback section for human-resolved/dismissed items
 - `run_review(executor: TaskExecutor, settings: Settings, repo_path: str, repo_url: str, review_request: ReviewRequest, diff_text: str | None = None, discussion_history: DiscussionHistory | None = None, head_sha: str = "", is_incremental: bool = False) -> TaskResult`: Execute review task and return structured result. Appends `head_sha` to task ID for dedup
 - `_format_prior_feedback(history: DiscussionHistory, current_head_sha: str = "") -> str`: Render agent's unresolved inline comments as a prompt section. Includes `[discussion: {id}]` tags for LLM resolution referencing. Annotates comments whose `position.head_sha` differs from `current_head_sha` as outdated
+- `_is_human_resolved(disc: Discussion, agent_user_id: int) -> bool`: Returns True when discussion is resolved and the resolver is not the agent (detected via `resolved_by_id` field)
+- `_is_dismissed(disc: Discussion, agent_user_id: int) -> bool`: Returns True when a non-agent note matches any `_DISMISSAL_PATTERNS` regex
+- `_format_suppressed_feedback(history: DiscussionHistory) -> str`: Render human-resolved (`[MANUALLY RESOLVED]`) and dismissed (`[DISMISSED]`) items as a "Suppressed Feedback (Do Not Re-Raise)" prompt section. Returns empty string when no items qualify
+- `_file_line(note: DiscussionNote) -> str`: Format a note's file path and line number for display
 - `_strip_comment_formatting(body: str) -> str`: Remove agent-added severity prefix and suggestion blocks from a comment
 
 **Internal Imports**: `config`, `prompt_defaults`, `task_executor`, `discussion_models` (TYPE_CHECKING)

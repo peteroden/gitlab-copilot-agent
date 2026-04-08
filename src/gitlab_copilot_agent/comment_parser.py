@@ -6,7 +6,10 @@ import json
 import re
 from typing import Literal
 
+import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+log = structlog.get_logger()
 
 ResolutionStatus = Literal["resolved", "not_addressed", "partial"]
 
@@ -49,8 +52,21 @@ class ParsedReview(BaseModel):
     )
 
 
+def _is_bare_comment(data: dict[str, object]) -> bool:
+    """Return True if *data* looks like a single ReviewComment, not a review wrapper."""
+    return "file" in data and "line" in data and "comments" not in data
+
+
 def _build_parsed_review(data: dict[str, object], summary: str) -> ParsedReview:
-    """Build a ParsedReview from a parsed JSON dict and summary text."""
+    """Build a ParsedReview from a parsed JSON dict and summary text.
+
+    Handles the edge case where the LLM emits a single comment object
+    (``{"file": …, "line": …}``) instead of ``{"comments": [...]}``.
+    """
+    # Normalise bare comment object → wrapped format
+    if _is_bare_comment(data):
+        data = {"comments": [data]}
+
     comments: list[ReviewComment] = []
     for item in data.get("comments", []):  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportGeneralTypeIssues]
         if not isinstance(item, dict):
@@ -79,29 +95,50 @@ def parse_review(raw: str) -> ParsedReview:
     (optionally in a code fence) followed by a summary.
     Falls back to treating the entire output as a summary if parsing fails.
     """
+    log.debug("parse_review_input", raw_length=len(raw), raw_preview=raw[:300])
+
     # Try code-fenced JSON object first
     json_match = re.search(r"```json\s*\n(\{.*?\})\s*\n```", raw, re.DOTALL)
     if json_match:
         try:
             parsed: object = json.loads(json_match.group(1))
         except json.JSONDecodeError:
+            log.debug("parse_review_path", path="code_fence_json_error")
             return ParsedReview(comments=[], summary=raw.strip())
         if not isinstance(parsed, dict):
+            log.debug("parse_review_path", path="code_fence_not_dict")
             return ParsedReview(comments=[], summary=raw.strip())
         summary = raw[json_match.end() :].strip()
         summary = re.sub(r"^```\s*", "", summary).strip() or "Review complete."
-        return _build_parsed_review(parsed, summary)  # pyright: ignore[reportUnknownArgumentType]
+        result = _build_parsed_review(parsed, summary)  # pyright: ignore[reportUnknownArgumentType]
+        log.debug(
+            "parse_review_path",
+            path="code_fence",
+            comments=len(result.comments),
+            bare_wrap=_is_bare_comment(parsed),  # pyright: ignore[reportUnknownArgumentType]
+        )
+        return result
 
     # Try bare JSON object using raw_decode (handles braces in trailing text)
     stripped = raw.strip()
     idx = stripped.find("{")
     if idx == -1:
+        log.debug("parse_review_path", path="freetext_fallback")
         return ParsedReview(comments=[], summary=stripped or "Review complete.")
     try:
         parsed, end_idx = json.JSONDecoder().raw_decode(stripped, idx)
     except json.JSONDecodeError:
+        log.debug("parse_review_path", path="raw_decode_json_error")
         return ParsedReview(comments=[], summary=stripped)
     if not isinstance(parsed, dict):
+        log.debug("parse_review_path", path="raw_decode_not_dict")
         return ParsedReview(comments=[], summary=stripped)
     summary = stripped[end_idx:].strip() or "Review complete."
-    return _build_parsed_review(parsed, summary)  # pyright: ignore[reportUnknownArgumentType]
+    result = _build_parsed_review(parsed, summary)  # pyright: ignore[reportUnknownArgumentType]
+    log.debug(
+        "parse_review_path",
+        path="raw_decode",
+        comments=len(result.comments),
+        bare_wrap=_is_bare_comment(parsed),  # pyright: ignore[reportUnknownArgumentType]
+    )
+    return result

@@ -12,13 +12,18 @@ from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.review_engine import (
     ReviewRequest,
     _format_prior_feedback,
+    _format_suppressed_feedback,
+    _is_dismissed,
+    _is_human_resolved,
     build_review_prompt,
     run_review,
 )
+from gitlab_copilot_agent.task_executor import ReviewResult
 from tests.conftest import EXAMPLE_CLONE_URL, make_settings
 
 # -- Agent note & discussion helpers for prior-feedback tests --
 AGENT_USER_ID = 100
+HUMAN_USER_ID = 42
 AGENT_USERNAME = "copilot-bot"
 
 
@@ -101,13 +106,14 @@ def test_build_review_prompt_handles_no_description() -> None:
 
 async def test_run_review_delegates_to_executor() -> None:
     mock_executor = AsyncMock()
-    mock_executor.execute.return_value = "Review result"
+    expected = ReviewResult(summary="Review result")
+    mock_executor.execute.return_value = expected
 
     settings = make_settings()
     req = _make_request()
     result = await run_review(mock_executor, settings, "/tmp/repo", EXAMPLE_CLONE_URL, req)
 
-    assert result == "Review result"
+    assert result == expected
     task = mock_executor.execute.call_args[0][0]
     assert task.system_prompt == get_prompt(settings, "review")
     assert "Add feature X" in task.user_prompt
@@ -132,7 +138,8 @@ def test_build_review_prompt_includes_prior_feedback() -> None:
 async def test_run_review_forwards_discussion_history() -> None:
     """run_review passes discussion_history through to build_review_prompt."""
     mock_executor = AsyncMock()
-    mock_executor.execute.return_value = "Review result"
+    expected = ReviewResult(summary="Review result")
+    mock_executor.execute.return_value = expected
 
     settings = make_settings()
     req = _make_request()
@@ -149,7 +156,7 @@ async def test_run_review_forwards_discussion_history() -> None:
         discussion_history=history,
     )
 
-    assert result == "Review result"
+    assert result == expected
     # Verify executor was called (prompt content tested separately)
     mock_executor.execute.assert_awaited_once()
 
@@ -430,3 +437,289 @@ def test_prior_feedback_current_no_annotation() -> None:
 
     assert OUTDATED_ANNOTATION not in result
     assert "Consider error handling" in result
+
+
+# -- _is_human_resolved tests --
+
+
+def test_is_human_resolved_true_when_human_resolves() -> None:
+    """Returns True when discussion is resolved by a non-agent user."""
+    note = _make_agent_note(resolved=True)
+    note_dict = note.model_dump()
+    note_dict["resolved_by_id"] = HUMAN_USER_ID
+    patched = DiscussionNote(**note_dict)
+    disc = _make_discussion(notes=[patched], is_resolved=True)
+
+    assert _is_human_resolved(disc, AGENT_USER_ID) is True
+
+
+def test_is_human_resolved_false_when_agent_resolves() -> None:
+    """Returns False when discussion is resolved by the agent itself."""
+    note = _make_agent_note(resolved=True)
+    note_dict = note.model_dump()
+    note_dict["resolved_by_id"] = AGENT_USER_ID
+    patched = DiscussionNote(**note_dict)
+    disc = _make_discussion(notes=[patched], is_resolved=True)
+
+    assert _is_human_resolved(disc, AGENT_USER_ID) is False
+
+
+def test_is_human_resolved_false_when_unresolved() -> None:
+    """Returns False when discussion is not resolved."""
+    note = _make_agent_note()
+    disc = _make_discussion(notes=[note], is_resolved=False)
+
+    assert _is_human_resolved(disc, AGENT_USER_ID) is False
+
+
+def test_is_human_resolved_false_when_no_resolved_by_id() -> None:
+    """Returns False when resolved but resolved_by_id is None on all notes."""
+    note = _make_agent_note(resolved=True)
+    disc = _make_discussion(notes=[note], is_resolved=True)
+
+    assert _is_human_resolved(disc, AGENT_USER_ID) is False
+
+
+# -- _is_dismissed tests --
+
+
+def test_is_dismissed_matches_wont_fix() -> None:
+    """Detects 'won't fix' dismissal pattern."""
+    agent_note = _make_agent_note()
+    human_reply = DiscussionNote(
+        note_id=2,
+        author_id=HUMAN_USER_ID,
+        author_username="dev",
+        body="Won't fix this — it's fine as is.",
+        created_at="2026-04-06T13:00:00Z",
+        is_system=False,
+        resolved=None,
+        resolvable=False,
+        position=None,
+    )
+    disc = _make_discussion(notes=[agent_note, human_reply])
+
+    assert _is_dismissed(disc, AGENT_USER_ID) is True
+
+
+def test_is_dismissed_matches_false_positive() -> None:
+    """Detects 'false positive' dismissal pattern."""
+    agent_note = _make_agent_note()
+    human_reply = DiscussionNote(
+        note_id=2,
+        author_id=HUMAN_USER_ID,
+        author_username="dev",
+        body="This is a false positive.",
+        created_at="2026-04-06T13:00:00Z",
+        is_system=False,
+        resolved=None,
+        resolvable=False,
+        position=None,
+    )
+    disc = _make_discussion(notes=[agent_note, human_reply])
+
+    assert _is_dismissed(disc, AGENT_USER_ID) is True
+
+
+def test_is_dismissed_case_insensitive() -> None:
+    """Dismissal detection is case-insensitive."""
+    agent_note = _make_agent_note()
+    human_reply = DiscussionNote(
+        note_id=2,
+        author_id=HUMAN_USER_ID,
+        author_username="dev",
+        body="BY DESIGN — this is expected behavior.",
+        created_at="2026-04-06T13:00:00Z",
+        is_system=False,
+        resolved=None,
+        resolvable=False,
+        position=None,
+    )
+    disc = _make_discussion(notes=[agent_note, human_reply])
+
+    assert _is_dismissed(disc, AGENT_USER_ID) is True
+
+
+def test_is_dismissed_ignores_agent_notes() -> None:
+    """Agent's own notes are not scanned for dismissal patterns."""
+    agent_note = _make_agent_note(body="This is not a bug to fix")
+    disc = _make_discussion(notes=[agent_note])
+
+    assert _is_dismissed(disc, AGENT_USER_ID) is False
+
+
+def test_is_dismissed_no_match_on_normal_reply() -> None:
+    """Normal developer replies do not trigger dismissal."""
+    agent_note = _make_agent_note()
+    human_reply = DiscussionNote(
+        note_id=2,
+        author_id=HUMAN_USER_ID,
+        author_username="dev",
+        body="Thanks, I'll fix this in the next commit.",
+        created_at="2026-04-06T13:00:00Z",
+        is_system=False,
+        resolved=None,
+        resolvable=False,
+        position=None,
+    )
+    disc = _make_discussion(notes=[agent_note, human_reply])
+
+    assert _is_dismissed(disc, AGENT_USER_ID) is False
+
+
+def test_is_dismissed_matches_all_patterns() -> None:
+    """All dismissal patterns are recognized."""
+    patterns = [
+        "won't fix",
+        "wontfix",
+        "intentional",
+        "by design",
+        "not a bug",
+        "false positive",
+        "not an issue",
+        "acceptable risk",
+    ]
+    for phrase in patterns:
+        agent_note = _make_agent_note()
+        human_reply = DiscussionNote(
+            note_id=2,
+            author_id=HUMAN_USER_ID,
+            author_username="dev",
+            body=f"Marking as {phrase}",
+            created_at="2026-04-06T13:00:00Z",
+            is_system=False,
+            resolved=None,
+            resolvable=False,
+            position=None,
+        )
+        disc = _make_discussion(notes=[agent_note, human_reply])
+        assert _is_dismissed(disc, AGENT_USER_ID) is True, f"Failed for: {phrase}"
+
+
+# -- _format_suppressed_feedback tests --
+
+
+def test_format_suppressed_feedback_human_resolved() -> None:
+    """Human-resolved inline discussions appear with [MANUALLY RESOLVED] tag."""
+    note = _make_agent_note()
+    note_dict = note.model_dump()
+    note_dict["resolved_by_id"] = HUMAN_USER_ID
+    patched = DiscussionNote(**note_dict)
+    disc = _make_discussion(notes=[patched], is_resolved=True)
+    history = _make_history(discussions=[disc])
+
+    result = _format_suppressed_feedback(history)
+
+    assert "## Suppressed Feedback (Do Not Re-Raise)" in result
+    assert "[MANUALLY RESOLVED]" in result
+    assert "Consider error handling" in result
+
+
+def test_format_suppressed_feedback_dismissed() -> None:
+    """Dismissed inline discussions appear with [DISMISSED] tag."""
+    agent_note = _make_agent_note()
+    human_reply = DiscussionNote(
+        note_id=2,
+        author_id=HUMAN_USER_ID,
+        author_username="dev",
+        body="This is intentional.",
+        created_at="2026-04-06T13:00:00Z",
+        is_system=False,
+        resolved=None,
+        resolvable=False,
+        position=None,
+    )
+    disc = _make_discussion(notes=[agent_note, human_reply], is_resolved=False)
+    history = _make_history(discussions=[disc])
+
+    result = _format_suppressed_feedback(history)
+
+    assert "## Suppressed Feedback (Do Not Re-Raise)" in result
+    assert "[DISMISSED]" in result
+
+
+def test_format_suppressed_feedback_empty_when_no_items() -> None:
+    """Returns empty string when no discussions qualify as suppressed."""
+    note = _make_agent_note()
+    disc = _make_discussion(notes=[note], is_resolved=False)
+    history = _make_history(discussions=[disc])
+
+    result = _format_suppressed_feedback(history)
+
+    assert result == ""
+
+
+def test_format_suppressed_feedback_skips_non_inline() -> None:
+    """Non-inline (overview) discussions are excluded from suppressed feedback."""
+    note = _make_agent_note()
+    note_dict = note.model_dump()
+    note_dict["resolved_by_id"] = HUMAN_USER_ID
+    patched = DiscussionNote(**note_dict)
+    disc = _make_discussion(notes=[patched], is_resolved=True, is_inline=False)
+    history = _make_history(discussions=[disc])
+
+    result = _format_suppressed_feedback(history)
+
+    assert result == ""
+
+
+def test_format_suppressed_feedback_skips_human_authored() -> None:
+    """Discussions not authored by the agent are excluded."""
+    note = _make_agent_note(author_id=HUMAN_USER_ID)
+    note_dict = note.model_dump()
+    note_dict["resolved_by_id"] = HUMAN_USER_ID
+    patched = DiscussionNote(**note_dict)
+    disc = _make_discussion(notes=[patched], is_resolved=True)
+    history = _make_history(discussions=[disc])
+
+    result = _format_suppressed_feedback(history)
+
+    assert result == ""
+
+
+def test_format_suppressed_feedback_includes_rules() -> None:
+    """Suppressed feedback section includes suppression rules."""
+    note = _make_agent_note()
+    note_dict = note.model_dump()
+    note_dict["resolved_by_id"] = HUMAN_USER_ID
+    patched = DiscussionNote(**note_dict)
+    disc = _make_discussion(notes=[patched], is_resolved=True)
+    history = _make_history(discussions=[disc])
+
+    result = _format_suppressed_feedback(history)
+
+    assert "Do NOT re-raise" in result
+    assert "respect the developer's decision" in result
+
+
+# -- Suppressed feedback in build_review_prompt tests --
+
+
+def test_build_review_prompt_includes_suppressed_feedback() -> None:
+    """Suppressed feedback section appears in the review prompt."""
+    note = _make_agent_note()
+    note_dict = note.model_dump()
+    note_dict["resolved_by_id"] = HUMAN_USER_ID
+    patched = DiscussionNote(**note_dict)
+    disc = _make_discussion(notes=[patched], is_resolved=True)
+    history = _make_history(discussions=[disc])
+
+    prompt = build_review_prompt(
+        _make_request(), diff_text="some diff", discussion_history=history
+    )
+
+    assert "## Suppressed Feedback (Do Not Re-Raise)" in prompt
+    assert "[MANUALLY RESOLVED]" in prompt
+
+
+def test_build_review_prompt_omits_suppressed_when_empty() -> None:
+    """Suppressed section omitted when no discussions qualify."""
+    note = _make_agent_note()
+    disc = _make_discussion(notes=[note], is_resolved=False)
+    history = _make_history(discussions=[disc])
+
+    prompt = build_review_prompt(
+        _make_request(), diff_text="some diff", discussion_history=history
+    )
+
+    assert "Suppressed Feedback" not in prompt

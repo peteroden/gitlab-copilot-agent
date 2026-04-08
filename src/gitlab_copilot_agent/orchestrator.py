@@ -147,6 +147,8 @@ async def handle_review(
             bound_log.info(
                 "review_complete",
                 inline_comments=len(parsed.comments),
+                resolutions=len(parsed.resolutions),
+                response_length=len(raw_result.summary),
             )
 
             gl = gitlab.Gitlab(settings.gitlab_url, private_token=token)

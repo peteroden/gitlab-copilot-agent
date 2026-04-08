@@ -202,19 +202,20 @@ class TestReviewResponseValidator:
         )
         assert _review_response_validator(raw) is None
 
-    def test_json_array_in_fence_returns_retry(self) -> None:
+    def test_json_array_in_fence_accepts_recovered_comment(self) -> None:
+        """Array-in-fence is recovered via bare comment wrapping — no retry needed."""
         raw = (
             '```json\n[{"file": "a.py", "line": 1, '
             '"severity": "info", "comment": "ok"}]\n```\nSummary.'
         )
         result = _review_response_validator(raw)
-        assert result is not None
-        assert "JSON object" in result
+        assert result is None
 
-    def test_bare_json_array_returns_retry(self) -> None:
+    def test_bare_json_array_accepts_recovered_comment(self) -> None:
+        """Bare JSON array with comment objects is recovered — no retry needed."""
         raw = '[{"file": "a.py", "line": 1, "severity": "info", "comment": "ok"}]\nSummary.'
         result = _review_response_validator(raw)
-        assert result is not None
+        assert result is None
 
     def test_empty_response_returns_retry(self) -> None:
         result = _review_response_validator("")

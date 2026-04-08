@@ -316,8 +316,143 @@ def test_mr_review(project: Any, mr_iid: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test: @mention interaction
+# Test: manual resolution suppression
 # ---------------------------------------------------------------------------
+
+
+def test_manual_resolution(project: Any, mr_iid: int) -> None:
+    """Resolve an agent discussion as a human, trigger re-review, verify no re-raise.
+
+    After the initial review (test_mr_review), this test:
+    1. Finds an agent-authored inline discussion and records its topic
+    2. Resolves it as the human test user
+    3. Pushes a no-op commit to trigger incremental review
+    4. Waits for the new review cycle to complete
+    5. Verifies no new discussion re-raises the resolved topic
+    """
+    log.info("test: manual resolution suppression", mr_iid=mr_iid)
+    mr = project.mergerequests.get(mr_iid)
+
+    # Find an agent-authored inline discussion to resolve.
+    # Skip the *first* inline discussion — test 1c (@mention reply) will use it.
+    discussions = mr.discussions.list(get_all=True)
+    target_disc = None
+    resolved_topic = ""
+    skipped_first = False
+    for d in discussions:
+        if d.attributes.get("individual_note"):
+            continue
+        notes = d.attributes.get("notes", [])
+        first_note = notes[0] if notes else {}
+        if first_note.get("position") and not first_note.get("system"):
+            if not skipped_first:
+                skipped_first = True
+                continue
+            resolved_topic = first_note.get("body", "")[:80]
+            target_disc = d
+            break
+
+    if target_disc is None:
+        log.warning("no inline agent discussion found — skipping manual resolution test")
+        return
+
+    disc_id = target_disc.id
+    log.info("resolving discussion as human", discussion_id=disc_id, topic=resolved_topic)
+
+    # Resolve the discussion (acts as the human GITLAB_TOKEN user)
+    disc_obj = mr.discussions.get(disc_id)
+    disc_obj.resolved = True
+    disc_obj.save()
+
+    # Record discussion count before re-review (both inline threads and summary notes)
+    pre_review_discussions = mr.discussions.list(get_all=True)
+    pre_total_discussions = len(pre_review_discussions)
+    pre_total_notes = sum(len(d.attributes.get("notes", [])) for d in pre_review_discussions)
+    log.info(
+        "pre-review discussion count",
+        total_discussions=pre_total_discussions,
+        total_notes=pre_total_notes,
+    )
+
+    # Push a no-op commit to trigger incremental review
+    project.commits.create(
+        {
+            "branch": REVIEW_BRANCH_NAME,
+            "commit_message": "chore: trigger re-review for resolution test",
+            "actions": [
+                {
+                    "action": "update",
+                    "file_path": "src/demo_app/search.py",
+                    "content": (_FIXTURES / "src/demo_app/search.py").read_text()
+                    + "\n# re-review trigger\n",
+                },
+            ],
+        }
+    )
+    log.info("pushed no-op commit to trigger re-review")
+
+    # Poll for new review activity — any new discussion or note (including summary
+    # notes) indicates a review cycle completed.  A re-review with 0 new inline
+    # comments still posts a summary note (individual_note=True).
+    def _new_review_cycle() -> bool:
+        fresh_mr = project.mergerequests.get(mr_iid)
+        discs = fresh_mr.discussions.list(get_all=True)
+        new_total = len(discs)
+        new_notes = sum(len(d.attributes.get("notes", [])) for d in discs)
+        if new_total > pre_total_discussions or new_notes > pre_total_notes:
+            log.info(
+                "new review cycle detected",
+                discussions=new_total,
+                notes=new_notes,
+                prev_discussions=pre_total_discussions,
+                prev_notes=pre_total_notes,
+            )
+            return True
+        return False
+
+    _poll("re-review cycle completes", _new_review_cycle, timeout_s=300, interval_s=15)
+
+    # Verify the resolved topic was not re-raised at the same file+line.
+    # New findings about the same vulnerability class at *different* locations are
+    # expected and correct — suppression is per file+line, not per category.
+    fresh_mr = project.mergerequests.get(mr_iid)
+    fresh_discussions = fresh_mr.discussions.list(get_all=True)
+
+    resolved_notes = target_disc.attributes.get("notes", [])
+    resolved_position = resolved_notes[0].get("position", {}) if resolved_notes else {}
+    resolved_file = resolved_position.get("new_path", "")
+    resolved_line = resolved_position.get("new_line")
+    log.info(
+        "checking for re-raise at resolved location",
+        file=resolved_file,
+        line=resolved_line,
+    )
+
+    re_raised = False
+    for d in fresh_discussions:
+        if d.attributes.get("individual_note") or d.id == disc_id:
+            continue
+        notes = d.attributes.get("notes", [])
+        if not notes:
+            continue
+        first_note = notes[0]
+        pos = first_note.get("position") or {}
+        if pos.get("new_path") == resolved_file and pos.get("new_line") == resolved_line:
+            log.warning(
+                "re-raise detected at same location",
+                discussion_id=d.id,
+                file=resolved_file,
+                line=resolved_line,
+                body_preview=first_note.get("body", "")[:100],
+            )
+            re_raised = True
+
+    if re_raised:
+        raise AssertionError(
+            f"Agent re-raised resolved discussion at {resolved_file}:{resolved_line}"
+        )
+
+    log.info("✓ manual resolution test passed — resolved topic not re-raised", mr_iid=mr_iid)
 
 
 def _resolve_agent_username() -> str | None:
@@ -436,7 +571,15 @@ def main() -> None:
         log.error("MR review test failed", error=str(exc))
         failures.append(f"MR review: {exc}")
 
-    # --- Test 1b: @mention reply ---
+    # --- Test 1b: manual resolution suppression ---
+    if mr_iid is not None:
+        try:
+            test_manual_resolution(project, mr_iid)
+        except Exception as exc:
+            log.error("manual resolution test failed", error=str(exc))
+            failures.append(f"Manual resolution: {exc}")
+
+    # --- Test 1c: @mention reply ---
     if mr_iid is not None:
         agent_username = _resolve_agent_username()
         if agent_username:

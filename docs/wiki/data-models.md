@@ -209,6 +209,7 @@ Models for MR discussion history, shared by review and discussion flows. All mod
 | `created_at` | `str` | — | ISO 8601 timestamp |
 | `is_system` | `bool` | — | True for system-generated notes |
 | `resolved` | `bool \| None` | `None` | Resolution status (None if not resolvable) |
+| `resolved_by_id` | `int \| None` | `None` | User ID of who resolved this note, None if unresolved |
 | `resolvable` | `bool` | `False` | Whether the note can be resolved |
 | `position` | `dict[str, object] \| None` | `None` | Diff position: new_path, old_path, new_line, old_line, head_sha |
 

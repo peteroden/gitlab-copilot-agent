@@ -24,6 +24,9 @@ class DiscussionNote(BaseModel):
     resolved: bool | None = Field(
         default=None, description="Resolution status (None if not resolvable)"
     )
+    resolved_by_id: int | None = Field(
+        default=None, description="User ID of who resolved this note, None if unresolved"
+    )
     resolvable: bool = Field(default=False, description="Whether the note can be resolved")
     position: dict[str, object] | None = Field(
         default=None,

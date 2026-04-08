@@ -251,8 +251,10 @@ resource "azurerm_container_app" "controller" {
         name  = "DEPLOYMENT_ENV"
         value = var.deployment_env
       }
-
-      # Jira (non-secret env vars — only set when jira_url is provided)
+      env {
+        name  = "LOG_LEVEL"
+        value = var.deployment_env == "dev" ? "debug" : "info"
+      }
       dynamic "env" {
         for_each = var.jira_url != "" ? [1] : []
         content {
@@ -416,6 +418,10 @@ resource "azurerm_container_app_job" "task_runner" {
       env {
         name  = "DEPLOYMENT_ENV"
         value = var.deployment_env
+      }
+      env {
+        name  = "LOG_LEVEL"
+        value = var.deployment_env == "dev" ? "debug" : "info"
       }
 
       # BYOK provider config (only set when copilot_auth='byok')

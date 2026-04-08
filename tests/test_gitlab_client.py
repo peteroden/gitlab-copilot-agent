@@ -334,7 +334,57 @@ async def test_list_mr_discussions_empty(mock_gl: MagicMock) -> None:
     mr_mock.discussions.list.assert_called_once_with(get_all=True)
 
 
-# -- get_current_user tests --
+# -- resolved_by extraction tests --
+
+RESOLVED_BY_USER = {"id": 42, "username": "human-dev"}
+
+
+async def test_list_mr_discussions_resolved_by_present(mock_gl: MagicMock) -> None:
+    """resolved_by dict populates resolved_by_id on the note."""
+    note = _make_raw_note(note_id=60, resolved=True, resolvable=True)
+    note["resolved_by"] = RESOLVED_BY_USER
+    disc = _make_discussion_mock("d-rb-1", [note])
+
+    mr_mock = mock_gl.projects.get.return_value.mergerequests.get.return_value
+    mr_mock.discussions.list.return_value = [disc]
+
+    client = GitLabClient(GITLAB_URL, GITLAB_TOKEN)
+    result = await client.list_mr_discussions(PROJECT_ID, MR_IID)
+
+    assert len(result) == 1
+    assert result[0].notes[0].resolved_by_id == RESOLVED_BY_USER["id"]
+
+
+async def test_list_mr_discussions_resolved_by_absent(mock_gl: MagicMock) -> None:
+    """Missing resolved_by key gives resolved_by_id=None."""
+    note = _make_raw_note(note_id=61, resolved=False, resolvable=True)
+    # No resolved_by key at all
+    disc = _make_discussion_mock("d-rb-2", [note])
+
+    mr_mock = mock_gl.projects.get.return_value.mergerequests.get.return_value
+    mr_mock.discussions.list.return_value = [disc]
+
+    client = GitLabClient(GITLAB_URL, GITLAB_TOKEN)
+    result = await client.list_mr_discussions(PROJECT_ID, MR_IID)
+
+    assert len(result) == 1
+    assert result[0].notes[0].resolved_by_id is None
+
+
+async def test_list_mr_discussions_resolved_by_non_dict(mock_gl: MagicMock) -> None:
+    """Non-dict resolved_by (e.g. null from API) gives resolved_by_id=None."""
+    note = _make_raw_note(note_id=62, resolved=True, resolvable=True)
+    note["resolved_by"] = None  # GitLab can return null
+    disc = _make_discussion_mock("d-rb-3", [note])
+
+    mr_mock = mock_gl.projects.get.return_value.mergerequests.get.return_value
+    mr_mock.discussions.list.return_value = [disc]
+
+    client = GitLabClient(GITLAB_URL, GITLAB_TOKEN)
+    result = await client.list_mr_discussions(PROJECT_ID, MR_IID)
+
+    assert len(result) == 1
+    assert result[0].notes[0].resolved_by_id is None
 
 
 async def test_get_current_user(mock_gl: MagicMock) -> None:
