@@ -167,6 +167,22 @@ jobs:
         working-directory: infra
         run: echo "fqdn=$(terraform output -raw controller_fqdn)" >> "$GITHUB_OUTPUT"
 
+      - name: Release Terraform state lock
+        if: always()
+        working-directory: infra
+        env:
+          TF_STATE_SA: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          DEPLOY_ENV: ${{ inputs.environment }}
+        run: |
+          # Break any blob lease left by a cancelled terraform apply.
+          # Safe: concurrency group ensures no other job holds this lease.
+          az storage blob lease break \
+            --blob-name "${DEPLOY_ENV}.terraform.tfstate" \
+            --container-name tfstate \
+            --account-name "${TF_STATE_SA}" \
+            --auth-mode login \
+            -o none 2>/dev/null || true
+
       - name: Disable TF state storage public access
         if: always()
         env:

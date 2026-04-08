@@ -225,8 +225,64 @@ class TestReviewResponseValidator:
         result = _review_response_validator("   \n  ")
         assert result is not None
 
-    def test_freetext_no_json_returns_none(self) -> None:
-        assert _review_response_validator("The code looks great, no issues.") is None
+    def test_freetext_no_json_returns_retry(self) -> None:
+        """Plain text with no JSON triggers a retry — LLM must output structured JSON."""
+        assert _review_response_validator("The code looks great, no issues.") is not None
+
+    def test_agent_delegation_summary_returns_retry(self) -> None:
+        """Agent delegation producing plain text summary triggers a retry."""
+        text = (
+            "The security reviewer agent has completed a thorough review of the code. "
+            "Overall, the implementation follows best practices and there are no major "
+            "security concerns."
+        )
+        assert _review_response_validator(text) is not None
+
+    def test_empty_json_object_accepted(self) -> None:
+        """Valid JSON with 0 comments is accepted as a clean review."""
+        raw = '{"comments": [], "resolutions": []}\nNo issues found.'
+        assert _review_response_validator(raw) is None
+
+    def test_empty_json_in_fence_accepted(self) -> None:
+        """Code-fenced JSON with 0 comments is accepted as a clean review."""
+        raw = '```json\n{"comments": [], "resolutions": []}\n```\nNo issues found.'
+        assert _review_response_validator(raw) is None
+
+    def test_bare_json_object_missing_comments_key_retries(self) -> None:
+        """JSON object without 'comments' key is not review-shaped — retries."""
+        assert _review_response_validator('{"summary": "No issues"}') is not None
+
+    def test_empty_json_object_retries(self) -> None:
+        """Empty JSON object {} is not review-shaped — retries."""
+        assert _review_response_validator("{}") is not None
+
+    def test_unrelated_json_object_retries(self) -> None:
+        """JSON object with unrelated keys is not review-shaped — retries."""
+        assert _review_response_validator('{"foo": "bar"}') is not None
+
+    def test_multi_element_array_in_fence_accepts_all(self) -> None:
+        """Code-fenced JSON array with multiple comments all accepted."""
+        raw = (
+            '```json\n[{"file": "a.py", "line": 1, "severity": "error", "comment": "Bug A"}, '
+            '{"file": "b.py", "line": 2, "severity": "warning", "comment": "Bug B"}]\n```\nDone.'
+        )
+        assert _review_response_validator(raw) is None
+
+    def test_multi_element_bare_array_accepts_all(self) -> None:
+        """Bare JSON array with multiple comments all accepted."""
+        raw = (
+            '[{"file": "a.py", "line": 1, "severity": "error", "comment": "Bug A"}, '
+            '{"file": "b.py", "line": 2, "severity": "warning", "comment": "Bug B"}]\nDone.'
+        )
+        assert _review_response_validator(raw) is None
+
+    def test_empty_bare_array_accepted(self) -> None:
+        """Empty bare JSON array means clean code — accepted without retry."""
+        assert _review_response_validator("[]\nNo issues.") is None
+
+    def test_empty_fenced_array_accepted(self) -> None:
+        """Empty code-fenced JSON array means clean code — accepted without retry."""
+        assert _review_response_validator("```json\n[]\n```\nNo issues.") is None
 
     def test_valid_block(self) -> None:
         out = parse_agent_output(VALID_AGENT_OUTPUT)

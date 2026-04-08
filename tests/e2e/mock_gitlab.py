@@ -30,6 +30,7 @@ _open_mrs: list[dict] = []
 _mr_notes: dict[int, list[dict]] = {}  # mr_iid → notes list
 _seeded_discussions: list[dict] = []  # pre-seeded via POST /mock/discussions
 _compare_diffs: list[dict] = []  # controllable diffs for compare endpoint
+_mr_commits: list[dict] = []  # controllable commits for MR commits endpoint
 
 # Bare git repo created at startup
 _bare_repo: Path | None = None
@@ -117,6 +118,12 @@ async def compare_commits(project_id: int, request: Request) -> dict:
         "compare_timeout": False,
         "compare_same_ref": from_sha == to_sha,
     }
+
+
+@app.get("/api/v4/projects/{project_id}/merge_requests/{mr_iid}/commits")
+async def list_mr_commits(project_id: int, mr_iid: int) -> list[dict]:
+    """Return commits on a merge request. Controlled via POST /mock/commits."""
+    return _mr_commits
 
 
 @app.get("/api/v4/projects/{project_id}/merge_requests/{mr_iid}/discussions")
@@ -343,6 +350,22 @@ async def set_compare_diffs(request: Request) -> dict:
 @app.delete("/mock/compare-diffs")
 async def clear_compare_diffs() -> dict:
     _compare_diffs.clear()
+    return {"cleared": True}
+
+
+@app.post("/mock/commits")
+async def set_commits(request: Request) -> dict:
+    """Seed commits returned by GET .../commits."""
+    body = await request.json()
+    _mr_commits.clear()
+    _mr_commits.extend(body if isinstance(body, list) else [body])
+    return {"set": len(_mr_commits)}
+
+
+@app.delete("/mock/commits")
+async def clear_commits() -> dict:
+    """Clear seeded commits."""
+    _mr_commits.clear()
     return {"cleared": True}
 
 

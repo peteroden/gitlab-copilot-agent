@@ -83,6 +83,15 @@ class MRDetails(BaseModel):
     )
 
 
+class MRCommit(BaseModel):
+    """A single commit on a merge request."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+    id: str = Field(description="Full commit SHA")
+    title: str = Field(description="First line of the commit message")
+    message: str = Field(description="Full commit message body")
+
+
 class GitLabClientProtocol(Protocol):
     async def get_mr_details(self, project_id: int, mr_iid: int) -> MRDetails: ...
     async def clone_repo(self, clone_url: str, branch: str, token: str) -> Path: ...
@@ -109,6 +118,7 @@ class GitLabClientProtocol(Protocol):
     async def compare_commits(
         self, project_id: int, from_sha: str, to_sha: str
     ) -> list[MRChange]: ...
+    async def get_mr_commits(self, project_id: int, mr_iid: int) -> list[MRCommit]: ...
 
 
 class GitLabClient:
@@ -384,3 +394,17 @@ class GitLabClient:
             return changes
 
         return await asyncio.to_thread(_compare)
+
+    async def get_mr_commits(self, project_id: int, mr_iid: int) -> list[MRCommit]:
+        """Fetch commits on a merge request for developer intent context."""
+
+        def _fetch() -> list[MRCommit]:
+            project = self._gl.projects.get(project_id)
+            mr = project.mergerequests.get(mr_iid)
+            raw_commits = mr.commits()  # pyright: ignore[reportUnknownMemberType]
+            return [
+                MRCommit.model_validate(c.attributes)  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]
+                for c in raw_commits  # pyright: ignore[reportUnknownVariableType]
+            ]
+
+        return await asyncio.to_thread(_fetch)

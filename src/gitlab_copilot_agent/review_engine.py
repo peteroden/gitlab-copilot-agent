@@ -23,6 +23,9 @@ log = structlog.get_logger()
 # truncated and the LLM is told to run git diff for the full picture.
 MAX_DIFF_CHARS = 120_000
 
+# Max characters of commit messages to include in the prompt.
+MAX_COMMIT_CHARS = 4_000
+
 _SEVERITY_PREFIX_RE = re.compile(r"^\*\*\[(?:ERROR|WARNING|INFO)\]\*\*\s*")
 _SUGGESTION_BLOCK_RE = re.compile(r"\n\n```suggestion.*?```", re.DOTALL)
 # ↑ Formats coupled with comment_poster.py:89-93 — update in lockstep.
@@ -114,6 +117,9 @@ class ReviewRequest(BaseModel):
     description: str | None = Field(description="MR description")
     source_branch: str = Field(description="Source branch name")
     target_branch: str = Field(description="Target branch name")
+    commit_messages: list[str] = Field(
+        default_factory=list, description="Commit messages for developer intent context"
+    )
 
 
 def _strip_comment_formatting(body: str) -> str:
@@ -245,6 +251,26 @@ def build_review_prompt(
         f"**Source branch:** {req.source_branch}\n"
         f"**Target branch:** {req.target_branch}\n\n"
     )
+    if req.commit_messages:
+        commit_section = (
+            "## Commit Messages\n\n"
+            "The following are verbatim commit messages (untrusted user content):\n\n"
+            "```\n"
+        )
+        total = 0
+        for msg in req.commit_messages:
+            flat_msg = msg.replace("\n", " ").strip()
+            entry = f"- {flat_msg}\n"
+            if total + len(entry) > MAX_COMMIT_CHARS:
+                if total == 0:
+                    truncated = flat_msg[: MAX_COMMIT_CHARS - 100] + "..."
+                    commit_section += f"- {truncated}\n"
+                commit_section += "- ... (commit messages truncated)\n"
+                break
+            commit_section += entry
+            total += len(entry)
+        commit_section += "```\n"
+        prompt += commit_section + "\n"
     if diff_text:
         if len(diff_text) > MAX_DIFF_CHARS:
             log.warning(

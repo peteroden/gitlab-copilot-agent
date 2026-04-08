@@ -37,7 +37,8 @@ def configure_logging() -> None:
     level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
     level = getattr(logging, level_name, logging.INFO)
 
-    renderer = structlog.dev.ConsoleRenderer()
+    # Plain output in containers (no ANSI color codes); colors only in local TTY
+    renderer = structlog.dev.ConsoleRenderer(colors=sys.stdout.isatty())
 
     # Structlog pipeline
     structlog.configure(
@@ -76,8 +77,19 @@ def configure_logging() -> None:
         "opentelemetry.sdk._logs.export",
     ):
         logging.getLogger(name).setLevel(logging.ERROR)
-    for name in ("httpcore", "httpx", "azure.core.pipeline"):
+    _suppress_noisy_loggers()
+
+
+def _suppress_noisy_loggers() -> None:
+    """Suppress chatty HTTP/auth/access loggers at WARNING+.
+
+    Called from both configure_logging() and init_telemetry() because
+    OTEL instrumentation can re-enable debug logging on httpcore/httpx.
+    """
+    for name in ("httpcore", "httpx", "azure", "msal"):
         logging.getLogger(name).setLevel(logging.WARNING)
+    # Suppress uvicorn access logs (health-check probe spam)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
 def _check_connectivity(endpoint: str, timeout: float = 3.0) -> bool:
@@ -226,6 +238,9 @@ def init_telemetry() -> None:
 
     # Auto-instrument httpx for HTTP client metrics and traces
     HTTPXClientInstrumentor().instrument()
+
+    # Re-suppress libraries that OTEL instrumentation may have re-enabled
+    _suppress_noisy_loggers()
 
     _initialized = True
 

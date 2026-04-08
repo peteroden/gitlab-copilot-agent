@@ -71,6 +71,15 @@ async def handle_review(
 
             mr_details = await gl_client.get_mr_details(project.id, mr.iid)
 
+            # Fetch commit messages for developer intent context (graceful degradation)
+            commit_messages: list[str] = []
+            try:
+                commits = await gl_client.get_mr_commits(project.id, mr.iid)
+                commit_messages = [c.message for c in commits]
+                bound_log.info("commits_loaded", commit_count=len(commits))
+            except Exception:
+                bound_log.warning("commit_fetch_failed", exc_info=True)
+
             # Fetch discussion history for context (requires credential_registry
             # to resolve agent identity — skip entirely without it)
             discussion_history: DiscussionHistory | None = None
@@ -129,6 +138,7 @@ async def handle_review(
                 description=mr.description,
                 source_branch=mr.source_branch,
                 target_branch=mr.target_branch,
+                commit_messages=commit_messages,
             )
 
             raw_result = await run_review(

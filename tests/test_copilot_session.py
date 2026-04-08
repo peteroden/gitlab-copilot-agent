@@ -384,3 +384,50 @@ async def test_session_error_on_retry_raises(
 
     with pytest.raises(RuntimeError, match="quota"):
         await _run(validate_response=validator)
+
+
+@patch("gitlab_copilot_agent.copilot_session.discover_repo_config")
+@patch("gitlab_copilot_agent.copilot_session.CopilotClient")
+async def test_multi_retry_succeeds_on_second_attempt(
+    mock_client_class: MagicMock,
+    mock_discover: MagicMock,
+    _run: Any,
+) -> None:
+    """Validator can trigger up to 2 retries; success on attempt 2 is accepted."""
+    mock_discover.return_value = RepoConfig()
+
+    call_count = {"n": 0}
+
+    mock_client = AsyncMock()
+    mock_client_class.return_value = mock_client
+    mock_session = AsyncMock()
+    mock_session.on = MagicMock()
+    mock_client.create_session.return_value = mock_session
+
+    captured: dict[str, Callable[..., Any] | None] = {"handler": None}
+
+    def capture_on(handler: Callable[..., Any]) -> None:
+        captured["handler"] = handler
+
+    mock_session.on.side_effect = capture_on
+
+    async def fake_send(prompt: str, **_kwargs: object) -> None:
+        assert captured["handler"] is not None
+        call_count["n"] += 1
+        if call_count["n"] <= 2:
+            # First two calls return invalid text
+            captured["handler"](_make_event("assistant.message", "no json here"))
+            captured["handler"](_make_event("session.idle"))
+        else:
+            # Third call returns valid output
+            captured["handler"](_make_event("assistant.message", '{"files_changed": ["a.py"]}'))
+            captured["handler"](_make_event("session.idle"))
+
+    mock_session.send.side_effect = fake_send
+
+    def validator(result: str) -> str | None:
+        return "Try again" if "files_changed" not in result else None
+
+    result = await _run(validate_response=validator)
+    assert "files_changed" in result
+    assert call_count["n"] == 3  # initial + 2 retries

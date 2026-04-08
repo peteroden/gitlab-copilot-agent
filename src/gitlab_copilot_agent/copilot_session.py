@@ -75,10 +75,10 @@ async def run_copilot_session(
 ) -> str:
     """Run a Copilot agent session and return the last assistant message.
 
-    If *validate_response* is provided it is called with the assistant's first
-    reply.  When it returns a non-None string that string is sent as a follow-up
-    prompt **within the same session** (so the agent retains context) and the
-    second reply is returned instead.  At most one follow-up is attempted.
+    If *validate_response* is provided it is called with the assistant's reply.
+    When it returns a non-None string that string is sent as a follow-up prompt
+    **within the same session** (so the agent retains context).  Up to two
+    follow-ups are attempted before returning whatever the last result was.
     """
     session_start = time.monotonic()
     with _tracer.start_as_current_span(
@@ -249,10 +249,16 @@ async def run_copilot_session(
                         )
 
                         if validate_response is not None:
-                            follow_up = validate_response(result)
-                            if follow_up:
+                            max_retries = 2
+                            for retry_num in range(1, max_retries + 1):
+                                follow_up = validate_response(result)
+                                if follow_up is None:
+                                    break
                                 await log.ainfo(
-                                    "copilot_session_retry", reason="validate_response"
+                                    "copilot_session_retry",
+                                    reason="validate_response",
+                                    attempt=retry_num,
+                                    max_retries=max_retries,
                                 )
                                 done.clear()
                                 messages.clear()
@@ -268,10 +274,11 @@ async def run_copilot_session(
                                         task_type=task_type,
                                         auth_type=auth_type,
                                         is_authenticated=is_authenticated,
+                                        attempt=retry_num,
                                     )
                                     auth_info = f"[auth={auth_type}, ok={is_authenticated}]"
                                     raise RuntimeError(
-                                        f"Copilot session error on retry "
+                                        f"Copilot session error on retry {retry_num} "
                                         f"({session_error.get('type')}): "
                                         f"{session_error.get('message')} {auth_info}"
                                     )
@@ -282,6 +289,7 @@ async def run_copilot_session(
                                     message_count=len(messages),
                                     result_length=len(result),
                                     result_empty=not result,
+                                    attempt=retry_num,
                                 )
                     finally:
                         await session.disconnect()
