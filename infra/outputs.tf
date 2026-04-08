@@ -15,7 +15,7 @@ output "acr_login_server" {
 
 output "controller_fqdn" {
   description = "FQDN of the controller Container App"
-  value       = azurerm_container_app.controller.latest_revision_fqdn
+  value       = try(azurerm_container_app.controller.ingress[0].fqdn, "")
 }
 
 output "storage_account_name" {
