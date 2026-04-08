@@ -4,21 +4,18 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from typing import TYPE_CHECKING
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from gitlab_copilot_agent.config import Settings
+from gitlab_copilot_agent.discussion_models import (
+    Discussion,
+    DiscussionHistory,
+    DiscussionNote,
+)
 from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.task_executor import TaskExecutor, TaskParams, TaskResult
-
-if TYPE_CHECKING:
-    from gitlab_copilot_agent.discussion_models import (
-        Discussion,
-        DiscussionHistory,
-        DiscussionNote,
-    )
 
 log = structlog.get_logger()
 

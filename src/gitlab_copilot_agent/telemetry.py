@@ -68,7 +68,7 @@ def configure_logging() -> None:
     root.addHandler(handler)
     root.setLevel(level)
 
-    # Suppress OTEL SDK exporter retry noise (transient gRPC errors logged at WARNING)
+    # Suppress noisy libraries — keep at WARNING+ even when root is DEBUG
     for name in (
         "opentelemetry.exporter.otlp.proto.grpc",
         "opentelemetry.sdk.trace.export",
@@ -76,6 +76,8 @@ def configure_logging() -> None:
         "opentelemetry.sdk._logs.export",
     ):
         logging.getLogger(name).setLevel(logging.ERROR)
+    for name in ("httpcore", "httpx", "azure.core.pipeline"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def _check_connectivity(endpoint: str, timeout: float = 3.0) -> bool:

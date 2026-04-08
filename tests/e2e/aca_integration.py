@@ -364,10 +364,15 @@ def test_manual_resolution(project: Any, mr_iid: int) -> None:
     disc_obj.resolved = True
     disc_obj.save()
 
-    # Record discussion count before re-review
+    # Record discussion count before re-review (both inline threads and summary notes)
     pre_review_discussions = mr.discussions.list(get_all=True)
-    pre_count = len([d for d in pre_review_discussions if not d.attributes.get("individual_note")])
-    log.info("pre-review discussion count", count=pre_count)
+    pre_total_discussions = len(pre_review_discussions)
+    pre_total_notes = sum(len(d.attributes.get("notes", [])) for d in pre_review_discussions)
+    log.info(
+        "pre-review discussion count",
+        total_discussions=pre_total_discussions,
+        total_notes=pre_total_notes,
+    )
 
     # Push a no-op commit to trigger incremental review
     project.commits.create(
@@ -386,19 +391,22 @@ def test_manual_resolution(project: Any, mr_iid: int) -> None:
     )
     log.info("pushed no-op commit to trigger re-review")
 
-    # Poll for new review activity (new discussions or notes beyond pre_count)
+    # Poll for new review activity — any new discussion or note (including summary
+    # notes) indicates a review cycle completed.  A re-review with 0 new inline
+    # comments still posts a summary note (individual_note=True).
     def _new_review_cycle() -> bool:
         fresh_mr = project.mergerequests.get(mr_iid)
         discs = fresh_mr.discussions.list(get_all=True)
-        non_system = [d for d in discs if not d.attributes.get("individual_note")]
-        # Either new discussions or new notes on existing ones indicate a review cycle
-        total_notes = sum(len(d.attributes.get("notes", [])) for d in non_system)
-        if len(non_system) > pre_count or total_notes > sum(
-            len(d.attributes.get("notes", []))
-            for d in pre_review_discussions
-            if not d.attributes.get("individual_note")
-        ):
-            log.info("new review cycle detected", discussion_count=len(non_system))
+        new_total = len(discs)
+        new_notes = sum(len(d.attributes.get("notes", [])) for d in discs)
+        if new_total > pre_total_discussions or new_notes > pre_total_notes:
+            log.info(
+                "new review cycle detected",
+                discussions=new_total,
+                notes=new_notes,
+                prev_discussions=pre_total_discussions,
+                prev_notes=pre_total_notes,
+            )
             return True
         return False
 
