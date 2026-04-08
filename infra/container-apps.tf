@@ -164,6 +164,7 @@ locals {
     local.kv_secrets_runner,
     { for k in local.kv_active_keys : k => k if startswith(k, "gitlab-token") },
     { for k in local.kv_active_keys : k => k if k == "jira-api-token" },
+    { for k in local.kv_active_keys : k => k if k == "gitlab-webhook-secret" },
   )
 }
 
@@ -183,6 +184,17 @@ resource "azurerm_container_app" "controller" {
   registry {
     server   = azurerm_container_registry.main.login_server
     identity = azurerm_user_assigned_identity.controller.id
+  }
+
+  ingress {
+    external_enabled = true
+    target_port      = 8000
+    transport        = "auto"
+
+    traffic_weight {
+      percentage      = 100
+      latest_revision = true
+    }
   }
 
   template {
