@@ -61,6 +61,12 @@ def _is_bare_comment(data: dict[str, object]) -> bool:
     return "file" in data and "line" in data and "comments" not in data
 
 
+def _build_from_array(items: list[object], summary: str, *, parse_path: str) -> ParsedReview:
+    """Build a ParsedReview by treating each array element as a comment."""
+    data: dict[str, object] = {"comments": items}
+    return _build_parsed_review(data, summary, parse_path=parse_path)
+
+
 def _build_parsed_review(
     data: dict[str, object], summary: str, *, parse_path: str = "unknown"
 ) -> ParsedReview:
@@ -101,12 +107,13 @@ def parse_review(raw: str) -> ParsedReview:
 
     Expects a JSON object with "comments" and "resolutions" arrays
     (optionally in a code fence) followed by a summary.
+    Also handles JSON arrays of comment objects (wrapped automatically).
     Falls back to treating the entire output as a summary if parsing fails.
     """
     log.debug("parse_review_input", raw_length=len(raw), raw_preview=raw[:300])
 
-    # Try code-fenced JSON object first
-    json_match = re.search(r"```json\s*\n(\{.*?\})\s*\n```", raw, re.DOTALL)
+    # Try code-fenced JSON first (object or array)
+    json_match = re.search(r"```json\s*\n([\[{].*?[\]}])\s*\n```", raw, re.DOTALL)
     if json_match:
         try:
             parsed: object = json.loads(json_match.group(1))
@@ -115,11 +122,14 @@ def parse_review(raw: str) -> ParsedReview:
             return ParsedReview(
                 comments=[], summary=raw.strip(), parse_path="code_fence_json_error"
             )
+        summary = raw[json_match.end() :].strip()
+        summary = re.sub(r"^```\s*", "", summary).strip() or "Review complete."
+        if isinstance(parsed, list):
+            log.debug("parse_review_path", path="code_fence_array", items=len(parsed))  # pyright: ignore[reportUnknownArgumentType]
+            return _build_from_array(parsed, summary, parse_path="code_fence_array")  # pyright: ignore[reportUnknownArgumentType]
         if not isinstance(parsed, dict):
             log.debug("parse_review_path", path="code_fence_not_dict")
             return ParsedReview(comments=[], summary=raw.strip(), parse_path="code_fence_not_dict")
-        summary = raw[json_match.end() :].strip()
-        summary = re.sub(r"^```\s*", "", summary).strip() or "Review complete."
         result = _build_parsed_review(parsed, summary, parse_path="code_fence")  # pyright: ignore[reportUnknownArgumentType]
         log.debug(
             "parse_review_path",
@@ -129,8 +139,20 @@ def parse_review(raw: str) -> ParsedReview:
         )
         return result
 
-    # Try bare JSON object using raw_decode (handles braces in trailing text)
+    # Try bare JSON array (e.g. [{comment1}, {comment2}]\nSummary)
     stripped = raw.strip()
+    if stripped.startswith("["):
+        try:
+            parsed_arr, end_idx = json.JSONDecoder().raw_decode(stripped, 0)
+        except json.JSONDecodeError:
+            pass
+        else:
+            if isinstance(parsed_arr, list):
+                arr_summary = stripped[end_idx:].strip() or "Review complete."
+                log.debug("parse_review_path", path="bare_array", items=len(parsed_arr))  # pyright: ignore[reportUnknownArgumentType]
+                return _build_from_array(parsed_arr, arr_summary, parse_path="bare_array")  # pyright: ignore[reportUnknownArgumentType]
+
+    # Try bare JSON object using raw_decode (handles braces in trailing text)
     idx = stripped.find("{")
     if idx == -1:
         log.debug("parse_review_path", path="freetext_fallback")

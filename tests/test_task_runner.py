@@ -260,6 +260,22 @@ class TestReviewResponseValidator:
         """JSON object with unrelated keys is not review-shaped — retries."""
         assert _review_response_validator('{"foo": "bar"}') is not None
 
+    def test_multi_element_array_in_fence_accepts_all(self) -> None:
+        """Code-fenced JSON array with multiple comments all accepted."""
+        raw = (
+            '```json\n[{"file": "a.py", "line": 1, "severity": "error", "comment": "Bug A"}, '
+            '{"file": "b.py", "line": 2, "severity": "warning", "comment": "Bug B"}]\n```\nDone.'
+        )
+        assert _review_response_validator(raw) is None
+
+    def test_multi_element_bare_array_accepts_all(self) -> None:
+        """Bare JSON array with multiple comments all accepted."""
+        raw = (
+            '[{"file": "a.py", "line": 1, "severity": "error", "comment": "Bug A"}, '
+            '{"file": "b.py", "line": 2, "severity": "warning", "comment": "Bug B"}]\nDone.'
+        )
+        assert _review_response_validator(raw) is None
+
     def test_valid_block(self) -> None:
         out = parse_agent_output(VALID_AGENT_OUTPUT)
         assert out is not None

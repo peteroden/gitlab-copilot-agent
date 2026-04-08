@@ -21,7 +21,7 @@ from gitlab_copilot_agent.git_operations import (
     git_head_sha,
 )
 from gitlab_copilot_agent.prompt_defaults import get_prompt
-from gitlab_copilot_agent.telemetry import configure_logging
+from gitlab_copilot_agent.telemetry import configure_logging, init_telemetry
 
 log = structlog.get_logger()
 ENV_TASK_TYPE, ENV_TASK_ID = "TASK_TYPE", "TASK_ID"
@@ -94,7 +94,9 @@ def _review_response_validator(response: str) -> str | None:
 
     # 0 comments/resolutions — accept only if valid JSON AND review-shaped
     # (has a "comments" key). Rejects {}, {"summary": "x"}, {"foo": "bar"}.
-    if parsed.parse_path in ("code_fence", "raw_decode") and '"comments"' in response:
+    # Array paths always have comments as the parse target, so accept them too.
+    _VALID_JSON_PATHS = ("code_fence", "raw_decode", "code_fence_array", "bare_array")
+    if parsed.parse_path in _VALID_JSON_PATHS and '"comments"' in response:
         return None
 
     # freetext_fallback, *_json_error, *_not_dict, or non-review JSON → retry
@@ -417,6 +419,7 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
 
 def main() -> None:
     configure_logging()
+    init_telemetry()
     sys.exit(asyncio.run(run_task()))
 
 

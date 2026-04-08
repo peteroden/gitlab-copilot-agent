@@ -392,6 +392,10 @@ resource "azurerm_container_app_job" "task_runner" {
       command = [".venv/bin/python", "-m", "gitlab_copilot_agent.task_runner"]
 
       env {
+        name  = "PYTHONUNBUFFERED"
+        value = "1"
+      }
+      env {
         name  = "COPILOT_MODEL"
         value = var.copilot_model
       }

@@ -73,6 +73,51 @@ def test_parse_skips_invalid_items() -> None:
     assert result.comments[0].severity == "info"  # default
 
 
+def test_parse_multi_element_array_code_fence() -> None:
+    """Code-fenced JSON array with multiple comments preserves all items."""
+    raw = (
+        "```json\n"
+        "["
+        '{"file": "a.py", "line": 1, "severity": "error", "comment": "Bug A"}, '
+        '{"file": "b.py", "line": 2, "severity": "warning", "comment": "Bug B"}, '
+        '{"file": "c.py", "line": 3, "severity": "info", "comment": "Note C"}'
+        "]\n```\nMultiple issues found."
+    )
+    result = parse_review(raw)
+    assert len(result.comments) == 3
+    assert result.comments[0].file == "a.py"
+    assert result.comments[1].file == "b.py"
+    assert result.comments[2].file == "c.py"
+    assert result.parse_path == "code_fence_array"
+    assert "Multiple issues" in result.summary
+
+
+def test_parse_multi_element_bare_array() -> None:
+    """Bare JSON array (no code fence) with multiple comments preserves all items."""
+    raw = (
+        '[{"file": "x.py", "line": 10, "severity": "error", "comment": "Fix this"}, '
+        '{"file": "y.py", "line": 20, "severity": "warning", "comment": "Check that"}]'
+        "\nTwo issues detected."
+    )
+    result = parse_review(raw)
+    assert len(result.comments) == 2
+    assert result.comments[0].file == "x.py"
+    assert result.comments[1].file == "y.py"
+    assert result.parse_path == "bare_array"
+    assert "Two issues" in result.summary
+
+
+def test_parse_single_element_array_code_fence() -> None:
+    """Single-element code-fenced array still works."""
+    raw = (
+        '```json\n[{"file": "a.py", "line": 1, "severity": "error", '
+        '"comment": "One bug"}]\n```\nDone.'
+    )
+    result = parse_review(raw)
+    assert len(result.comments) == 1
+    assert result.parse_path == "code_fence_array"
+
+
 def test_parse_comment_with_suggestion() -> None:
     raw = (
         "```json\n"
