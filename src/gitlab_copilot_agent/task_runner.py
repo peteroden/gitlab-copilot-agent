@@ -3,7 +3,6 @@
 import asyncio
 import json
 import os
-import re
 import shutil
 import sys
 from pathlib import Path
@@ -54,12 +53,16 @@ _RETRY_PROMPT = (
 )
 
 _REVIEW_RETRY_PROMPT = (
-    "Your review output used a JSON array instead of a JSON object. "
-    "Reformat your ENTIRE review as a JSON object with 'comments' and "
-    "'resolutions' keys — do NOT use a bare array:\n\n"
+    "Your review output was not in the required format. "
+    "Output your ENTIRE review as a fenced JSON object with 'comments' and "
+    "'resolutions' keys. Do NOT output plain text, a bare array, or a "
+    "summary without the JSON block:\n\n"
     "```json\n"
     "{\n"
-    '  "comments": [{...}, ...],\n'
+    '  "comments": [\n'
+    '    {"file": "path/to/file.py", "line": 10, "severity": "error", '
+    '"comment": "Description of the issue"}\n'
+    "  ],\n"
     '  "resolutions": []\n'
     "}\n"
     "```\n\n"
@@ -68,24 +71,34 @@ _REVIEW_RETRY_PROMPT = (
 
 
 def _review_response_validator(response: str) -> str | None:
-    """Return a follow-up prompt if the review response uses array instead of object format."""
+    """Return a follow-up prompt if the review response is not valid structured JSON.
+
+    Retries when the response is:
+    - Empty
+    - Plain text with no JSON (e.g. agent delegation summary)
+    - Malformed JSON that couldn't be parsed
+    - JSON object missing the ``comments`` key (schema drift)
+
+    Accepts when:
+    - Parsed JSON has comments or resolutions (normal review)
+    - Parsed JSON is review-shaped with 0 items (clean code, no issues)
+    """
     if not response.strip():
         return _REVIEW_RETRY_PROMPT
 
     from gitlab_copilot_agent.comment_parser import parse_review
 
     parsed = parse_review(response)
-    if parsed.comments:
+    if parsed.comments or parsed.resolutions:
         return None
-    # Check if the LLM output a JSON array instead of an object
-    stripped = response.strip()
-    fence_match = re.search(r"```json\s*\n(\[.*?\])\s*\n```", stripped, re.DOTALL)
-    if fence_match:
-        return _REVIEW_RETRY_PROMPT
-    idx = stripped.find("[")
-    if idx != -1 and (stripped.find("{") == -1 or idx < stripped.find("{")):
-        return _REVIEW_RETRY_PROMPT
-    return None
+
+    # 0 comments/resolutions — accept only if valid JSON AND review-shaped
+    # (has a "comments" key). Rejects {}, {"summary": "x"}, {"foo": "bar"}.
+    if parsed.parse_path in ("code_fence", "raw_decode") and '"comments"' in response:
+        return None
+
+    # freetext_fallback, *_json_error, *_not_dict, or non-review JSON → retry
+    return _REVIEW_RETRY_PROMPT
 
 
 def _coding_response_validator(response: str) -> str | None:

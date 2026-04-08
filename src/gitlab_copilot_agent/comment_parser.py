@@ -50,6 +50,10 @@ class ParsedReview(BaseModel):
     resolutions: list[Resolution] = Field(  # pyright: ignore[reportUnknownVariableType]
         default_factory=list, description="Resolution determinations for prior feedback"
     )
+    parse_path: str = Field(
+        default="unknown",
+        description="Internal: which parsing strategy produced this result",
+    )
 
 
 def _is_bare_comment(data: dict[str, object]) -> bool:
@@ -57,7 +61,9 @@ def _is_bare_comment(data: dict[str, object]) -> bool:
     return "file" in data and "line" in data and "comments" not in data
 
 
-def _build_parsed_review(data: dict[str, object], summary: str) -> ParsedReview:
+def _build_parsed_review(
+    data: dict[str, object], summary: str, *, parse_path: str = "unknown"
+) -> ParsedReview:
     """Build a ParsedReview from a parsed JSON dict and summary text.
 
     Handles the edge case where the LLM emits a single comment object
@@ -85,7 +91,9 @@ def _build_parsed_review(data: dict[str, object], summary: str) -> ParsedReview:
         except (KeyError, ValueError, ValidationError):
             continue
 
-    return ParsedReview(comments=comments, summary=summary, resolutions=resolutions)
+    return ParsedReview(
+        comments=comments, summary=summary, resolutions=resolutions, parse_path=parse_path
+    )
 
 
 def parse_review(raw: str) -> ParsedReview:
@@ -104,13 +112,15 @@ def parse_review(raw: str) -> ParsedReview:
             parsed: object = json.loads(json_match.group(1))
         except json.JSONDecodeError:
             log.debug("parse_review_path", path="code_fence_json_error")
-            return ParsedReview(comments=[], summary=raw.strip())
+            return ParsedReview(
+                comments=[], summary=raw.strip(), parse_path="code_fence_json_error"
+            )
         if not isinstance(parsed, dict):
             log.debug("parse_review_path", path="code_fence_not_dict")
-            return ParsedReview(comments=[], summary=raw.strip())
+            return ParsedReview(comments=[], summary=raw.strip(), parse_path="code_fence_not_dict")
         summary = raw[json_match.end() :].strip()
         summary = re.sub(r"^```\s*", "", summary).strip() or "Review complete."
-        result = _build_parsed_review(parsed, summary)  # pyright: ignore[reportUnknownArgumentType]
+        result = _build_parsed_review(parsed, summary, parse_path="code_fence")  # pyright: ignore[reportUnknownArgumentType]
         log.debug(
             "parse_review_path",
             path="code_fence",
@@ -124,17 +134,19 @@ def parse_review(raw: str) -> ParsedReview:
     idx = stripped.find("{")
     if idx == -1:
         log.debug("parse_review_path", path="freetext_fallback")
-        return ParsedReview(comments=[], summary=stripped or "Review complete.")
+        return ParsedReview(
+            comments=[], summary=stripped or "Review complete.", parse_path="freetext_fallback"
+        )
     try:
         parsed, end_idx = json.JSONDecoder().raw_decode(stripped, idx)
     except json.JSONDecodeError:
         log.debug("parse_review_path", path="raw_decode_json_error")
-        return ParsedReview(comments=[], summary=stripped)
+        return ParsedReview(comments=[], summary=stripped, parse_path="raw_decode_json_error")
     if not isinstance(parsed, dict):
         log.debug("parse_review_path", path="raw_decode_not_dict")
-        return ParsedReview(comments=[], summary=stripped)
+        return ParsedReview(comments=[], summary=stripped, parse_path="raw_decode_not_dict")
     summary = stripped[end_idx:].strip() or "Review complete."
-    result = _build_parsed_review(parsed, summary)  # pyright: ignore[reportUnknownArgumentType]
+    result = _build_parsed_review(parsed, summary, parse_path="raw_decode")  # pyright: ignore[reportUnknownArgumentType]
     log.debug(
         "parse_review_path",
         path="raw_decode",
