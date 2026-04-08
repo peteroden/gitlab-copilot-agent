@@ -92,11 +92,14 @@ def _review_response_validator(response: str) -> str | None:
     if parsed.comments or parsed.resolutions:
         return None
 
-    # 0 comments/resolutions — accept only if valid JSON AND review-shaped
-    # (has a "comments" key). Rejects {}, {"summary": "x"}, {"foo": "bar"}.
-    # Array paths always have comments as the parse target, so accept them too.
-    _VALID_JSON_PATHS = ("code_fence", "raw_decode", "code_fence_array", "bare_array")
-    if parsed.parse_path in _VALID_JSON_PATHS and '"comments"' in response:
+    # 0 comments/resolutions — accept only if valid JSON AND review-shaped.
+    # Object paths require "comments" key in response to reject {}, {"foo": "bar"}.
+    # Array paths are inherently review-shaped (parser wraps elements as comments).
+    _OBJECT_PATHS = ("code_fence", "raw_decode")
+    _ARRAY_PATHS = ("code_fence_array", "bare_array")
+    if parsed.parse_path in _ARRAY_PATHS:
+        return None
+    if parsed.parse_path in _OBJECT_PATHS and '"comments"' in response:
         return None
 
     # freetext_fallback, *_json_error, *_not_dict, or non-review JSON → retry

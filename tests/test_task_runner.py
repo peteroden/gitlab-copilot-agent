@@ -276,6 +276,14 @@ class TestReviewResponseValidator:
         )
         assert _review_response_validator(raw) is None
 
+    def test_empty_bare_array_accepted(self) -> None:
+        """Empty bare JSON array means clean code — accepted without retry."""
+        assert _review_response_validator("[]\nNo issues.") is None
+
+    def test_empty_fenced_array_accepted(self) -> None:
+        """Empty code-fenced JSON array means clean code — accepted without retry."""
+        assert _review_response_validator("```json\n[]\n```\nNo issues.") is None
+
     def test_valid_block(self) -> None:
         out = parse_agent_output(VALID_AGENT_OUTPUT)
         assert out is not None
