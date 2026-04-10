@@ -31,9 +31,9 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Functions**:
 - `webhook(request: Request, background_tasks: BackgroundTasks, x_gitlab_token: str | None) -> dict[str, str]`: POST endpoint, validates HMAC, dispatches to background handlers
 - `_validate_webhook_token(received: str | None, expected: str) -> None`: HMAC comparison using `hmac.compare_digest`
-- `_process_review(request: Request, payload: MergeRequestWebhookPayload) -> None`: Background task for MR review. Uses `get_services()` for typed access to settings, executor, credential_registry. Resolves per-project `resolution_behavior` from project registry.
+- `_process_review(request: Request, payload: MergeRequestWebhookPayload) -> None`: Background task for MR review. Uses `get_app_context()` for typed access to settings, executor, credential_registry. Resolves per-project `resolution_behavior` from project registry.
 - `_is_agent_directed(payload: NoteWebhookPayload, agent_identity: AgentIdentity, request: Request) -> bool`: Check if note @mentions the agent
-- `_process_discussion(request: Request, payload: NoteWebhookPayload, agent_identity: AgentIdentity) -> None`: Background task for discussion interactions. Uses `get_services()` for typed access. Resolves per-project `resolution_behavior` from project registry.
+- `_process_discussion(request: Request, payload: NoteWebhookPayload, agent_identity: AgentIdentity) -> None`: Background task for discussion interactions. Uses `get_app_context()` for typed access. Resolves per-project `resolution_behavior` from project registry.
 
 **Key Constants**:
 - `HANDLED_ACTIONS = frozenset({"open", "update", "reopen"})`: MR actions that trigger review
@@ -645,7 +645,7 @@ All use `frozen=True` config.
 - `AppContext`: Frozen dataclass holding `settings`, `executor`, `repo_locks`, `dedup_store`, `review_tracker`, `credential_registry`, `allowed_project_ids`
 
 **Key Functions**:
-- `get_services(request: Request) -> AppContext`: FastAPI `Depends()` accessor
+- `get_app_context(request: Request) -> AppContext`: FastAPI `Depends()` accessor
 
 **Depended On By**: `webhook.py`, `main.py`
 

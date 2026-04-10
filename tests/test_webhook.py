@@ -43,7 +43,7 @@ async def test_webhook_rejects_bad_token(client: AsyncClient, token: str | None)
 
 async def test_webhook_returns_403_when_secret_not_configured(client: AsyncClient) -> None:
     """Polling-only mode: no webhook secret configured → 403."""
-    app.state.ctx = make_app_context(
+    app.state.app_context = make_app_context(
         settings=make_settings(
             gitlab_webhook_secret=None, gitlab_poll=True, gitlab_projects="group/project"
         )
@@ -101,7 +101,7 @@ def _note_body(note: str = f"@{AGENT_USERNAME} fix the bug") -> dict[str, object
 def _setup_credential_registry() -> MagicMock:
     """Wire a mock credential registry into the app context and return it."""
     mock = _make_credential_registry_mock()
-    app.state.ctx = dataclasses.replace(app.state.ctx, credential_registry=mock)
+    app.state.app_context = dataclasses.replace(app.state.app_context, credential_registry=mock)
     return mock
 
 
@@ -131,7 +131,7 @@ async def test_note_webhook_uses_shared_lock_manager(client: AsyncClient) -> Non
 
         mock_handle.assert_awaited_once()
         _, kwargs = mock_handle.call_args
-        assert kwargs["repo_locks"] is app.state.ctx.repo_locks
+        assert kwargs["repo_locks"] is app.state.app_context.repo_locks
 
 
 # -- Deduplication tests --
@@ -140,7 +140,7 @@ async def test_note_webhook_uses_shared_lock_manager(client: AsyncClient) -> Non
 async def test_webhook_skips_duplicate_head_sha(client: AsyncClient) -> None:
     """Second webhook with same project/MR/SHA is skipped."""
     # Pre-mark this SHA as reviewed
-    app.state.ctx.review_tracker.mark(PROJECT_ID, MR_IID, "abc123")
+    app.state.app_context.review_tracker.mark(PROJECT_ID, MR_IID, "abc123")
 
     resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
     assert resp.status_code == 200
@@ -149,7 +149,7 @@ async def test_webhook_skips_duplicate_head_sha(client: AsyncClient) -> None:
 
 async def test_webhook_queues_new_head_sha(client: AsyncClient) -> None:
     """New SHA on same MR is NOT skipped."""
-    app.state.ctx.review_tracker.mark(PROJECT_ID, MR_IID, "old_sha")
+    app.state.app_context.review_tracker.mark(PROJECT_ID, MR_IID, "old_sha")
 
     payload = make_mr_payload(last_commit={"id": "new_sha", "message": "new commit"})
     resp = await client.post("/webhook", json=payload, headers=HEADERS)
@@ -158,7 +158,7 @@ async def test_webhook_queues_new_head_sha(client: AsyncClient) -> None:
 
 async def test_webhook_marks_sha_after_successful_review(client: AsyncClient) -> None:
     """SHA is marked as reviewed only after handle_review succeeds."""
-    tracker = app.state.ctx.review_tracker
+    tracker = app.state.app_context.review_tracker
     assert not tracker.is_reviewed(PROJECT_ID, MR_IID, "abc123")
 
     with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
@@ -171,7 +171,7 @@ async def test_webhook_marks_sha_after_successful_review(client: AsyncClient) ->
 
 async def test_webhook_does_not_mark_sha_on_review_failure(client: AsyncClient) -> None:
     """SHA is NOT marked if handle_review raises."""
-    tracker = app.state.ctx.review_tracker
+    tracker = app.state.app_context.review_tracker
 
     with patch(
         "gitlab_copilot_agent.webhook.handle_review",
@@ -205,22 +205,24 @@ async def test_webhook_queues_update_with_new_commits(client: AsyncClient) -> No
 
 async def test_webhook_accepts_when_allowlist_is_none(client: AsyncClient) -> None:
     """Backward compat: no allowlist configured means all projects pass."""
-    assert app.state.ctx.allowed_project_ids is None
+    assert app.state.app_context.allowed_project_ids is None
     resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
     assert resp.json()["status"] == "queued"
 
 
 async def test_webhook_accepts_when_project_in_allowlist(client: AsyncClient) -> None:
     """Events from allowed projects are processed normally."""
-    app.state.ctx = dataclasses.replace(app.state.ctx, allowed_project_ids=frozenset({PROJECT_ID}))
+    app.state.app_context = dataclasses.replace(
+        app.state.app_context, allowed_project_ids=frozenset({PROJECT_ID})
+    )
     resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
     assert resp.json()["status"] == "queued"
 
 
 async def test_webhook_rejects_when_project_not_in_allowlist(client: AsyncClient) -> None:
     """Events from non-allowed projects are ignored."""
-    app.state.ctx = dataclasses.replace(
-        app.state.ctx, allowed_project_ids=frozenset({NON_ALLOWED_PROJECT_ID})
+    app.state.app_context = dataclasses.replace(
+        app.state.app_context, allowed_project_ids=frozenset({NON_ALLOWED_PROJECT_ID})
     )
     resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
     assert resp.json() == {"status": "ignored", "reason": "project not in allowlist"}
@@ -282,8 +284,8 @@ async def test_webhook_review_falls_back_to_global_token(client: AsyncClient) ->
 async def test_webhook_discussion_uses_per_project_token(client: AsyncClient) -> None:
     """Discussion handler resolves per-project token from registry."""
     app.state.project_registry = _make_project_registry()
-    app.state.ctx = dataclasses.replace(
-        app.state.ctx, credential_registry=_make_credential_registry_mock()
+    app.state.app_context = dataclasses.replace(
+        app.state.app_context, credential_registry=_make_credential_registry_mock()
     )
     mock_handle = AsyncMock()
     try:
@@ -316,7 +318,9 @@ async def test_webhook_review_works_without_registry(client: AsyncClient) -> Non
 async def test_webhook_review_passes_credential_registry(client: AsyncClient) -> None:
     """MR review forwards credential_registry from app context."""
     mock_registry = MagicMock()
-    app.state.ctx = dataclasses.replace(app.state.ctx, credential_registry=mock_registry)
+    app.state.app_context = dataclasses.replace(
+        app.state.app_context, credential_registry=mock_registry
+    )
     mock_handle = AsyncMock()
     with patch("gitlab_copilot_agent.webhook.handle_review", mock_handle):
         resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
@@ -374,8 +378,8 @@ def _note_body_with_user(
 
 async def test_self_comment_detected_via_user_id(client: AsyncClient) -> None:
     """Note from the agent (matched by user_id) is ignored."""
-    app.state.ctx = dataclasses.replace(
-        app.state.ctx,
+    app.state.app_context = dataclasses.replace(
+        app.state.app_context,
         credential_registry=_make_credential_registry_mock(user_id=AGENT_USER_ID),
     )
     body = _note_body_with_user(user_id=AGENT_USER_ID, username="someone-else")
@@ -385,8 +389,8 @@ async def test_self_comment_detected_via_user_id(client: AsyncClient) -> None:
 
 async def test_no_self_comment_when_ids_differ(client: AsyncClient) -> None:
     """Note from a different user with @mention proceeds to queue."""
-    app.state.ctx = dataclasses.replace(
-        app.state.ctx,
+    app.state.app_context = dataclasses.replace(
+        app.state.app_context,
         credential_registry=_make_credential_registry_mock(user_id=AGENT_USER_ID),
     )
     with patch("gitlab_copilot_agent.webhook.handle_discussion_interaction"):
@@ -397,8 +401,8 @@ async def test_no_self_comment_when_ids_differ(client: AsyncClient) -> None:
 
 async def test_identity_resolution_failure_returns_ignored(client: AsyncClient) -> None:
     """When resolve_identity raises, note is ignored."""
-    app.state.ctx = dataclasses.replace(
-        app.state.ctx,
+    app.state.app_context = dataclasses.replace(
+        app.state.app_context,
         credential_registry=_make_credential_registry_mock(raise_on_resolve=True),
     )
     body = _note_body_with_user(user_id=NOTE_AUTHOR_USER_ID, username=AGENT_USERNAME)

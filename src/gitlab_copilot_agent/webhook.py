@@ -8,7 +8,7 @@ import re
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
-from gitlab_copilot_agent.app_context import get_services
+from gitlab_copilot_agent.app_context import get_app_context
 from gitlab_copilot_agent.discussion_models import AgentIdentity
 from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 from gitlab_copilot_agent.gitlab_client import GitLabClient
@@ -53,11 +53,11 @@ def _validate_webhook_token(received: str | None, expected: str | None) -> None:
 
 async def _process_review(request: Request, payload: MergeRequestWebhookPayload) -> None:
     """Run review in background task; marks head SHA as reviewed on success."""
-    svc = get_services(request)
-    settings = svc.settings
-    executor = svc.executor
-    review_tracker = svc.review_tracker
-    credential_registry = svc.credential_registry
+    app_context = get_app_context(request)
+    settings = app_context.settings
+    executor = app_context.executor
+    review_tracker = app_context.review_tracker
+    credential_registry = app_context.credential_registry
     registry: ProjectRegistry | None = request.app.state.project_registry
     mr = payload.object_attributes
     project_id = payload.project.id
@@ -86,7 +86,7 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
         review_tracker.mark(project_id, mr.iid, head_sha)
         # Also mark in shared dedup store so the poller won't re-review
         review_key = f"review:{project_id}:{mr.iid}:{head_sha}"
-        await svc.dedup_store.mark_seen(review_key, ttl_seconds=86400)
+        await app_context.dedup_store.mark_seen(review_key, ttl_seconds=86400)
         bound.info("background_review_completed")
     except Exception:
         webhook_errors_total.add(1, {"handler": "review"})
@@ -114,8 +114,8 @@ async def _is_agent_directed(
     # fetch the discussion and check if the agent has a prior note in it
     discussion_id = payload.object_attributes.discussion_id
     if discussion_id and payload.merge_request:
-        svc = get_services(request)
-        settings = svc.settings
+        app_context = get_app_context(request)
+        settings = app_context.settings
         registry: ProjectRegistry | None = request.app.state.project_registry
         token = _resolve_project_token(payload.project.id, registry, settings.gitlab_token)
         try:
@@ -142,10 +142,10 @@ async def _process_discussion(
     note_key: str = "",
 ) -> None:
     """Process a discussion interaction in the background."""
-    svc = get_services(request)
-    settings = svc.settings
-    executor = svc.executor
-    repo_locks = svc.repo_locks
+    app_context = get_app_context(request)
+    settings = app_context.settings
+    executor = app_context.executor
+    repo_locks = app_context.repo_locks
     registry: ProjectRegistry | None = request.app.state.project_registry
     project_token = _resolve_project_token(payload.project.id, registry, settings.gitlab_token)
 
@@ -178,7 +178,7 @@ async def _process_discussion(
         bound.exception("background_discussion_failed")
     finally:
         if note_key:
-            await svc.dedup_store.mark_seen(note_key, ttl_seconds=86400)
+            await app_context.dedup_store.mark_seen(note_key, ttl_seconds=86400)
 
 
 @router.post("/webhook", status_code=200)
@@ -188,17 +188,17 @@ async def webhook(
     x_gitlab_token: str | None = Header(default=None),
 ) -> dict[str, str]:
     """Handle GitLab webhook events (MR and note)."""
-    svc = get_services(request)
-    settings = svc.settings
+    app_context = get_app_context(request)
+    settings = app_context.settings
 
     _validate_webhook_token(x_gitlab_token, settings.gitlab_webhook_secret)
 
     body = await request.json()
 
     # Project allowlist check
-    if svc.allowed_project_ids is not None:
+    if app_context.allowed_project_ids is not None:
         project_id = body.get("project", {}).get("id")
-        if project_id not in svc.allowed_project_ids:
+        if project_id not in app_context.allowed_project_ids:
             return {"status": "ignored", "reason": "project not in allowlist"}
 
     object_kind = body.get("object_kind")
@@ -218,7 +218,7 @@ async def webhook(
             return {"status": "ignored", "reason": "no new commits"}
 
         # Deduplicate by (project_id, mr_iid, head_sha)
-        review_tracker = svc.review_tracker
+        review_tracker = app_context.review_tracker
         head_sha = mr.last_commit.id
         if review_tracker.is_reviewed(payload.project.id, mr.iid, head_sha):
             await log.ainfo(
@@ -239,7 +239,7 @@ async def webhook(
             return {"status": "ignored", "reason": "not an MR note"}
 
         # Self-comment detection via agent identity (per-project credential)
-        credential_registry = svc.credential_registry
+        credential_registry = app_context.credential_registry
 
         # Resolve the credential_ref for this project (not always "default")
         registry: ProjectRegistry | None = request.app.state.project_registry
@@ -268,7 +268,7 @@ async def webhook(
         note_id = note_payload.object_attributes.id
         mr_iid = note_payload.merge_request.iid if note_payload.merge_request else 0
         note_key = f"note:{note_payload.project.id}:{mr_iid}:{note_id}"
-        if await svc.dedup_store.is_seen(note_key):
+        if await app_context.dedup_store.is_seen(note_key):
             return {"status": "skipped", "reason": "already processed"}
 
         background_tasks.add_task(

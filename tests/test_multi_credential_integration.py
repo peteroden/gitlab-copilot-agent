@@ -187,7 +187,9 @@ async def test_note_webhook_multi_project_token_isolation(
     )
     import dataclasses
 
-    app.state.ctx = dataclasses.replace(app.state.ctx, credential_registry=mock_cred)
+    app.state.app_context = dataclasses.replace(
+        app.state.app_context, credential_registry=mock_cred
+    )
 
     note_payload = {
         "object_kind": "note",

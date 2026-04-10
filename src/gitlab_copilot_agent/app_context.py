@@ -1,7 +1,7 @@
 """Typed application context — replaces app.state service locator.
 
-Created once during app lifespan and stashed on ``app.state.ctx``.
-Consumers access via ``get_services(request)`` FastAPI dependency.
+Created once during app lifespan and stashed on ``app.state.app_context``.
+Consumers access via ``get_app_context(request)`` FastAPI dependency.
 
 See ADR-0011.
 """
@@ -42,21 +42,21 @@ class AppContext:
     allowed_project_ids: frozenset[int] | None = field(default=None)
 
 
-def get_services(request: Request) -> AppContext:
+def get_app_context(request: Request) -> AppContext:
     """FastAPI dependency — retrieve the AppContext from app.state.
 
     Usage::
 
         @router.post("/webhook")
-        async def webhook(ctx: AppContext = Depends(get_services)):
+        async def webhook(app_context: AppContext = Depends(get_app_context)):
             ...
 
     Raises:
         RuntimeError: If the AppContext hasn't been initialized (lifespan bug
             or missing test fixture setup).
     """
-    ctx: AppContext | None = getattr(request.app.state, "ctx", None)
-    if ctx is None:
+    app_context: AppContext | None = getattr(request.app.state, "app_context", None)
+    if app_context is None:
         msg = "AppContext not initialized — check lifespan or test fixture setup"
         raise RuntimeError(msg)
-    return ctx
+    return app_context

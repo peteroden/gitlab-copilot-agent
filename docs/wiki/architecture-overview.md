@@ -89,7 +89,7 @@ graph TB
 ## Component Layers
 
 ### 1. HTTP Ingestion Layer
-- **`webhook.py`**: FastAPI endpoints for GitLab webhooks (merge_request, note). Uses `get_services()` for typed dependency access.
+- **`webhook.py`**: FastAPI endpoints for GitLab webhooks (merge_request, note). Uses `get_app_context()` for typed dependency access.
 - **`gitlab_poller.py`**: Background poller for MR discovery and @mention notes
 - **`jira_poller.py`**: Background poller for issues in "AI Ready" status
 
@@ -116,7 +116,7 @@ graph TB
 ### 5. Configuration & DI
 - **`config.py`**: `Settings` and `TaskRunnerSettings` loaded from environment variables (v1 config)
 - **`config_v2.py`**: GitLab-centric YAML config models (`ConfigFile`, `ProjectConfig`, `IntegrationConfig`), `load_config_file()`, audit logging for marketplace URLs
-- **`app_context.py`**: Frozen `AppContext` dataclass replacing `app.state` service locator. `get_services()` FastAPI dependency for typed access. Mutable state (project_registry, pollers) stays on `app.state` for hot-reload.
+- **`app_context.py`**: Frozen `AppContext` dataclass replacing `app.state` service locator. `get_app_context()` FastAPI dependency for typed access. Mutable state (project_registry, pollers) stays on `app.state` for hot-reload.
 - **`mapping_models.py`**: YAML mapping models for Jira→GitLab bindings (v1 config)
 - **`mapping_cli.py`**: CLI for `validate`, `show`, `render-json` (v1) and `schema`, `validate-v2` (v2)
 
@@ -221,7 +221,7 @@ graph TB
 **Validation**: Pydantic strict mode, HMAC for webhooks, URL validation for clones, frontmatter parsing for repo config
 
 ### Trusted Internal (Green Zone)
-- Application state (typed `AppContext` in `app_context.py`, stashed on `app.state.ctx`)
+- Application state (typed `AppContext` in `app_context.py`, stashed on `app.state.app_context`)
 - Python code in `src/gitlab_copilot_agent/`
 - Environment variables (loaded at startup)
 - YAML config file (`config_v2.py` models, loaded at startup via `load_config_file()`)

@@ -160,7 +160,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     creds = CredentialRegistry.from_env()
 
     # Build typed AppContext (immutable services)
-    ctx = AppContext(
+    app_context = AppContext(
         settings=settings,
         executor=executor,
         repo_locks=repo_locks,
@@ -171,7 +171,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             frozenset(allowed_project_ids) if allowed_project_ids is not None else None
         ),
     )
-    app.state.ctx = ctx
+    app.state.app_context = app_context
 
     # Mutable state: project_registry and pollers stay on app.state
     # directly for hot-reload support (see /config/reload endpoint).
@@ -301,8 +301,8 @@ async def config_reload(
 
     Requires the same webhook secret used for GitLab webhook auth.
     """
-    ctx: AppContext = request.app.state.ctx
-    settings = ctx.settings
+    app_context: AppContext = request.app.state.app_context
+    settings = app_context.settings
     secret = settings.gitlab_webhook_secret
     received = request.headers.get("X-Gitlab-Token")
     if secret is None:

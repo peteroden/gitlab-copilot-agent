@@ -174,7 +174,7 @@ def env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
 async def client(env_vars: None) -> AsyncIterator[AsyncClient]:
     """AsyncClient wired to the FastAPI app with test settings."""
     ctx = make_app_context()
-    app.state.ctx = ctx
+    app.state.app_context = ctx
     app.state.project_registry = None
     app.state.jira_poller = None
     app.state.gl_poller = None

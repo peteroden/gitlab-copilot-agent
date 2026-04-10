@@ -24,9 +24,9 @@ Add a custom `State` subclass with typed attributes.
 
 ### Option B: Frozen dataclass on app.state
 
-Create a `@dataclass(frozen=True)` `AppContext` with typed fields for all services. Store it as `app.state.ctx`. Provide `get_services(request)` as a FastAPI `Depends()` accessor.
+Create a `@dataclass(frozen=True)` `AppContext` with typed fields for all services. Store it as `app.state.app_context`. Provide `get_app_context(request)` as a FastAPI `Depends()` accessor.
 
-- Pros: Full type safety. Single source of truth for service inventory. Immutability prevents accidental mutation. `get_services()` provides a clean injection point.
+- Pros: Full type safety. Single source of truth for service inventory. Immutability prevents accidental mutation. `get_app_context()` provides a clean injection point.
 - Cons: Mutable state (project_registry, pollers) can't live in a frozen dataclass. Hot-reload endpoint needs to swap project_registry.
 
 ### Option C: Full DI container (dependency-injector, etc.)
@@ -40,15 +40,15 @@ Use a third-party DI framework.
 
 **Option B** — Frozen `AppContext` dataclass with mutable state kept separately.
 
-Immutable services (`settings`, `executor`, `repo_locks`, `dedup_store`, `review_tracker`, `credential_registry`, `allowed_project_ids`) live in the frozen `AppContext` at `app.state.ctx`. Mutable state (`project_registry`, `jira_poller`, `gl_poller`) stays on `app.state` directly to support hot-reload via `/config/reload`.
+Immutable services (`settings`, `executor`, `repo_locks`, `dedup_store`, `review_tracker`, `credential_registry`, `allowed_project_ids`) live in the frozen `AppContext` at `app.state.app_context`. Mutable state (`project_registry`, `jira_poller`, `gl_poller`) stays on `app.state` directly to support hot-reload via `/config/reload`.
 
-`get_services(request: Request) -> AppContext` is the FastAPI dependency for typed access. It raises `RuntimeError` with a clear message if the context isn't initialized.
+`get_app_context(request: Request) -> AppContext` is the FastAPI dependency for typed access. It raises `RuntimeError` with a clear message if the context isn't initialized.
 
 Tests use `make_app_context(**overrides)` factory and `dataclasses.replace()` for per-test overrides.
 
 ## Consequences
 
-- All `getattr(app.state, ...)` calls in webhook.py replaced with `get_services(request)`
+- All `getattr(app.state, ...)` calls in webhook.py replaced with `get_app_context(request)`
 - `project_registry` access remains via `request.app.state.project_registry` (mutable, may be None)
 - Test fixtures simplified: `make_app_context()` replaces 7 individual `app.state.X = Y` lines
 - `pyright: ignore[reportPrivateUsage]` remains in `/config/reload` for poller internal mutation (hot-reload design constraint)

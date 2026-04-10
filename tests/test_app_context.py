@@ -1,4 +1,4 @@
-"""Tests for app_context — AppContext dataclass and get_services dependency."""
+"""Tests for app_context — AppContext dataclass and get_app_context dependency."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI, Request
 from starlette.datastructures import State
 
-from gitlab_copilot_agent.app_context import AppContext, get_services
+from gitlab_copilot_agent.app_context import AppContext, get_app_context
 
 
 def _make_context(**overrides: object) -> AppContext:
@@ -51,13 +51,13 @@ class TestGetServices:
     def test_returns_ctx(self) -> None:
         app = FastAPI()
         ctx = _make_context()
-        app.state.ctx = ctx
+        app.state.app_context = ctx
         request = _make_request(app)
-        assert get_services(request) is ctx
+        assert get_app_context(request) is ctx
 
     def test_raises_when_no_ctx(self) -> None:
         app = FastAPI()
         app.state = State()
         request = _make_request(app)
         with pytest.raises(RuntimeError, match="AppContext not initialized"):
-            get_services(request)
+            get_app_context(request)
