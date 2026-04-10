@@ -666,7 +666,7 @@ graph TB
 | Repo Config (`repo_config.py`) | ❌ No | ❌ Forbidden | ✅ Yes |
 | Discussion (`discussion_models.py`) | ❌ No | ❌ Forbidden | ✅ Yes |
 | Discussion Engine (`discussion_engine.py`) | ❌ No | ❌ Forbidden | ✅ Yes |
-| Project Mapping (`project_mapping.py`) | ✅ Yes | ❌ Forbidden | ❌ No |
+
 
 **Strict Mode**: Rejects unknown fields and enforces exact type matching.  
 **Frozen**: Immutable after creation (hash-safe, thread-safe for reads).

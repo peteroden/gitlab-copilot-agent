@@ -1,4 +1,4 @@
-"""Tests for Jira models, client, and project mapping."""
+"""Tests for Jira models and client."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from gitlab_copilot_agent.jira_models import (
     JiraIssue,
     JiraSearchResponse,
 )
-from gitlab_copilot_agent.project_mapping import GitLabProjectMapping, ProjectMap
 
 # -- Constants --
 
@@ -191,45 +190,3 @@ class TestJiraClientComment:
         assert body["type"] == "doc"
         assert body["content"][0]["content"][0]["text"] == "MR created: https://gitlab.com/mr/1"
         await client.close()
-
-
-# -- Project Mapping Tests --
-
-
-class TestProjectMapping:
-    def test_lookup_existing_project(self) -> None:
-        pm = ProjectMap(
-            mappings={
-                "PROJ": GitLabProjectMapping(
-                    gitlab_project_id=12345,
-                    clone_url="https://gitlab.com/group/repo.git",
-                ),
-            }
-        )
-        result = pm.get("PROJ")
-        assert result is not None
-        assert result.gitlab_project_id == 12345
-        assert result.target_branch == "main"
-
-    def test_lookup_missing_project(self) -> None:
-        pm = ProjectMap(mappings={})
-        assert pm.get("UNKNOWN") is None
-
-    def test_contains(self) -> None:
-        pm = ProjectMap(
-            mappings={
-                "PROJ": GitLabProjectMapping(
-                    gitlab_project_id=1, clone_url="https://example.com/repo.git"
-                ),
-            }
-        )
-        assert "PROJ" in pm
-        assert "OTHER" not in pm
-
-    def test_custom_target_branch(self) -> None:
-        mapping = GitLabProjectMapping(
-            gitlab_project_id=1,
-            clone_url="https://example.com/repo.git",
-            target_branch="develop",
-        )
-        assert mapping.target_branch == "develop"

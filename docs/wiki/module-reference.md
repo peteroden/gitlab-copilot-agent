@@ -71,7 +71,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Key Protocols**:
 - `CodingTaskHandler`: Interface for handling discovered issues
-  - `handle(issue: JiraIssue, project_mapping: GitLabProjectMapping) -> None`
+  - `handle(issue: JiraIssue, project_mapping: ResolvedProject) -> None`
 
 **Key Classes**:
 - `JiraPoller`: Polls Jira on interval, dispatches to handler
@@ -80,7 +80,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - `_poll_once() -> None`: Search all mapped projects, invoke handler for new issues
   - `_processed_issues: set[str]`: Issue keys processed in this run
 
-**Internal Imports**: `config`, `jira_client`, `jira_models`, `project_mapping`, `telemetry`
+**Internal Imports**: `config`, `jira_client`, `jira_models`, `project_registry`, `telemetry`
 
 **Depended On By**: `main.py` (started in lifespan if Jira configured)
 
@@ -159,7 +159,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Key Classes**:
 - `CodingOrchestrator`: Implements `CodingTaskHandler` protocol
-  - `handle(issue: JiraIssue, project_mapping: GitLabProjectMapping) -> None`: Full coding pipeline
+  - `handle(issue: JiraIssue, project_mapping: ResolvedProject) -> None`: Full coding pipeline
     - Transitions issue to "In Progress"
     - Clones repo, creates branch `agent/{issue-key}` (with collision disambiguation via `git_unique_branch`)
     - Calls `run_coding_task()` via executor
@@ -168,7 +168,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
     - Adds Jira comment with MR URL
     - Emits `coding_tasks_total` and `coding_tasks_duration` metrics
 
-**Internal Imports**: `config`, `gitlab_client`, `jira_client`, `jira_models`, `project_mapping`, `task_executor`, `git_operations`, `coding_engine`, `coding_workflow`, `metrics`, `telemetry`, `concurrency`
+**Internal Imports**: `config`, `gitlab_client`, `jira_client`, `jira_models`, `project_registry`, `task_executor`, `git_operations`, `coding_engine`, `coding_workflow`, `metrics`, `telemetry`, `concurrency`
 
 **Depended On By**: `main.py` (as Jira poller handler)
 
@@ -611,11 +611,6 @@ All use `frozen=True` config.
 
 ---
 
-### `project_mapping.py` *(legacy)*
-**Purpose**: Original Jira→GitLab mapping. Superseded by `mapping_models.py` + `project_registry.py` for the Jira polling path.
-
----
-
 ### `mapping_models.py`
 **Purpose**: Pydantic models for YAML source mappings and rendered JSON format.
 
@@ -806,7 +801,6 @@ All use `frozen=True` config.
 | `models.py` | Data | 79 | Webhook models |
 | `jira_models.py` | Data | 87 | Jira API models |
 | `discussion_models.py` | Data | 71 | MR discussion history models |
-| `project_mapping.py` | Data | 34 | Jira→GitLab mapping |
 | `config.py` | Data | 137 | Settings |
 | `concurrency.py` | State | 208 | In-memory locks/dedup |
 | `state.py` | State | 79 | Factory functions for concurrency primitives |
