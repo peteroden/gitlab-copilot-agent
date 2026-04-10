@@ -1,9 +1,12 @@
-.PHONY: lint test build sandbox-image
+.PHONY: lint test build sandbox-image update-lint-baseline
 
 lint:
-	uv run ruff check src/ tests/
+	uv run python scripts/check_lint_baseline.py
 	uv run ruff format --check src/ tests/
 	uv run pyright src/
+
+update-lint-baseline:
+	uv run python scripts/check_lint_baseline.py --update
 
 test:
 	uv run pytest tests/ --cov --cov-report=term-missing --cov-fail-under=90

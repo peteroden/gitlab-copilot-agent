@@ -1,0 +1,131 @@
+{
+  "src/gitlab_copilot_agent/aca_executor.py": {
+    "D102": 1,
+    "D107": 1
+  },
+  "src/gitlab_copilot_agent/azure_storage.py": {
+    "D102": 11,
+    "D107": 3
+  },
+  "src/gitlab_copilot_agent/coding_engine.py": {
+    "TC001": 1
+  },
+  "src/gitlab_copilot_agent/coding_orchestrator.py": {
+    "D101": 1,
+    "D102": 1,
+    "D107": 1,
+    "TC001": 5,
+    "TC003": 1
+  },
+  "src/gitlab_copilot_agent/coding_workflow.py": {
+    "TC003": 1
+  },
+  "src/gitlab_copilot_agent/concurrency.py": {
+    "D102": 25,
+    "D105": 4,
+    "D107": 6,
+    "TC003": 1
+  },
+  "src/gitlab_copilot_agent/credential_registry.py": {
+    "D107": 1,
+    "RUF003": 1
+  },
+  "src/gitlab_copilot_agent/discussion_orchestrator.py": {
+    "TC001": 4,
+    "TC003": 1
+  },
+  "src/gitlab_copilot_agent/git_operations.py": {
+    "D107": 1
+  },
+  "src/gitlab_copilot_agent/gitlab_client.py": {
+    "D101": 2,
+    "D102": 17,
+    "D107": 1,
+    "TC003": 1
+  },
+  "src/gitlab_copilot_agent/gitlab_poller.py": {
+    "D102": 2,
+    "D107": 1,
+    "TC001": 6
+  },
+  "src/gitlab_copilot_agent/jira_client.py": {
+    "D102": 3,
+    "D107": 1
+  },
+  "src/gitlab_copilot_agent/jira_poller.py": {
+    "D102": 1,
+    "D107": 1,
+    "TC001": 5
+  },
+  "src/gitlab_copilot_agent/k8s_executor.py": {
+    "D102": 1,
+    "D107": 1
+  },
+  "src/gitlab_copilot_agent/main.py": {
+    "D103": 2,
+    "PLW2901": 1,
+    "PTH207": 1
+  },
+  "src/gitlab_copilot_agent/models.py": {
+    "D101": 6
+  },
+  "src/gitlab_copilot_agent/orchestrator.py": {
+    "TC003": 1
+  },
+  "src/gitlab_copilot_agent/project_registry.py": {
+    "D102": 4,
+    "D107": 1,
+    "TC001": 3
+  },
+  "src/gitlab_copilot_agent/review_engine.py": {
+    "TC001": 4
+  },
+  "src/gitlab_copilot_agent/task_executor.py": {
+    "D102": 2,
+    "TC001": 1
+  },
+  "src/gitlab_copilot_agent/task_runner.py": {
+    "D103": 2,
+    "N806": 2
+  },
+  "src/gitlab_copilot_agent/webhook.py": {
+    "D103": 1,
+    "TC001": 3
+  },
+  "tests/e2e/mock_gitlab.py": {
+    "PLW1510": 3,
+    "PTH113": 1,
+    "PTH118": 1,
+    "RET504": 1
+  },
+  "tests/test_copilot_session.py": {
+    "TC006": 1
+  },
+  "tests/test_credential_registry.py": {
+    "RUF043": 1
+  },
+  "tests/test_demo_provision/conftest.py": {
+    "RET504": 1
+  },
+  "tests/test_discussion_orchestrator.py": {
+    "TC003": 1
+  },
+  "tests/test_git_operations.py": {
+    "RUF043": 1
+  },
+  "tests/test_k8s_executor.py": {
+    "RUF006": 4
+  },
+  "tests/test_k8s_integration.py": {
+    "N806": 1
+  },
+  "tests/test_mapping_cli.py": {
+    "TC003": 1
+  },
+  "tests/test_process_sandbox.py": {
+    "PTH110": 1
+  },
+  "tests/test_project_registry.py": {
+    "N806": 1
+  }
+}

@@ -105,22 +105,21 @@ def _check_connectivity(endpoint: str, timeout: float = 3.0) -> bool:
             with contextlib.suppress(urllib.error.HTTPError):
                 urllib.request.urlopen(req, timeout=timeout)  # noqa: S310
             return True
-        else:
-            import grpc  # pyright: ignore[reportMissingTypeStubs]  # noqa: PLC0415
+        import grpc  # pyright: ignore[reportMissingTypeStubs]  # noqa: PLC0415
 
-            parsed = urlparse(endpoint)
-            target = f"{parsed.hostname}:{parsed.port or 4317}"
-            if parsed.scheme == "https":
-                channel = grpc.secure_channel(target, grpc.ssl_channel_credentials())
-            else:
-                channel = grpc.insecure_channel(target)
-            try:
-                grpc.channel_ready_future(channel).result(timeout=timeout)
-                return True
-            except grpc.FutureTimeoutError:
-                return False
-            finally:
-                channel.close()
+        parsed = urlparse(endpoint)
+        target = f"{parsed.hostname}:{parsed.port or 4317}"
+        if parsed.scheme == "https":
+            channel = grpc.secure_channel(target, grpc.ssl_channel_credentials())
+        else:
+            channel = grpc.insecure_channel(target)
+        try:
+            grpc.channel_ready_future(channel).result(timeout=timeout)
+            return True
+        except grpc.FutureTimeoutError:
+            return False
+        finally:
+            channel.close()
     except Exception:
         return False
 

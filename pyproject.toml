@@ -70,7 +70,35 @@ line-length = 99
 extend-exclude = ["tests/e2e/fixtures"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+select = [
+    "E", "W",       # pycodestyle
+    "F",             # pyflakes
+    "B",             # bugbear
+    "N",             # pep8-naming
+    "UP",            # pyupgrade
+    "SIM",           # simplify
+    "I",             # isort
+    "D",             # pydocstyle
+    "ANN",           # annotations
+    "TCH",           # type-checking imports
+    "PTH",           # pathlib over os.path
+    "RET",           # return consistency
+    "RUF",           # ruff-native
+    "PLE",           # pylint errors
+    "PLW",           # pylint warnings
+]
+ignore = [
+    "ANN401",        # disallows Any — pyright strict + comment convention handles this
+    "D212",          # conflicts with D213
+    "RUF100",        # defer until existing noqa audit — 19 load-bearing noqa comments reference non-selected rules
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "D", "PLR"]
+"**/__init__.py" = ["D104"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gitlab_copilot_agent"]

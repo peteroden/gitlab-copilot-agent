@@ -171,7 +171,7 @@ async def run_copilot_session(
                         await log.ainfo("skills_loaded", directories=repo_config.skill_directories)
                     if repo_config.custom_agents:
                         session_kwargs["custom_agents"] = [
-                            cast(CustomAgentConfig, a.model_dump(exclude_none=True))
+                            cast("CustomAgentConfig", a.model_dump(exclude_none=True))
                             for a in repo_config.custom_agents
                         ]
                         await log.ainfo(
@@ -183,7 +183,7 @@ async def run_copilot_session(
 
                     if settings.copilot_provider_type:
                         provider: ProviderConfig = {
-                            "type": cast(Any, settings.copilot_provider_type),
+                            "type": cast("Any", settings.copilot_provider_type),
                         }
                         if settings.copilot_provider_base_url:
                             provider["base_url"] = settings.copilot_provider_base_url
