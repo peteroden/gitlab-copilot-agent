@@ -391,7 +391,7 @@ async def health() -> dict:
 
 
 def _create_bare_repo() -> Path:
-    """Create a minimal bare git repo with one file for clone tests."""
+    """Create a minimal bare git repo with main + feature branches for E2E tests."""
     tmp = Path(tempfile.mkdtemp(prefix="e2e-repo-"))
     work = tmp / "work"
     work.mkdir()
@@ -412,6 +412,22 @@ def _create_bare_repo() -> Path:
         capture_output=True,
         env=env,
     )
+
+    # Create feature branch with a small change (for incremental review tests)
+    subprocess.run(["git", "checkout", "-b", "feature"], cwd=work, check=True, capture_output=True)
+    (work / SAMPLE_FILE).write_text(
+        'import os\nimport sys\n\ndef main():\n    print("hello")\n    return 0\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=work, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "feat: add sys import", "--author", "E2E <e2e@test>"],
+        cwd=work,
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+    subprocess.run(["git", "checkout", "main"], cwd=work, check=True, capture_output=True)
+
     bare = tmp / "repo.git"
     subprocess.run(
         ["git", "clone", "--bare", str(work), str(bare)],

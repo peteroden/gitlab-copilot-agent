@@ -95,3 +95,8 @@ e2e-test:
 	@rm -f /tmp/k3d-values.yaml
 	@echo "=== Running E2E tests ==="
 	@./tests/e2e/run.sh http://localhost:8080 http://localhost:9999
+
+# Local dispatch E2E (no k3d/KEDA/Azure — mocks + agent in-process)
+.PHONY: e2e-local
+e2e-local:
+	@./tests/e2e/run.sh --mode local
