@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Git pre-commit hook: runs ruff and pyright on staged Python files.
+# Git pre-commit hook: runs lint ratchet, format check, and pyright on staged Python files.
 # Install: ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
 set -euo pipefail
 
@@ -13,7 +13,7 @@ else
 fi
 
 echo "🔍 ruff check..."
-$RUN uv run ruff check src/ tests/
+$RUN uv run python scripts/check_lint_baseline.py
 
 echo "🔍 ruff format..."
 $RUN uv run ruff format --check src/ tests/

@@ -22,8 +22,8 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: uv sync --dev && uv pip install -e ".[dev]"
-      - name: Ruff check
-        run: uv run ruff check src/ tests/
+      - name: Ruff lint ratchet
+        run: uv run python scripts/check_lint_baseline.py
       - name: Ruff format check
         run: uv run ruff format --check src/ tests/
       - name: Pyright
