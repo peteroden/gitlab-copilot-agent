@@ -59,7 +59,7 @@ GitLab-centric YAML configuration. All models use `strict=True` validation.
 
 ---
 
-### `AppContext` (`container.py`)
+### `AppContext` (`app_context.py`)
 **Purpose**: Frozen dataclass holding all immutable service references. Created in lifespan, accessed via `get_services(request)`.
 
 | Field | Type | Description |

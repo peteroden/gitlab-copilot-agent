@@ -51,12 +51,12 @@ async def test_lifespan_without_jira_starts_and_stops(env_vars: None) -> None:
     """Test that lifespan completes successfully when Jira is not enabled."""
     test_app = FastAPI()
     async with lifespan(test_app):
-        assert test_app.state.container is not None
-        assert test_app.state.container.settings.jira is None
-        assert test_app.state.container.repo_locks is not None
-        assert isinstance(test_app.state.container.repo_locks, RepoLockManager)
-        assert isinstance(test_app.state.container.dedup_store, DeduplicationStore)
-        assert isinstance(test_app.state.container.executor, LocalTaskExecutor)
+        assert test_app.state.ctx is not None
+        assert test_app.state.ctx.settings.jira is None
+        assert test_app.state.ctx.repo_locks is not None
+        assert isinstance(test_app.state.ctx.repo_locks, RepoLockManager)
+        assert isinstance(test_app.state.ctx.dedup_store, DeduplicationStore)
+        assert isinstance(test_app.state.ctx.executor, LocalTaskExecutor)
         assert test_app.state.project_registry is None
 
 
@@ -97,13 +97,13 @@ async def test_lifespan_with_jira_creates_shared_lock_manager(
         mock_registry_cls.from_rendered_map = AsyncMock(return_value=mock_registry)
         async with lifespan(test_app):
             mock_poller.start.assert_called_once()
-            assert test_app.state.container.repo_locks is not None
-            assert isinstance(test_app.state.container.repo_locks, RepoLockManager)
+            assert test_app.state.ctx.repo_locks is not None
+            assert isinstance(test_app.state.ctx.repo_locks, RepoLockManager)
             assert test_app.state.project_registry is mock_registry
             mock_orch_class.assert_called_once()
             args, _kwargs = mock_orch_class.call_args
             assert isinstance(args[3], LocalTaskExecutor)
-            assert args[4] is test_app.state.container.repo_locks
+            assert args[4] is test_app.state.ctx.repo_locks
 
         mock_poller.stop.assert_called_once()
 
@@ -254,9 +254,7 @@ async def test_lifespan_resolves_allowlist(
     mock_client.resolve_project = AsyncMock(side_effect=[RESOLVED_PROJECT_ID, 99])
     with patch("gitlab_copilot_agent.main.GitLabClient", return_value=mock_client):
         async with lifespan(test_app):
-            assert test_app.state.container.allowed_project_ids == frozenset(
-                {RESOLVED_PROJECT_ID, 99}
-            )
+            assert test_app.state.ctx.allowed_project_ids == frozenset({RESOLVED_PROJECT_ID, 99})
 
 
 @pytest.mark.asyncio
@@ -264,7 +262,7 @@ async def test_lifespan_allowlist_none_when_unset(env_vars: None) -> None:
     """When GITLAB_PROJECTS is not set, allowed_project_ids is None."""
     test_app = FastAPI()
     async with lifespan(test_app):
-        assert test_app.state.container.allowed_project_ids is None
+        assert test_app.state.ctx.allowed_project_ids is None
 
 
 # -- GitLab poller wiring tests --

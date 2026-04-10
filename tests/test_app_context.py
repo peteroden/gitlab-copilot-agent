@@ -1,4 +1,4 @@
-"""Tests for container — AppContext dataclass and get_services dependency."""
+"""Tests for app_context — AppContext dataclass and get_services dependency."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI, Request
 from starlette.datastructures import State
 
-from gitlab_copilot_agent.container import AppContext, get_services
+from gitlab_copilot_agent.app_context import AppContext, get_services
 
 
 def _make_context(**overrides: object) -> AppContext:
@@ -48,14 +48,14 @@ class TestAppContext:
 
 
 class TestGetServices:
-    def test_returns_container(self) -> None:
+    def test_returns_ctx(self) -> None:
         app = FastAPI()
         ctx = _make_context()
-        app.state.container = ctx
+        app.state.ctx = ctx
         request = _make_request(app)
         assert get_services(request) is ctx
 
-    def test_raises_when_no_container(self) -> None:
+    def test_raises_when_no_ctx(self) -> None:
         app = FastAPI()
         app.state = State()
         request = _make_request(app)

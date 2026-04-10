@@ -1,6 +1,6 @@
-"""Typed service container — replaces app.state service locator.
+"""Typed application context — replaces app.state service locator.
 
-Created once during app lifespan and stashed on ``app.state.container``.
+Created once during app lifespan and stashed on ``app.state.ctx``.
 Consumers access via ``get_services(request)`` FastAPI dependency.
 
 See ADR-0011.
@@ -48,15 +48,15 @@ def get_services(request: Request) -> AppContext:
     Usage::
 
         @router.post("/webhook")
-        async def webhook(services: AppContext = Depends(get_services)):
+        async def webhook(ctx: AppContext = Depends(get_services)):
             ...
 
     Raises:
-        RuntimeError: If the container hasn't been initialized (lifespan bug
+        RuntimeError: If the AppContext hasn't been initialized (lifespan bug
             or missing test fixture setup).
     """
-    container: AppContext | None = getattr(request.app.state, "container", None)
-    if container is None:
+    ctx: AppContext | None = getattr(request.app.state, "ctx", None)
+    if ctx is None:
         msg = "AppContext not initialized — check lifespan or test fixture setup"
         raise RuntimeError(msg)
-    return container
+    return ctx

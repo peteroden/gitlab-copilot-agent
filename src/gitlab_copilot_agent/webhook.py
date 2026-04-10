@@ -8,7 +8,7 @@ import re
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
-from gitlab_copilot_agent.container import get_services
+from gitlab_copilot_agent.app_context import get_services
 from gitlab_copilot_agent.discussion_models import AgentIdentity
 from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 from gitlab_copilot_agent.gitlab_client import GitLabClient

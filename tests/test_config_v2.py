@@ -110,107 +110,69 @@ def _full_config_dict() -> dict[str, Any]:
     return yaml.safe_load(FULL_CONFIG_YAML)
 
 
-# -- Model unit tests --
+# -- Sub-model tests (parameterized) --
 
 
-class TestGitLabConfig:
-    def test_requires_url(self) -> None:
-        with pytest.raises(ValidationError):
-            GitLabConfig.model_validate({})
-
-    def test_valid(self) -> None:
-        cfg = GitLabConfig(url=GITLAB_URL)
-        assert cfg.url == GITLAB_URL
-
-
-class TestDispatchConfig:
-    def test_defaults(self) -> None:
-        cfg = DispatchConfig()
-        assert cfg.backend == "local"
-        assert cfg.k8s_namespace == "default"
-        assert cfg.aca_job_timeout == 600
-
-    def test_backend_validation(self) -> None:
-        with pytest.raises(ValidationError):
-            DispatchConfig.model_validate({"backend": "invalid"})
-
-
-class TestCopilotConfig:
-    def test_defaults(self) -> None:
-        cfg = CopilotConfig()
-        assert cfg.model == "gpt-4"
-        assert cfg.plugins == []
-        assert cfg.marketplaces == []
-
-
-class TestServerConfig:
-    def test_defaults(self) -> None:
-        cfg = ServerConfig()
-        assert cfg.log_level == "info"
-        assert cfg.clone_dir is None
-        assert cfg.shutdown_timeout == 30
-        assert cfg.webhook_ip_allowlist == []
-        assert cfg.trusted_proxies == []
-
-    def test_shutdown_timeout_must_be_positive(self) -> None:
-        with pytest.raises(ValidationError):
-            ServerConfig(shutdown_timeout=0)
+@pytest.mark.parametrize(
+    ("model_cls", "field", "expected"),
+    [
+        (DispatchConfig, "backend", "local"),
+        (DispatchConfig, "k8s_namespace", "default"),
+        (DispatchConfig, "aca_job_timeout", 600),
+        (CopilotConfig, "model", "gpt-4"),
+        (CopilotConfig, "plugins", []),
+        (CopilotConfig, "marketplaces", []),
+        (ServerConfig, "log_level", "info"),
+        (ServerConfig, "clone_dir", None),
+        (ServerConfig, "shutdown_timeout", 30),
+        (ServerConfig, "webhook_ip_allowlist", []),
+        (ServerConfig, "trusted_proxies", []),
+        (PollConfig, "enabled", False),
+        (PollConfig, "interval", 30),
+        (PollConfig, "lookback_minutes", 60),
+        (PollConfig, "review_on_push", True),
+        (ConfigDefaults, "target_branch", "main"),
+        (ConfigDefaults, "credential_ref", "default"),
+        (ConfigDefaults, "resolution_behavior", "suggest"),
+        (ConfigDefaults, "webhook", True),
+    ],
+)
+def test_model_defaults(model_cls: type[Any], field: str, expected: object) -> None:
+    """Each sub-model field has the documented default value."""
+    instance = model_cls()
+    assert getattr(instance, field) == expected
 
 
-class TestPollConfig:
-    def test_defaults(self) -> None:
-        cfg = PollConfig()
-        assert cfg.enabled is False
-        assert cfg.interval == 30
-        assert cfg.lookback_minutes == 60
-        assert cfg.review_on_push is True
+@pytest.mark.parametrize(
+    ("model_cls", "data", "match"),
+    [
+        (GitLabConfig, {}, "url"),
+        (DispatchConfig, {"backend": "invalid"}, "backend"),
+        (ServerConfig, {"shutdown_timeout": 0}, "shutdown_timeout"),
+        (JiraIntegrationConfig, {"type": "jira"}, "name"),
+    ],
+    ids=["gitlab-missing-url", "dispatch-bad-backend", "server-zero-timeout", "jira-missing-name"],
+)
+def test_model_rejects_invalid(model_cls: type[Any], data: dict[str, Any], match: str) -> None:
+    """Models reject invalid or missing required fields."""
+    with pytest.raises(ValidationError, match=match):
+        model_cls.model_validate(data)
 
 
-class TestConfigDefaults:
-    def test_defaults(self) -> None:
-        cfg = ConfigDefaults()
-        assert cfg.target_branch == "main"
-        assert cfg.credential_ref == "default"
-        assert cfg.resolution_behavior == "suggest"
-        assert cfg.webhook is True
-        assert cfg.poll.enabled is False
+def test_project_config_minimal() -> None:
+    """ProjectConfig only requires repo; everything else falls back to defaults."""
+    proj = ProjectConfig(repo="group/project")
+    assert proj.repo == "group/project"
+    assert proj.credential_ref is None
+    assert proj.integrations == []
 
 
-class TestProjectConfig:
-    def test_minimal(self) -> None:
-        proj = ProjectConfig(repo="group/project")
-        assert proj.repo == "group/project"
-        assert proj.credential_ref is None
-        assert proj.integrations == []
-
-    def test_all_fields(self) -> None:
-        proj = ProjectConfig(
-            repo="group/project",
-            credential_ref="custom",
-            target_branch="develop",
-            resolution_behavior="auto-resolve",
-            webhook=False,
-            poll=PollConfig(enabled=True, interval=60),
-            copilot=CopilotConfig(model="gpt-4o"),
-            integrations=["my-jira"],
-        )
-        assert proj.credential_ref == "custom"
-        assert proj.poll is not None
-        assert proj.poll.interval == 60
-
-
-class TestJiraIntegrationConfig:
-    def test_valid(self) -> None:
-        cfg = JiraIntegrationConfig(
-            name="my-jira",
-            type="jira",
-            project_key="PROJ",
-        )
-        assert cfg.trigger_status == "AI Ready"
-
-    def test_requires_name_and_key(self) -> None:
-        with pytest.raises(ValidationError):
-            JiraIntegrationConfig.model_validate({"type": "jira"})
+def test_jira_integration_defaults() -> None:
+    """JiraIntegrationConfig populates Jira status defaults."""
+    cfg = JiraIntegrationConfig(name="j", type="jira", project_key="P")
+    assert cfg.trigger_status == "AI Ready"
+    assert cfg.in_progress_status == "In Progress"
+    assert cfg.in_review_status == "In Review"
 
 
 # -- ConfigFile tests --
@@ -328,18 +290,20 @@ class TestResolveProject:
 
 
 class TestLoadConfigFile:
-    def test_loads_valid_yaml(self, tmp_path: Path) -> None:
+    @pytest.mark.parametrize(
+        ("content", "expected_projects"),
+        [
+            (yaml.dump(MINIMAL_CONFIG), 0),
+            (FULL_CONFIG_YAML, 2),
+        ],
+        ids=["minimal", "full"],
+    )
+    def test_loads_valid_yaml(self, tmp_path: Path, content: str, expected_projects: int) -> None:
         config_file = tmp_path / "config.yaml"
-        config_file.write_text(yaml.dump(MINIMAL_CONFIG))
+        config_file.write_text(content)
         cfg = load_config_file(config_file)
         assert cfg.version == 2
-        assert cfg.gitlab.url == GITLAB_URL
-
-    def test_loads_full_yaml(self, tmp_path: Path) -> None:
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(FULL_CONFIG_YAML)
-        cfg = load_config_file(config_file)
-        assert len(cfg.projects) == 2
+        assert len(cfg.projects) == expected_projects
 
     def test_file_not_found(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):

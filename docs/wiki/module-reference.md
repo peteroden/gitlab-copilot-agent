@@ -10,7 +10,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Purpose**: FastAPI application entrypoint, lifespan management, poller startup.
 
 **Key Functions**:
-- `lifespan(app: FastAPI) -> AsyncIterator[None]`: Initialize telemetry, load settings, build `AppContext` container, start pollers, graceful shutdown
+- `lifespan(app: FastAPI) -> AsyncIterator[None]`: Initialize telemetry, load settings, build `AppContext`, start pollers, graceful shutdown
 - `health() -> dict[str, object]`: Health check endpoint, includes GitLab poller status if enabled
 - `config_reload(body: RenderedMap, request: Request) -> dict`: Hot-reload project registry from new mapping JSON (requires `X-Gitlab-Token` auth)
 - `_cleanup_stale_repos(clone_dir: str | None) -> None`: Remove leftover `mr-review-*` dirs on startup
@@ -19,7 +19,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Globals**:
 - `app: FastAPI`: FastAPI application instance with lifespan and webhook router
 
-**Internal Imports**: `config`, `container`, `telemetry`, `gitlab_client`, `gitlab_poller`, `jira_client`, `jira_poller`, `webhook`, `concurrency`, `state`, `task_executor`, `coding_orchestrator`, `git_operations`, `mapping_models`, `credential_registry`, `project_registry`
+**Internal Imports**: `config`, `app_context`, `telemetry`, `gitlab_client`, `gitlab_poller`, `jira_client`, `jira_poller`, `webhook`, `concurrency`, `state`, `task_executor`, `coding_orchestrator`, `git_operations`, `mapping_models`, `credential_registry`, `project_registry`
 
 **Depended On By**: Deployed as uvicorn entrypoint
 
@@ -38,7 +38,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Constants**:
 - `HANDLED_ACTIONS = frozenset({"open", "update", "reopen"})`: MR actions that trigger review
 
-**Internal Imports**: `models`, `orchestrator`, `discussion_orchestrator`, `discussion_models`, `metrics`, `container`, `project_registry`
+**Internal Imports**: `models`, `orchestrator`, `discussion_orchestrator`, `discussion_models`, `metrics`, `app_context`, `project_registry`
 
 **Depended On By**: `main.py` (includes router)
 
@@ -638,7 +638,7 @@ All use `frozen=True` config.
 
 ---
 
-### `container.py`
+### `app_context.py`
 **Purpose**: Frozen `AppContext` dataclass replacing `app.state` service locator. Provides typed dependency injection.
 
 **Key Types**:

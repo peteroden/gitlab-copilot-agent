@@ -16,13 +16,13 @@ from fastapi import FastAPI, HTTPException, Request
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import ValidationError
 
+from gitlab_copilot_agent.app_context import AppContext
 from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
 from gitlab_copilot_agent.concurrency import (
     ProcessedIssueTracker,
     ReviewedMRTracker,
 )
 from gitlab_copilot_agent.config import Settings
-from gitlab_copilot_agent.container import AppContext
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
 from gitlab_copilot_agent.git_operations import CLONE_DIR_PREFIX
 from gitlab_copilot_agent.gitlab_client import GitLabClient
@@ -160,7 +160,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     creds = CredentialRegistry.from_env()
 
     # Build typed AppContext (immutable services)
-    container = AppContext(
+    ctx = AppContext(
         settings=settings,
         executor=executor,
         repo_locks=repo_locks,
@@ -171,7 +171,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             frozenset(allowed_project_ids) if allowed_project_ids is not None else None
         ),
     )
-    app.state.container = container
+    app.state.ctx = ctx
 
     # Mutable state: project_registry and pollers stay on app.state
     # directly for hot-reload support (see /config/reload endpoint).
@@ -302,8 +302,8 @@ async def config_reload(
 
     Requires the same webhook secret used for GitLab webhook auth.
     """
-    container: AppContext = request.app.state.container
-    settings = container.settings
+    ctx: AppContext = request.app.state.ctx
+    settings = ctx.settings
     secret = settings.gitlab_webhook_secret
     received = request.headers.get("X-Gitlab-Token")
     if secret is None:
