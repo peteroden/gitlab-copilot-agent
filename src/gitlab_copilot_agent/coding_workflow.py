@@ -16,7 +16,7 @@ async def apply_coding_result(result: TaskResult, repo_path: Path) -> None:
     """Apply a CodingResult patch to the local clone if present.
 
     For LocalTaskExecutor results the patch is empty — files are already on disk.
-    For KubernetesTaskExecutor results the patch is applied via ``git apply --3way``.
+    For RemoteTaskExecutor results the patch is applied via ``git apply --3way``.
 
     Raises:
         RuntimeError: If base_sha doesn't match the local HEAD (clone diverged).
