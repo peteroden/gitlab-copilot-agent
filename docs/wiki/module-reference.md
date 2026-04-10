@@ -361,7 +361,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 ## External Service Clients
 
 ### `gitlab_client.py`
-**Purpose**: GitLab API client for repo cloning, diff fetching, and MR metadata.
+**Purpose**: Async GitLab REST API client using httpx — fully typed, with retry and pagination.
 
 **Key Models**:
 - `MRAuthor`: id, username
@@ -377,23 +377,28 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Key Classes**:
 - `GitLabClient`:
-  - `__init__(url: str, token: str)`: Initialize python-gitlab client
-  - `get_mr_details(project_id: int, mr_iid: int) -> MRDetails`: Fetch MR changes and diff refs
-  - `clone_repo(clone_url: str, branch: str, token: str, clone_dir: str | None) -> Path`: Clone repo via git_operations
-  - `cleanup(repo_path: Path) -> None`: Remove cloned repo
+  - `__init__(url: str, token: str)`: Initialize httpx async client with PRIVATE-TOKEN header
+  - `aclose() -> None`: Close the underlying httpx client
+  - `__aenter__`/`__aexit__`: Async context manager support
+  - `_request(method, path, *, idempotent, **kwargs) -> Response`: HTTP request with retry on 429/5xx for idempotent (GET) requests; respects `Retry-After` header
+  - `_paginate(path, params) -> list[dict]`: Fetch all pages of a paginated endpoint
+  - `get_mr_details(project_id, mr_iid) -> MRDetails`: Fetch MR changes; retries on null diff_refs (GitLab race)
+  - `clone_repo(clone_url, branch, token, clone_dir) -> Path`: Clone repo via git_operations
+  - `cleanup(repo_path) -> None`: Remove cloned repo
   - `create_merge_request(...) -> int`: Create MR, return iid
-  - `post_mr_comment(project_id: int, mr_iid: int, body: str) -> None`: Post MR note
-  - `list_project_mrs(project_id: int, state: str, updated_after: str | None) -> list[MRListItem]`: List MRs
-  - `list_mr_notes(project_id: int, mr_iid: int, created_after: str | None) -> list[NoteListItem]`: List notes
-  - `resolve_project(id_or_path: str | int) -> int`: Resolve project ID
-  - `list_mr_discussions(project_id: int, mr_iid: int) -> list[Discussion]`: List MR discussions with notes and resolution status
-  - `get_current_user() -> AgentIdentity`: Discover authenticated user identity
-  - `resolve_discussion(project_id: int, mr_iid: int, discussion_id: str) -> None`: Resolve a discussion thread (sets resolved=True)
-  - `reply_to_discussion(project_id: int, mr_iid: int, discussion_id: str, body: str) -> None`: Post a reply to an existing discussion thread
-  - `compare_commits(project_id: int, from_sha: str, to_sha: str) -> list[MRChange]`: Compare two commits via the Repository Compare API. Returns file changes between SHAs in MRChange format for incremental diff computation
-  - `get_mr_commits(project_id: int, mr_iid: int) -> list[MRCommit]`: Fetch commits on a merge request for developer intent context
+  - `post_mr_comment(project_id, mr_iid, body) -> None`: Post MR note
+  - `create_mr_discussion(project_id, mr_iid, body, position) -> None`: Create inline discussion on diff
+  - `list_project_mrs(project_id, state, updated_after) -> list[MRListItem]`: List MRs (paginated)
+  - `list_mr_notes(project_id, mr_iid, created_after) -> list[NoteListItem]`: List notes (paginated)
+  - `resolve_project(id_or_path) -> int`: Resolve project ID (URL-encodes paths)
+  - `list_mr_discussions(project_id, mr_iid) -> list[Discussion]`: List discussions (paginated)
+  - `get_current_user() -> AgentIdentity`: GET /user for authenticated identity
+  - `resolve_discussion(project_id, mr_iid, discussion_id) -> None`: PUT to resolve a thread
+  - `reply_to_discussion(project_id, mr_iid, discussion_id, body) -> None`: POST reply to thread
+  - `compare_commits(project_id, from_sha, to_sha) -> list[MRChange]`: Compare two commits
+  - `get_mr_commits(project_id, mr_iid) -> list[MRCommit]`: Fetch MR commits (paginated)
 
-**Internal Imports**: `git_operations`
+**Internal Imports**: `git_operations`, `discussion_models`
 
 **Depended On By**: `orchestrator.py`, `coding_orchestrator.py`, `gitlab_poller.py`, `main.py`
 
@@ -642,12 +647,12 @@ All use `frozen=True` config.
 ---
 
 ### `credential_registry.py`
-**Purpose**: Resolve credential aliases to GitLab tokens from environment. TTL-cached identity resolution.
+**Purpose**: Resolve credential aliases to GitLab tokens from environment. TTL-cached identity resolution via httpx.
 
 **Key Methods**:
 - `from_env() -> CredentialRegistry`: Reads `GITLAB_TOKEN` + `GITLAB_TOKEN__<ALIAS>` env vars
 - `resolve(credential_ref: str) -> str`: Returns token for alias, raises `KeyError` if unknown
-- `resolve_identity(credential_ref: str, gitlab_url: str) -> AgentIdentity`: TTL-cached identity lookup (default 1hr, `time.monotonic()`)
+- `resolve_identity(credential_ref: str, gitlab_url: str) -> AgentIdentity`: TTL-cached identity lookup (default 1hr, `time.monotonic()`). Uses httpx `GET /api/v4/user`.
 
 **Depended On By**: `project_registry.py`, `main.py`, `gitlab_poller.py`
 
