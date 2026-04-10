@@ -1,0 +1,56 @@
+# Example configuration — copy to config.yaml and customize.
+# Secrets (tokens, keys) are env vars, not in this file.
+# See docs/wiki/configuration-reference.md for full schema documentation.
+version: 2
+
+gitlab:
+  url: https://gitlab.example.com
+
+dispatch:
+  backend: local
+
+copilot:
+  model: gpt-4
+
+server:
+  log_level: info
+  # clone_dir: /tmp/repos
+  shutdown_timeout: 30
+  # webhook_ip_allowlist:      # CIDR ranges allowed to send webhooks (empty = allow all)
+  #   - "34.74.90.64/28"       # GitLab.com
+  #   - "34.74.226.0/24"       # GitLab.com
+  # trusted_proxies: []        # Reverse proxy CIDRs for X-Forwarded-For trust
+
+# prompts:
+#   system: null               # Global base prompt override
+#   review_suffix: null         # Appended to review prompt
+
+defaults:
+  target_branch: main
+  credential_ref: default
+  resolution_behavior: suggest
+  webhook: true
+  poll:
+    enabled: false
+    interval: 30
+    lookback_minutes: 60
+    review_on_push: true
+
+projects:
+  - repo: group/my-project
+    # credential_ref: default   # Override credential alias
+    # target_branch: main       # Override target branch
+    # webhook: true             # Override webhook trigger
+    # poll:                     # Override polling config
+    #   enabled: false
+    # copilot:                  # Override Copilot settings
+    #   model: gpt-4o
+    integrations: []
+
+integrations: []
+# - name: my-jira
+#   type: jira
+#   project_key: PROJ
+#   trigger_status: "AI Ready"
+#   in_progress_status: "In Progress"
+#   in_review_status: "In Review"

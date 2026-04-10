@@ -1,6 +1,8 @@
-"""Project registry — resolves Jira→GitLab project context at startup."""
+"""Project registry — resolves project context at startup."""
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
@@ -8,6 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.mapping_models import RenderedMap, ResolutionBehavior
+
+if TYPE_CHECKING:
+    from gitlab_copilot_agent.config_v2 import ConfigFile
 
 log = structlog.get_logger()
 
@@ -17,7 +22,9 @@ class ResolvedProject(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    jira_project: str = Field(description="Jira project key")
+    jira_project: str | None = Field(
+        default=None, description="Jira project key (None for review-only projects)"
+    )
     repo: str = Field(description="GitLab repo path_with_namespace")
     gitlab_project_id: int = Field(description="Numeric GitLab project ID")
     clone_url: str = Field(description="Git HTTP clone URL")
@@ -37,7 +44,10 @@ class ProjectRegistry:
     """Immutable lookup of Jira key or GitLab project ID → ResolvedProject."""
 
     def __init__(self, projects: list[ResolvedProject]) -> None:
-        self._by_jira = {p.jira_project: p for p in projects}
+        self._by_jira: dict[str, ResolvedProject] = {}
+        for p in projects:
+            if p.jira_project is not None:
+                self._by_jira[p.jira_project] = p
         self._by_project_id: dict[int, ResolvedProject] = {}
         for p in projects:
             if p.gitlab_project_id in self._by_project_id:
@@ -88,4 +98,59 @@ class ProjectRegistry:
             )
         registry = cls(projects)
         await log.ainfo("project_registry_loaded", count=len(projects))
+        return registry
+
+    @classmethod
+    async def from_config(
+        cls,
+        config: ConfigFile,
+        credentials: CredentialRegistry,
+        gitlab_url: str,
+    ) -> ProjectRegistry:
+        """Build registry from v2 config file.
+
+        Args:
+            config: Validated v2 config file.
+            credentials: Credential registry for token resolution.
+            gitlab_url: Base GitLab URL for clone URL construction.
+
+        Returns:
+            Populated ProjectRegistry keyed by GitLab project ID.
+        """
+        projects: list[ResolvedProject] = []
+        base_url = gitlab_url.rstrip("/")
+        for proj_config in config.projects:
+            resolved = config.resolve_project(proj_config)
+            cred_ref = str(resolved["credential_ref"])
+            token = credentials.resolve(cred_ref)
+            client = GitLabClient(gitlab_url, token)
+            pid = await client.resolve_project(proj_config.repo)
+
+            # Find Jira integration if any
+            jira_project: str | None = None
+            raw_integrations = resolved["integrations"]
+            if isinstance(raw_integrations, list):
+                from gitlab_copilot_agent.config_v2 import JiraIntegrationConfig
+
+                for item in raw_integrations:  # type: ignore[reportUnknownVariableType]
+                    if isinstance(item, JiraIntegrationConfig):
+                        jira_project = item.project_key
+                        break
+
+            resolution = str(resolved["resolution_behavior"])
+
+            projects.append(
+                ResolvedProject(
+                    jira_project=jira_project,
+                    repo=proj_config.repo,
+                    gitlab_project_id=pid,
+                    clone_url=f"{base_url}/{proj_config.repo}.git",
+                    target_branch=str(resolved["target_branch"]),
+                    credential_ref=cred_ref,
+                    token=token,
+                    resolution_behavior=str(resolution),  # type: ignore[arg-type]
+                )
+            )
+        registry = cls(projects)
+        await log.ainfo("project_registry_loaded", count=len(projects), source="config_v2")
         return registry

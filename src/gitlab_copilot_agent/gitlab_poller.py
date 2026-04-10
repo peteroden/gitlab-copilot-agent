@@ -53,6 +53,8 @@ class GitLabPoller:
         repo_locks: DistributedLock | None = None,
         project_registry: ProjectRegistry | None = None,
         credential_registry: CredentialRegistry | None = None,
+        *,
+        poll_interval: int = 30,
     ) -> None:
         self._client = gl_client
         self._settings = settings
@@ -63,8 +65,7 @@ class GitLabPoller:
         self._project_registry = project_registry
         self._credential_registry = credential_registry
         self._project_clients: dict[str, GitLabClientProtocol] = {}
-        self._identity_cache: dict[str, AgentIdentity] = {}
-        self._interval: int = 30
+        self._interval: int = poll_interval
         self._task: asyncio.Task[None] | None = None
         self._watermark: str | None = None
         self._note_watermark: str | None = None
@@ -222,7 +223,10 @@ class GitLabPoller:
         await self._dedup.mark_seen(key, ttl_seconds=_DEDUP_TTL)
 
     async def _resolve_agent_identity(self, project_id: int) -> AgentIdentity | None:
-        """Resolve the agent identity for the credential used by this project."""
+        """Resolve the agent identity for the credential used by this project.
+
+        Delegates to CredentialRegistry which owns the TTL-based cache.
+        """
         if self._credential_registry is None:
             return None
         ref = "default"
@@ -230,15 +234,8 @@ class GitLabPoller:
             resolved = self._project_registry.get_by_project_id(project_id)
             if resolved is not None:
                 ref = resolved.credential_ref
-        # Cache per credential_ref
-        if ref in self._identity_cache:
-            return self._identity_cache[ref]
         try:
-            identity = await self._credential_registry.resolve_identity(
-                ref, self._settings.gitlab_url
-            )
-            self._identity_cache[ref] = identity
-            return identity
+            return await self._credential_registry.resolve_identity(ref, self._settings.gitlab_url)
         except Exception:
             await log.awarning(
                 "poller_identity_resolution_failed", credential_ref=ref, exc_info=True

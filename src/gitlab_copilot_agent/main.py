@@ -22,6 +22,7 @@ from gitlab_copilot_agent.concurrency import (
     ReviewedMRTracker,
 )
 from gitlab_copilot_agent.config import Settings
+from gitlab_copilot_agent.container import AppContext
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
 from gitlab_copilot_agent.git_operations import CLONE_DIR_PREFIX
 from gitlab_copilot_agent.gitlab_client import GitLabClient
@@ -123,6 +124,7 @@ def _print_config_errors(exc: ValidationError) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Application lifespan — create services, stash in AppContext."""
     init_telemetry()
     try:
         settings = Settings()  # pyright: ignore[reportCallIssue]
@@ -130,8 +132,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _print_config_errors(exc)
         sys.exit(1)
     _cleanup_stale_repos(settings.clone_dir)
-    app.state.settings = settings
-    app.state.executor = _create_executor(settings.task_executor, settings)
+    executor = _create_executor(settings.task_executor, settings)
 
     # Resolve project allowlist
     allowed_project_ids: set[int] | None = None
@@ -148,22 +149,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             except Exception as exc:
                 raise ValueError(f"Cannot resolve GitLab project: {entry!r}") from exc
         await log.ainfo("project_allowlist_resolved", project_ids=sorted(allowed_project_ids))
-    app.state.allowed_project_ids = allowed_project_ids
 
-    # Shared lock manager for both webhook and Jira flows
+    # Shared concurrency primitives
     repo_locks = create_lock()
-    app.state.repo_locks = repo_locks
     dedup_store = create_dedup(
         azure_storage_account_url=settings.azure_storage_account_url,
         azure_storage_connection_string=settings.azure_storage_connection_string,
     )
-    app.state.dedup_store = dedup_store
-    app.state.review_tracker = ReviewedMRTracker()
-
-    # Credential registry — always available for identity resolution
+    review_tracker = ReviewedMRTracker()
     creds = CredentialRegistry.from_env()
-    app.state.credential_registry = creds
 
+    # Build typed AppContext (immutable services)
+    container = AppContext(
+        settings=settings,
+        executor=executor,
+        repo_locks=repo_locks,
+        dedup_store=dedup_store,
+        review_tracker=review_tracker,
+        credential_registry=creds,
+        allowed_project_ids=(
+            frozenset(allowed_project_ids) if allowed_project_ids is not None else None
+        ),
+    )
+    app.state.container = container
+
+    # Mutable state: project_registry and pollers stay on app.state
+    # directly for hot-reload support (see /config/reload endpoint).
     poller: JiraPoller | None = None
     gl_poller: GitLabPoller | None = None
     jira_client: JiraClient | None = None
@@ -196,7 +207,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
         tracker = ProcessedIssueTracker()
         handler = CodingOrchestrator(
-            settings, gl_client, jira_client, app.state.executor, repo_locks, tracker
+            settings, gl_client, jira_client, executor, repo_locks, tracker
         )
         poller = JiraPoller(
             jira_client, settings.jira, project_registry, handler, allowed_project_ids
@@ -214,12 +225,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             settings=settings,
             project_ids=allowed_project_ids,
             dedup=dedup_store,
-            executor=app.state.executor,
+            executor=executor,
             repo_locks=repo_locks,
             project_registry=project_registry,
             credential_registry=creds,
+            poll_interval=settings.gitlab_poll_interval,
         )
-        gl_poller._interval = settings.gitlab_poll_interval  # pyright: ignore[reportPrivateUsage]
         await gl_poller.start()
         app.state.gl_poller = gl_poller
         await log.ainfo(
@@ -291,7 +302,8 @@ async def config_reload(
 
     Requires the same webhook secret used for GitLab webhook auth.
     """
-    settings: Settings = request.app.state.settings
+    container: AppContext = request.app.state.container
+    settings = container.settings
     secret = settings.gitlab_webhook_secret
     received = request.headers.get("X-Gitlab-Token")
     if secret is None:

@@ -181,3 +181,71 @@ class TestRenderJson:
     ) -> None:
         rc = main(["render-json", str(invalid_yaml_file)])
         assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# schema command (v2)
+# ---------------------------------------------------------------------------
+
+V2_MINIMAL_CONFIG = {"version": 2, "gitlab": {"url": "https://gitlab.example.com"}}
+
+
+class TestSchema:
+    def test_outputs_valid_json_schema(self, capsys: pytest.CaptureFixture[str]) -> None:
+        rc = main(["schema"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        schema = json.loads(out)
+        assert schema["title"] == "ConfigFile"
+        assert "properties" in schema
+
+    def test_schema_contains_key_fields(self, capsys: pytest.CaptureFixture[str]) -> None:
+        rc = main(["schema"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        schema = json.loads(out)
+        props = schema["properties"]
+        assert "version" in props
+        assert "gitlab" in props
+        assert "projects" in props
+
+
+# ---------------------------------------------------------------------------
+# validate-v2 command
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def valid_v2_file(tmp_path: Path) -> Path:
+    p = tmp_path / "config.yaml"
+    p.write_text(yaml.dump(V2_MINIMAL_CONFIG))
+    return p
+
+
+@pytest.fixture()
+def invalid_v2_file(tmp_path: Path) -> Path:
+    p = tmp_path / "bad_config.yaml"
+    p.write_text(yaml.dump({"version": 1}))
+    return p
+
+
+class TestValidateV2:
+    def test_valid_config(self, valid_v2_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        rc = main(["validate-v2", str(valid_v2_file)])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "Valid v2 config" in out
+
+    def test_invalid_config(
+        self, invalid_v2_file: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rc = main(["validate-v2", str(invalid_v2_file)])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert err  # some error printed
+
+    def test_missing_file(self, capsys: pytest.CaptureFixture[str]) -> None:
+        rc = main(["validate-v2", "/nonexistent/config.yaml"])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "not a file" in err

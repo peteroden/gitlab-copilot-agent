@@ -96,8 +96,8 @@ class TestFromRenderedMap:
             default_token=DEFAULT_TOKEN,
             named_tokens={"platform_team": PLATFORM_TOKEN},
         )
-        with patch("gitlab_copilot_agent.project_registry.GitLabClient") as MC:
-            MC.return_value = AsyncMock(
+        with patch("gitlab_copilot_agent.project_registry.GitLabClient") as mock_client_cls:
+            mock_client_cls.return_value = AsyncMock(
                 resolve_project=AsyncMock(side_effect=[PID_A, PID_B]),
             )
             reg = await ProjectRegistry.from_rendered_map(rendered, creds, GITLAB_URL)
@@ -112,3 +112,95 @@ class TestFromRenderedMap:
         creds = CredentialRegistry(default_token=DEFAULT_TOKEN)
         with pytest.raises(KeyError, match="Unknown credential_ref"):
             await ProjectRegistry.from_rendered_map(rendered, creds, GITLAB_URL)
+
+
+class TestOptionalJiraProject:
+    """Tests for optional jira_project (review-only projects)."""
+
+    def test_none_jira_project_not_indexed(self) -> None:
+        proj = _proj(jira="PROJ")
+        no_jira = ResolvedProject(
+            repo="group/review-only",
+            gitlab_project_id=200,
+            clone_url=f"{GITLAB_URL}/group/review-only.git",
+            target_branch="main",
+            credential_ref="default",
+            token=DEFAULT_TOKEN,
+        )
+        reg = ProjectRegistry([proj, no_jira])
+        assert reg.jira_keys() == {JIRA_PROJ}
+        assert reg.get_by_project_id(200) is not None
+        assert reg.get_by_jira("PROJ") is not None
+
+    def test_all_none_jira_produces_empty_jira_keys(self) -> None:
+        no_jira = ResolvedProject(
+            repo="group/review-only",
+            gitlab_project_id=200,
+            clone_url=f"{GITLAB_URL}/group/review-only.git",
+            target_branch="main",
+            credential_ref="default",
+            token=DEFAULT_TOKEN,
+        )
+        reg = ProjectRegistry([no_jira])
+        assert reg.jira_keys() == set()
+        assert reg.get_by_project_id(200) is not None
+
+
+class TestFromConfig:
+    """Tests for ProjectRegistry.from_config() with v2 ConfigFile."""
+
+    async def test_builds_from_v2_config(self) -> None:
+        from gitlab_copilot_agent.config_v2 import ConfigFile
+
+        config = ConfigFile.model_validate(
+            {
+                "version": 2,
+                "gitlab": {"url": GITLAB_URL},
+                "projects": [
+                    {"repo": REPO_A},
+                    {"repo": REPO_B, "credential_ref": "platform_team"},
+                ],
+            }
+        )
+        creds = CredentialRegistry(
+            default_token=DEFAULT_TOKEN,
+            named_tokens={"platform_team": PLATFORM_TOKEN},
+        )
+        with patch("gitlab_copilot_agent.project_registry.GitLabClient") as mock_client_cls:
+            mock_client_cls.return_value = AsyncMock(
+                resolve_project=AsyncMock(side_effect=[PID_A, PID_B]),
+            )
+            reg = await ProjectRegistry.from_config(config, creds, GITLAB_URL)
+
+        assert reg.get_by_project_id(PID_A) is not None
+        assert reg.get_by_project_id(PID_B) is not None
+        # No jira integrations → jira_project should be None
+        assert reg.get_by_project_id(PID_A).jira_project is None
+        assert reg.jira_keys() == set()
+
+    async def test_resolves_jira_integration(self) -> None:
+        from gitlab_copilot_agent.config_v2 import ConfigFile
+
+        config = ConfigFile.model_validate(
+            {
+                "version": 2,
+                "gitlab": {"url": GITLAB_URL},
+                "projects": [
+                    {"repo": REPO_A, "integrations": ["my-jira"]},
+                ],
+                "integrations": [
+                    {"name": "my-jira", "type": "jira", "project_key": "PROJ"},
+                ],
+            }
+        )
+        creds = CredentialRegistry(default_token=DEFAULT_TOKEN)
+        with patch("gitlab_copilot_agent.project_registry.GitLabClient") as mock_client_cls:
+            mock_client_cls.return_value = AsyncMock(
+                resolve_project=AsyncMock(return_value=PID_A),
+            )
+            reg = await ProjectRegistry.from_config(config, creds, GITLAB_URL)
+
+        p = reg.get_by_project_id(PID_A)
+        assert p is not None
+        assert p.jira_project == "PROJ"
+        assert reg.jira_keys() == {"PROJ"}
