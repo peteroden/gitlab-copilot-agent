@@ -1,4 +1,4 @@
-.PHONY: lint test build sandbox-image update-lint-baseline
+.PHONY: lint test build sandbox-image update-lint-baseline validate-config
 
 lint:
 	uv run python scripts/check_lint_baseline.py
@@ -16,6 +16,9 @@ build:
 
 sandbox-image:
 	./scripts/build-sandbox-image.sh
+
+validate-config:
+	uv run check-jsonschema --schemafile config.schema.json $${CONFIG_FILE:-config.yaml}
 
 # --- k3d local development ---
 K3D_CLUSTER    := copilot-agent-dev

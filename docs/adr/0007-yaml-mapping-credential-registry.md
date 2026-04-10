@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+**Superseded** by [ADR-0010](0010-gitlab-centric-config-v2.md) (GitLab-centric config v2).
+
+The YAML mapping format and credential registry remain available for backward compatibility, but new deployments should use the config v2 schema.
 
 ## Context
 

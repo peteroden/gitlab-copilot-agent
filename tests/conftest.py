@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from gitlab_copilot_agent.app_context import AppContext
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.gitlab_client import MRChange, MRDiffRef
 from gitlab_copilot_agent.main import app
@@ -106,6 +107,23 @@ def make_settings(**overrides: Any) -> Settings:
     return Settings(**(defaults | overrides))
 
 
+def make_app_context(**overrides: Any) -> AppContext:
+    """Create an AppContext with test defaults. Override any field."""
+    from gitlab_copilot_agent.concurrency import MemoryDedup, RepoLockManager, ReviewedMRTracker
+    from gitlab_copilot_agent.credential_registry import CredentialRegistry
+
+    settings = overrides.pop("settings", None) or make_settings()
+    defaults: dict[str, Any] = {
+        "settings": settings,
+        "executor": LocalTaskExecutor(),
+        "repo_locks": RepoLockManager(),
+        "dedup_store": MemoryDedup(),
+        "review_tracker": ReviewedMRTracker(),
+        "credential_registry": CredentialRegistry(default_token=GITLAB_TOKEN),
+    }
+    return AppContext(**(defaults | overrides))
+
+
 def make_mr_payload(**attr_overrides: Any) -> dict[str, Any]:
     """Create an MR webhook payload. Override object_attributes fields."""
     payload: dict[str, Any] = {**MR_PAYLOAD}
@@ -155,15 +173,11 @@ def env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 async def client(env_vars: None) -> AsyncIterator[AsyncClient]:
     """AsyncClient wired to the FastAPI app with test settings."""
-    from gitlab_copilot_agent.concurrency import MemoryDedup, RepoLockManager, ReviewedMRTracker
-
-    app.state.settings = make_settings()
-    app.state.executor = LocalTaskExecutor()
-    app.state.repo_locks = RepoLockManager()
-    app.state.dedup_store = MemoryDedup()
-    app.state.review_tracker = ReviewedMRTracker()
-    app.state.allowed_project_ids = None
+    ctx = make_app_context()
+    app.state.app_context = ctx
     app.state.project_registry = None
+    app.state.jira_poller = None
+    app.state.gl_poller = None
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

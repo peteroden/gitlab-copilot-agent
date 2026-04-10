@@ -184,8 +184,9 @@ class TestPrintConfigErrors:
             _print_config_errors(exc)
 
         err = capsys.readouterr().err
+        # pydantic-settings reports the first missing required field;
+        # gitlab_token is caught later by _check_auth model validator
         assert "GITLAB_URL" in err
-        assert "GITLAB_TOKEN" in err
         assert "configuration-reference.md" in err
 
     def test_value_error_shown_as_message(self, capsys: pytest.CaptureFixture[str]) -> None:

@@ -4,8 +4,8 @@ Reads ``GITLAB_TOKEN`` (the default) and ``GITLAB_TOKEN__<ALIAS>`` env vars
 at construction time.  A binding's ``credential_ref`` is resolved to the
 matching token via :meth:`resolve`.
 
-Also provides lazy identity caching: each credential can be resolved to the
-GitLab user it authenticates as via :meth:`resolve_identity`.
+Also provides TTL-cached identity resolution: each credential can be resolved
+to the GitLab user it authenticates as via :meth:`resolve_identity`.
 
 No raw secrets are ever logged.
 """
@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 
 import gitlab
 import structlog
@@ -24,16 +25,24 @@ from gitlab_copilot_agent.discussion_models import AgentIdentity
 log = structlog.get_logger()
 
 _ALIAS_PATTERN = re.compile(r"^GITLAB_TOKEN__(.+)$")
+_DEFAULT_IDENTITY_TTL = 3600
 
 
 class CredentialRegistry:
     """Startup-loaded registry mapping credential aliases to tokens."""
 
-    def __init__(self, *, default_token: str, named_tokens: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        default_token: str,
+        named_tokens: dict[str, str] | None = None,
+        identity_cache_ttl: int = _DEFAULT_IDENTITY_TTL,
+    ) -> None:
         self._tokens: dict[str, str] = {"default": default_token}
         for alias, token in (named_tokens or {}).items():
             self._tokens[alias.lower()] = token
-        self._identities: dict[str, AgentIdentity] = {}
+        self._identities: dict[str, tuple[AgentIdentity, float]] = {}
+        self._identity_cache_ttl = identity_cache_ttl
         self._identity_lock = asyncio.Lock()
 
     @classmethod
@@ -74,28 +83,35 @@ class CredentialRegistry:
             raise KeyError(msg) from None
 
     async def resolve_identity(self, credential_ref: str, gitlab_url: str) -> AgentIdentity:
-        """Return the :class:`AgentIdentity` for *credential_ref*, with caching.
+        """Return the :class:`AgentIdentity` for *credential_ref*, with TTL caching.
 
-        On the first call for a given *credential_ref* this authenticates
-        against the GitLab API; subsequent calls return the cached result.
+        On the first call (or after TTL expiry) for a given *credential_ref*
+        this authenticates against the GitLab API; otherwise returns cached.
 
         Uses an asyncio lock to prevent thundering-herd duplicate API calls
         when multiple coroutines resolve the same credential concurrently.
+
+        Args:
+            credential_ref: Credential alias to resolve.
+            gitlab_url: GitLab instance URL for API authentication.
+
+        Returns:
+            The AgentIdentity (user_id + username) for the credential.
         """
         ref = credential_ref.lower()
-        cached = self._identities.get(ref)
+        cached = self._get_cached_identity(ref)
         if cached is not None:
             return cached
 
         async with self._identity_lock:
             # Double-check after acquiring the lock
-            cached = self._identities.get(ref)
+            cached = self._get_cached_identity(ref)
             if cached is not None:
                 return cached
 
             token = self.resolve(credential_ref)
             identity = await _fetch_identity(gitlab_url, token)
-            self._identities[ref] = identity
+            self._identities[ref] = (identity, time.monotonic())
             log.info(
                 "agent_identity_resolved",
                 credential_ref=ref,
@@ -103,6 +119,17 @@ class CredentialRegistry:
                 username=identity.username,
             )
             return identity
+
+    def _get_cached_identity(self, ref: str) -> AgentIdentity | None:
+        """Return cached identity if present and not expired."""
+        entry = self._identities.get(ref)
+        if entry is None:
+            return None
+        identity, cached_at = entry
+        if time.monotonic() - cached_at > self._identity_cache_ttl:
+            del self._identities[ref]
+            return None
+        return identity
 
     def aliases(self) -> set[str]:
         """Return all registered credential aliases."""

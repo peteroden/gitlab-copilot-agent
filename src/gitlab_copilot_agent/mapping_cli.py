@@ -5,6 +5,8 @@ Usage::
     mapping-helper validate mappings.yaml
     mapping-helper show     mappings.yaml
     mapping-helper render-json mappings.yaml
+    mapping-helper schema
+    mapping-helper validate-v2 config.yaml
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
+from gitlab_copilot_agent.config_v2 import ConfigFile, load_config_file
 from gitlab_copilot_agent.mapping_models import MappingFile
 
 
@@ -101,6 +104,36 @@ def _print_validation_errors(exc: Exception) -> None:
         print(f"  {exc}", file=sys.stderr)
 
 
+def _cmd_schema(_args: argparse.Namespace) -> int:
+    """Emit the v2 config JSON Schema to stdout.
+
+    Pipe to a file to commit::
+
+        mapping-helper schema > config.schema.json
+    """
+    schema = ConfigFile.model_json_schema()
+    print(json.dumps(schema, indent=2))
+    return 0
+
+
+def _cmd_validate_v2(args: argparse.Namespace) -> int:
+    """Validate a v2 config file."""
+    path = Path(args.path)
+    if not path.is_file():
+        print(f"Error: {path} is not a file", file=sys.stderr)
+        return 1
+    try:
+        config = load_config_file(path)
+        print(
+            f"✅ Valid v2 config: {len(config.projects)} projects, "
+            f"{len(config.integrations)} integrations"
+        )
+    except (ValidationError, ValueError, yaml.YAMLError, FileNotFoundError) as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point for the mapping-helper CLI."""
     parser = argparse.ArgumentParser(
@@ -109,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # v1 subcommands (YAML mapping files)
     for name, help_text in [
         ("validate", "Validate a YAML mapping file"),
         ("show", "Show a human-readable summary"),
@@ -117,9 +151,22 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(name, help=help_text)
         p.add_argument("path", type=Path, help="Path to the YAML mapping file")
 
-    args = parser.parse_args(argv)
-    path: Path = args.path
+    # v2 subcommands (config v2)
+    sub.add_parser("schema", help="Emit v2 config JSON Schema to stdout")
 
+    v2_validate = sub.add_parser("validate-v2", help="Validate a v2 config file")
+    v2_validate.add_argument("path", type=Path, help="Path to v2 config YAML file")
+
+    args = parser.parse_args(argv)
+
+    # v2 commands don't need the file-existence check
+    if args.command == "schema":
+        return _cmd_schema(args)
+    if args.command == "validate-v2":
+        return _cmd_validate_v2(args)
+
+    # v1 commands require a file path
+    path: Path = args.path
     if not path.is_file():
         print(f"Error: {path} is not a file", file=sys.stderr)
         return 1

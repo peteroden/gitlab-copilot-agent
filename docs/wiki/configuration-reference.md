@@ -1,5 +1,97 @@
 # Configuration Reference
 
+The service uses two configuration sources:
+
+1. **YAML config file** (`config_v2.py` models) — non-secret service configuration: project definitions, integrations, dispatch backend, prompts, polling settings
+2. **Environment variables** (`config.py` / `Settings`) — secrets and runtime overrides: tokens, connection strings, auth credentials
+
+Secrets **never** go in the YAML file. The YAML file path is set via the `CONFIG_FILE` env var (default: `config.yaml`).
+
+---
+
+## Config v2 YAML Format
+
+The YAML config file uses `version: 2` and is validated by Pydantic models in `config_v2.py`. Generate the JSON Schema with `mapping-helper schema`. See `config.example.yaml` for a documented example.
+
+### Top-Level Structure
+
+```yaml
+version: 2                    # Required — must be 2
+
+gitlab:
+  url: https://gitlab.example.com  # Required — GitLab instance URL
+
+dispatch:
+  backend: local              # local | k8s | aca (default: local)
+
+copilot:
+  model: gpt-4                # Default model for Copilot sessions
+  plugins: []                 # Copilot CLI plugins
+  marketplaces: []            # Custom marketplace URLs (audit-logged at startup)
+
+server:
+  log_level: info
+  clone_dir: null             # Base directory for repo clones
+  shutdown_timeout: 30        # Graceful shutdown timeout (seconds)
+  webhook_ip_allowlist: []    # CIDR ranges allowed to send webhooks (empty = all)
+  trusted_proxies: []         # Reverse proxy CIDRs for X-Forwarded-For
+
+prompts:                      # Prompt overrides and suffixes
+  system: null
+  review_suffix: null
+  # ... (system_suffix, review, coding, coding_suffix, discussion, discussion_suffix)
+
+defaults:                     # Applied to every project unless overridden
+  target_branch: main
+  credential_ref: default
+  resolution_behavior: suggest  # auto-resolve | suggest | off
+  webhook: true
+  poll:
+    enabled: false
+    interval: 30
+    lookback_minutes: 60
+    review_on_push: true
+
+projects:                     # GitLab project definitions
+  - repo: group/my-project
+    credential_ref: default   # Override credential alias
+    target_branch: main       # Override target branch
+    resolution_behavior: suggest
+    webhook: true
+    poll:
+      enabled: false
+    copilot:                  # Per-project Copilot overrides
+      model: gpt-4o
+    integrations:             # References to named integrations
+      - my-jira
+
+integrations:                 # Named integration configurations
+  - name: my-jira
+    type: jira
+    project_key: PROJ
+    trigger_status: "AI Ready"
+    in_progress_status: "In Progress"
+    in_review_status: "In Review"
+```
+
+### Validation
+
+- `mapping-helper validate-v2 config.yaml` — full Pydantic validation
+- `mapping-helper schema > config.schema.json` — generate JSON Schema
+- Cross-field validators: integration refs must point to defined integrations, no duplicate repos
+
+### Config Delivery
+
+| Environment | Config Path |
+|---|---|
+| Local | `./config.yaml` (default) |
+| K8s | Helm ConfigMap → `/etc/copilot-agent/config.yaml` |
+| ACA | Terraform-rendered secret/volume |
+
+---
+
+## Environment Variables (v1)
+
 Every environment variable in `config.py`, grouped by category.
 
 ---

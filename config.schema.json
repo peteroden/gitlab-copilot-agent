@@ -1,0 +1,544 @@
+{
+  "$defs": {
+    "ConfigDefaults": {
+      "description": "Default values applied to every project unless overridden.",
+      "properties": {
+        "target_branch": {
+          "default": "main",
+          "description": "Default MR target branch",
+          "title": "Target Branch",
+          "type": "string"
+        },
+        "credential_ref": {
+          "default": "default",
+          "description": "Default credential alias",
+          "title": "Credential Ref",
+          "type": "string"
+        },
+        "resolution_behavior": {
+          "default": "suggest",
+          "description": "Default resolution behavior",
+          "enum": [
+            "auto-resolve",
+            "suggest",
+            "off"
+          ],
+          "title": "Resolution Behavior",
+          "type": "string"
+        },
+        "webhook": {
+          "default": true,
+          "description": "Default webhook trigger enabled",
+          "title": "Webhook",
+          "type": "boolean"
+        },
+        "poll": {
+          "$ref": "#/$defs/PollConfig",
+          "description": "Default polling configuration"
+        }
+      },
+      "title": "ConfigDefaults",
+      "type": "object"
+    },
+    "CopilotConfig": {
+      "description": "Copilot/LLM configuration \u2014 global defaults, overridable per-project.",
+      "properties": {
+        "model": {
+          "default": "gpt-4",
+          "description": "Default model for Copilot sessions",
+          "title": "Model",
+          "type": "string"
+        },
+        "plugins": {
+          "description": "Copilot CLI plugins",
+          "items": {
+            "type": "string"
+          },
+          "title": "Plugins",
+          "type": "array"
+        },
+        "marketplaces": {
+          "description": "Custom plugin marketplace URLs",
+          "items": {
+            "type": "string"
+          },
+          "title": "Marketplaces",
+          "type": "array"
+        }
+      },
+      "title": "CopilotConfig",
+      "type": "object"
+    },
+    "DispatchConfig": {
+      "description": "Task dispatch backend configuration.",
+      "properties": {
+        "backend": {
+          "default": "local",
+          "description": "Dispatch backend",
+          "enum": [
+            "local",
+            "k8s",
+            "aca"
+          ],
+          "title": "Backend",
+          "type": "string"
+        },
+        "k8s_namespace": {
+          "default": "default",
+          "description": "K8s namespace for Jobs",
+          "title": "K8S Namespace",
+          "type": "string"
+        },
+        "k8s_job_image": {
+          "default": "",
+          "description": "Docker image for Job pods",
+          "title": "K8S Job Image",
+          "type": "string"
+        },
+        "k8s_job_timeout": {
+          "default": 600,
+          "description": "Job timeout in seconds",
+          "title": "K8S Job Timeout",
+          "type": "integer"
+        },
+        "aca_subscription_id": {
+          "default": "",
+          "description": "Azure subscription ID",
+          "title": "Aca Subscription Id",
+          "type": "string"
+        },
+        "aca_resource_group": {
+          "default": "",
+          "description": "Azure resource group",
+          "title": "Aca Resource Group",
+          "type": "string"
+        },
+        "aca_job_name": {
+          "default": "",
+          "description": "ACA Job resource name",
+          "title": "Aca Job Name",
+          "type": "string"
+        },
+        "aca_job_timeout": {
+          "default": 600,
+          "description": "ACA Job timeout in seconds",
+          "title": "Aca Job Timeout",
+          "type": "integer"
+        }
+      },
+      "title": "DispatchConfig",
+      "type": "object"
+    },
+    "GitLabConfig": {
+      "description": "GitLab instance configuration.",
+      "properties": {
+        "url": {
+          "description": "GitLab instance URL",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "title": "GitLabConfig",
+      "type": "object"
+    },
+    "JiraIntegrationConfig": {
+      "description": "Jira integration block.",
+      "properties": {
+        "name": {
+          "description": "Unique integration name, referenced by projects",
+          "title": "Name",
+          "type": "string"
+        },
+        "type": {
+          "const": "jira",
+          "description": "Integration type discriminator",
+          "title": "Type",
+          "type": "string"
+        },
+        "project_key": {
+          "description": "Jira project key (e.g. PROJ)",
+          "title": "Project Key",
+          "type": "string"
+        },
+        "trigger_status": {
+          "default": "AI Ready",
+          "description": "Jira status that triggers the agent",
+          "title": "Trigger Status",
+          "type": "string"
+        },
+        "in_progress_status": {
+          "default": "In Progress",
+          "description": "Status after agent pickup",
+          "title": "In Progress Status",
+          "type": "string"
+        },
+        "in_review_status": {
+          "default": "In Review",
+          "description": "Status after MR creation",
+          "title": "In Review Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "project_key"
+      ],
+      "title": "JiraIntegrationConfig",
+      "type": "object"
+    },
+    "PollConfig": {
+      "description": "GitLab polling configuration.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Enable GitLab API polling",
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "interval": {
+          "default": 30,
+          "description": "Polling interval in seconds",
+          "title": "Interval",
+          "type": "integer"
+        },
+        "lookback_minutes": {
+          "default": 60,
+          "description": "Minutes to look back on startup for recent MRs",
+          "title": "Lookback Minutes",
+          "type": "integer"
+        },
+        "review_on_push": {
+          "default": true,
+          "description": "Re-review MRs on new commits (dedup per commit). When false, each MR reviewed once (dedup per MR).",
+          "title": "Review On Push",
+          "type": "boolean"
+        }
+      },
+      "title": "PollConfig",
+      "type": "object"
+    },
+    "ProjectConfig": {
+      "description": "A single GitLab project entry.",
+      "properties": {
+        "repo": {
+          "description": "GitLab repo path_with_namespace (e.g. group/repo)",
+          "title": "Repo",
+          "type": "string"
+        },
+        "credential_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Credential alias; falls back to defaults",
+          "title": "Credential Ref"
+        },
+        "target_branch": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Target branch; falls back to defaults",
+          "title": "Target Branch"
+        },
+        "resolution_behavior": {
+          "anyOf": [
+            {
+              "enum": [
+                "auto-resolve",
+                "suggest",
+                "off"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Resolution behavior; falls back to defaults",
+          "title": "Resolution Behavior"
+        },
+        "webhook": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Webhook trigger; falls back to defaults",
+          "title": "Webhook"
+        },
+        "poll": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PollConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Polling config; falls back to defaults"
+        },
+        "copilot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CopilotConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-project Copilot overrides"
+        },
+        "integrations": {
+          "description": "Integration names from the integrations list",
+          "items": {
+            "type": "string"
+          },
+          "title": "Integrations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "repo"
+      ],
+      "title": "ProjectConfig",
+      "type": "object"
+    },
+    "PromptsConfig": {
+      "description": "System prompt overrides and suffixes.",
+      "properties": {
+        "system": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Global base prompt override",
+          "title": "System"
+        },
+        "system_suffix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Appended to global base",
+          "title": "System Suffix"
+        },
+        "review": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Review prompt override",
+          "title": "Review"
+        },
+        "review_suffix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Appended to review prompt",
+          "title": "Review Suffix"
+        },
+        "coding": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Coding prompt override",
+          "title": "Coding"
+        },
+        "coding_suffix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Appended to coding prompt",
+          "title": "Coding Suffix"
+        },
+        "discussion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Discussion prompt override",
+          "title": "Discussion"
+        },
+        "discussion_suffix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Appended to discussion prompt",
+          "title": "Discussion Suffix"
+        }
+      },
+      "title": "PromptsConfig",
+      "type": "object"
+    },
+    "ServerConfig": {
+      "description": "Server operational configuration.",
+      "properties": {
+        "log_level": {
+          "default": "info",
+          "description": "Log level",
+          "title": "Log Level",
+          "type": "string"
+        },
+        "clone_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Base directory for repo clones",
+          "title": "Clone Dir"
+        },
+        "shutdown_timeout": {
+          "default": 30,
+          "description": "Graceful shutdown timeout in seconds",
+          "exclusiveMinimum": 0,
+          "title": "Shutdown Timeout",
+          "type": "integer"
+        },
+        "webhook_ip_allowlist": {
+          "description": "CIDR ranges allowed to send webhooks. Empty = allow all. GitLab.com ranges: 34.74.90.64/28, 34.74.226.0/24",
+          "items": {
+            "type": "string"
+          },
+          "title": "Webhook Ip Allowlist",
+          "type": "array"
+        },
+        "trusted_proxies": {
+          "description": "CIDR ranges of trusted reverse proxies for X-Forwarded-For parsing",
+          "items": {
+            "type": "string"
+          },
+          "title": "Trusted Proxies",
+          "type": "array"
+        }
+      },
+      "title": "ServerConfig",
+      "type": "object"
+    }
+  },
+  "description": "Root config file model (version 2).\n\nThe YAML file is the primary non-secret config source. Secrets\n(tokens, connection strings) stay as env vars. A few operational\nenv vars (LOG_LEVEL, DISPATCH_BACKEND) can override YAML values.",
+  "properties": {
+    "version": {
+      "const": 2,
+      "description": "Schema version \u2014 must be 2",
+      "title": "Version",
+      "type": "integer"
+    },
+    "gitlab": {
+      "$ref": "#/$defs/GitLabConfig",
+      "description": "GitLab instance configuration"
+    },
+    "dispatch": {
+      "$ref": "#/$defs/DispatchConfig",
+      "description": "Dispatch backend config"
+    },
+    "copilot": {
+      "$ref": "#/$defs/CopilotConfig",
+      "description": "Global Copilot defaults"
+    },
+    "server": {
+      "$ref": "#/$defs/ServerConfig",
+      "description": "Server operational config"
+    },
+    "prompts": {
+      "$ref": "#/$defs/PromptsConfig",
+      "description": "Prompt overrides"
+    },
+    "defaults": {
+      "$ref": "#/$defs/ConfigDefaults",
+      "description": "Project defaults"
+    },
+    "projects": {
+      "description": "GitLab project definitions",
+      "items": {
+        "$ref": "#/$defs/ProjectConfig"
+      },
+      "title": "Projects",
+      "type": "array"
+    },
+    "integrations": {
+      "description": "Named integration configurations",
+      "items": {
+        "$ref": "#/$defs/JiraIntegrationConfig"
+      },
+      "title": "Integrations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "version",
+    "gitlab"
+  ],
+  "title": "ConfigFile",
+  "type": "object"
+}

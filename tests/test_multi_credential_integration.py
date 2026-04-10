@@ -20,7 +20,6 @@ from tests.conftest import (
     FAKE_REVIEW_OUTPUT,
     GITLAB_URL,
     HEADERS,
-    make_settings,
 )
 
 # -- Two projects with distinct credentials --
@@ -123,7 +122,6 @@ async def test_multi_project_webhooks_use_distinct_tokens(
 
     registry = _make_multi_project_registry()
     app.state.project_registry = registry
-    app.state.settings = make_settings()
 
     try:
         # Send webhook for project Alpha
@@ -187,7 +185,11 @@ async def test_note_webhook_multi_project_token_isolation(
     mock_cred.resolve_identity = AsyncMock(
         return_value=AgentIdentity(user_id=AGENT_USER_ID, username=AGENT_USERNAME)
     )
-    app.state.credential_registry = mock_cred
+    import dataclasses
+
+    app.state.app_context = dataclasses.replace(
+        app.state.app_context, credential_registry=mock_cred
+    )
 
     note_payload = {
         "object_kind": "note",
@@ -222,4 +224,3 @@ async def test_note_webhook_multi_project_token_isolation(
             assert kwargs["project_token"] == PROJECT_BETA_TOKEN
     finally:
         app.state.project_registry = None
-        del app.state.credential_registry

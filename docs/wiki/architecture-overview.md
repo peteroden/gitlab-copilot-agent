@@ -89,7 +89,7 @@ graph TB
 ## Component Layers
 
 ### 1. HTTP Ingestion Layer
-- **`webhook.py`**: FastAPI endpoints for GitLab webhooks (merge_request, note)
+- **`webhook.py`**: FastAPI endpoints for GitLab webhooks (merge_request, note). Uses `get_app_context()` for typed dependency access.
 - **`gitlab_poller.py`**: Background poller for MR discovery and @mention notes
 - **`jira_poller.py`**: Background poller for issues in "AI Ready" status
 
@@ -113,17 +113,26 @@ graph TB
 - **`gitlab_client.py`**: GitLab REST API (MR details, comments, clone, create MR, resolve/reply to discussions)
 - **`jira_client.py`**: Jira REST API v3 (search, transitions, comments)
 
-### 5. Shared Utilities
+### 5. Configuration & DI
+- **`config.py`**: `Settings` and `TaskRunnerSettings` loaded from environment variables (v1 config)
+- **`config_v2.py`**: GitLab-centric YAML config models (`ConfigFile`, `ProjectConfig`, `IntegrationConfig`), `load_config_file()`, audit logging for marketplace URLs
+- **`app_context.py`**: Frozen `AppContext` dataclass replacing `app.state` service locator. `get_app_context()` FastAPI dependency for typed access. Mutable state (project_registry, pollers) stays on `app.state` for hot-reload.
+- **`mapping_models.py`**: YAML mapping models for Jira→GitLab bindings (v1 config)
+- **`mapping_cli.py`**: CLI for `validate`, `show`, `render-json` (v1) and `schema`, `validate-v2` (v2)
+
+### 6. Shared Utilities
 - **`git_operations.py`**: Git CLI wrappers (clone, branch, commit, push)
 - **`comment_parser.py`**: Extract structured review (comments + resolutions) from agent output
 - **`comment_poster.py`**: Post inline discussions to GitLab MR, handle resolution actions for prior feedback
 - **`repo_config.py`**: Discover repo-level skills, agents, instructions
 
-### 6. State & Concurrency
+### 7. State & Concurrency
 - **`concurrency.py`**: MemoryLock, MemoryDedup, ReviewedMRTracker, ProcessedIssueTracker, TaskQueue protocol, QueueMessage
+- **`credential_registry.py`**: Maps credential aliases to tokens, TTL-cached identity resolution (1hr default)
+- **`project_registry.py`**: Resolves project context at startup. Supports both v1 (`from_rendered_map`) and v2 (`from_config`) config sources. Optional `jira_project` enables review-only projects.
 - **`azure_storage.py`**: AzureStorageTaskQueue (Claim Check dispatch via Azure Storage Queue + Blob), BlobResultStore (result read/write to Blob Storage)
 
-### 7. Telemetry
+### 8. Telemetry
 - **`telemetry.py`**: OTEL tracing, metrics, log export
 - **`metrics.py`**: All 7 metrics instruments
 
@@ -212,9 +221,10 @@ graph TB
 **Validation**: Pydantic strict mode, HMAC for webhooks, URL validation for clones, frontmatter parsing for repo config
 
 ### Trusted Internal (Green Zone)
-- Application state (FastAPI app.state)
+- Application state (typed `AppContext` in `app_context.py`, stashed on `app.state.app_context`)
 - Python code in `src/gitlab_copilot_agent/`
 - Environment variables (loaded at startup)
+- YAML config file (`config_v2.py` models, loaded at startup via `load_config_file()`)
 - In-memory locks and dedup stores
 
 ### Semi-Trusted (Yellow Zone)
