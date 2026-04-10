@@ -11,7 +11,7 @@ This documentation provides comprehensive implementation details for developers 
 - **[Architecture Overview](architecture-overview.md)** — System components, external dependencies, trust boundaries, deployment topology
 - **[Request Flows](request-flows.md)** — End-to-end data flows for webhooks, polling, and task execution with sequence diagrams
 - **[Concurrency & State](concurrency-and-state.md)** — Distributed locking, deduplication, watermarks, and race condition prevention
-- **[Task Execution](task-execution.md)** — LocalTaskExecutor vs KubernetesTaskExecutor, prompt construction, SDK integration
+- **[Task Execution](task-execution.md)** — LocalTaskExecutor vs RemoteTaskExecutor, prompt construction, SDK integration
 
 ---
 

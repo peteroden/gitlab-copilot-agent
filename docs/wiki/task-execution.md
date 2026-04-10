@@ -1,6 +1,6 @@
 # Task Execution
 
-TaskExecutor protocol, LocalTaskExecutor vs KubernetesTaskExecutor, prompt construction, Copilot SDK integration.
+TaskExecutor protocol, LocalTaskExecutor vs RemoteTaskExecutor, prompt construction, Copilot SDK integration.
 
 ---
 
@@ -65,70 +65,43 @@ class LocalTaskExecutor:
 
 ---
 
-## KubernetesTaskExecutor
+## RemoteTaskExecutor
 
-**Purpose**: Dispatches tasks via Azure Storage Queue (Claim Check pattern). KEDA ScaledJob triggers ephemeral Job pods when messages arrive.
+**Module**: `src/gitlab_copilot_agent/remote_executor.py`
+
+**Purpose**: Unified remote task executor for both K8s and ACA backends. Dispatches tasks via Azure Storage Queue (Claim Check pattern). KEDA ScaledJob triggers ephemeral Job pods (K8s) or Job executions (ACA) when messages arrive.
 
 **Flow**:
-1. Serialize task params to JSON payload
-2. Enqueue to Azure Storage Queue via `TaskQueue.enqueue()` (uploads params blob + queue message)
-3. Set idempotency lock (`enqueued:{expiry}`) to prevent duplicate enqueues
-4. Poll result blob in Azure Blob Storage via `BlobResultStore`
-5. Return deserialized result or raise exception on timeout
+1. Check result cache — return immediately if result already stored
+2. Check idempotency lock — if task already in-flight, skip to polling
+3. Upload repo tarball to blob storage (if repo_path provided)
+4. Serialize task params to JSON and enqueue via `TaskQueue.enqueue()`
+5. Set idempotency lock (`enqueued:{expiry}`)
+6. Poll result blob until available or timeout
 
 **Dispatch** (Claim Check pattern):
 - **Params blob**: `params/{task_id}.json` uploaded to Azure Blob Storage
-- **Queue message**: `{"task_id": "...", "blob_name": "params/..."}` enqueued to Azure Storage Queue
-- **KEDA**: Watches queue, creates a K8s Job per message automatically
-- **No direct Job creation**: Controller never calls the K8s Job API — KEDA handles lifecycle
+- **Queue message**: Contains task_id, repo_blob_key, prompts, plugins — no secrets
+- **KEDA**: Watches queue, creates K8s Job or ACA Job execution per message
+- **No direct Job/Execution creation**: Controller never calls K8s or ACA APIs
 
 **Result Storage**:
 - **Blob key**: `results/{task_id}.json` in Azure Blob Storage
 - **Written by**: `task_runner.py` (Job pod)
-- **Read by**: `KubernetesTaskExecutor._poll_result()`
+- **Read by**: `RemoteTaskExecutor._poll_result()`
 
 **Polling**:
-- Interval: 2 seconds
-- Timeout: `settings.k8s_job_timeout` (default: 600s)
-- Checks result blob existence in Azure Blob Storage
-
-**Failure Handling**:
-- Timeout: raise TimeoutError
-- Task runner error: result blob contains error details
+- Interval: 5 seconds (unified — was 2s for K8s, 5s for ACA)
+- Timeout: configurable via `job_timeout` constructor param (from `settings.k8s_job_timeout` or `settings.aca_job_timeout`)
 
 **Idempotency**:
-- Lock key checked before enqueue — if task is already in-flight, skips to polling
-- Lock value format: `enqueued:{expiry_timestamp}`
+- Lock key: `remote_exec:{task_id}`
+- Lock value: `enqueued:{expiry_timestamp}`
+- Checked before enqueue — if valid lock exists, skips to polling
 
----
-
-## ContainerAppsTaskExecutor
-
-**Module**: `src/gitlab_copilot_agent/aca_executor.py`
-
-**How it works** (identical to K8s — unified Claim Check dispatch):
-
-1. Controller receives task via webhook/poller
-2. Serializes task params and enqueues to Azure Storage Queue via `TaskQueue.enqueue()`
-3. Sets idempotency lock (`enqueued:{expiry}`) to prevent duplicate enqueues
-4. KEDA event trigger on the Container Apps Job watches the queue and starts executions automatically
-5. Polls result blob in Azure Blob Storage via `BlobResultStore`
-
-**Security (S1)**: Secrets (GitLab token, GitHub token, Copilot API key) are configured on the Job template as Key Vault references — never passed per-execution.
-
-**Identity (S4)**: Controller and Job use separate user-assigned managed identities with least-privilege RBAC:
-- Controller: ACR pull, Key Vault Secrets User, Storage Queue/Blob access
-- Job: ACR pull, Key Vault Secrets User, Storage Queue/Blob access
-
-**Idempotency**: Lock key checked before enqueue. If task is already in-flight, skips to polling.
-
-**Configuration**:
-| Setting | Description | Default |
-|---------|-------------|---------|
-| `ACA_SUBSCRIPTION_ID` | Azure subscription ID | (required) |
-| `ACA_RESOURCE_GROUP` | Resource group containing the Job | (required) |
-| `ACA_JOB_NAME` | Container Apps Job resource name | (required) |
-| `ACA_JOB_TIMEOUT` | Execution timeout in seconds | 600 |
+**Security**:
+- Dispatch payload contains only non-secret fields (task_type, task_id, repo_blob_key, system_prompt, user_prompt, plugins)
+- Secrets (tokens, API keys) are configured on the Job template, never passed per-execution
 
 ---
 
@@ -544,23 +517,21 @@ _PYTHON_GITIGNORE_PATTERNS = [
 | Feature | LocalTaskExecutor | KubernetesTaskExecutor |
 |---------|-------------------|------------------------|
 | **Deployment** | Single pod only | Multi-pod, horizontal scaling |
-## Comparison: Local vs K8s vs Container Apps
+## Comparison: Local vs Remote (K8s / ACA)
 
-| Feature | Local | Kubernetes | Container Apps |
-|---------|-------|------------|----------------|
-| **Isolation** | None (same process) | Pod-level | Container-level |
-| **Resource Limits** | None (host limits) | CPU/memory via K8s | CPU/memory via Job config |
-| **Repo Clone** | Caller clones | Job clones (task_runner.py) | Job clones (task_runner.py) |
-| **Dispatch** | In-process call | Azure Storage Queue (Claim Check) | Azure Storage Queue (Claim Check) |
-| **Result Storage** | Files on disk, empty patch | Azure Blob Storage (`results/{task_id}.json`) | Azure Blob Storage (`results/{task_id}.json`) |
-| **Job Trigger** | N/A | KEDA ScaledJob (queue-driven) | KEDA event trigger (queue-driven) |
-| **Timeout** | Per-call (default 300s) | Per-Job (default 600s) | Per-execution (default 600s) |
-| **Idempotency** | None | Lock key + enqueue dedup | Lock key + enqueue dedup |
-| **Secret Management** | Env vars | K8s Secrets | Key Vault references (S1) |
-| **Identity** | Service identity | Pod service account | User-assigned managed identity (S4) |
-| **Cleanup** | Caller responsible | Job auto-deleted (TTL 300s) | Execution auto-cleaned by Azure |
+| Feature | LocalTaskExecutor | RemoteTaskExecutor (K8s / ACA) |
+|---------|-------------------|-------------------------------|
+| **Isolation** | None (same process) | Pod-level (K8s) / Container-level (ACA) |
+| **Resource Limits** | None (host limits) | CPU/memory via Job config |
+| **Repo Transfer** | Caller clones locally | Tarball uploaded to blob, downloaded by runner |
+| **Dispatch** | In-process call | Azure Storage Queue (Claim Check) |
+| **Result Storage** | In-memory | Azure Blob Storage (`results/{task_id}.json`) |
+| **Job Trigger** | N/A | KEDA (queue-driven) |
+| **Timeout** | Per-call (default 300s) | Configurable (default 600s) |
+| **Idempotency** | None | Lock key + enqueue dedup |
+| **Poll Interval** | N/A | 5 seconds |
 
-**Recommendation**: Use LocalTaskExecutor for dev/test, KubernetesTaskExecutor for self-hosted K8s, ContainerAppsTaskExecutor for Azure-managed deployments.
+**Recommendation**: Use `LocalTaskExecutor` (`dispatch_backend=local`) for dev/test. Use `RemoteTaskExecutor` (`task_executor=kubernetes` or `container_apps`) for production with KEDA-triggered backends.
 
 ---
 
