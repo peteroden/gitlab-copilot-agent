@@ -170,6 +170,23 @@ def test_azure_storage_backend_accepts_connection_string() -> None:
     assert settings.azure_storage_connection_string is not None
 
 
+def test_local_dispatch_skips_azure_validation() -> None:
+    """dispatch_backend=local validates without any Azure env vars."""
+    settings = make_settings(dispatch_backend="local", azure_storage_connection_string=None)
+    assert settings.dispatch_backend == "local"
+
+
+def test_local_dispatch_skips_aca_validation() -> None:
+    """dispatch_backend=local with container_apps executor skips ACA resource checks."""
+    settings = make_settings(
+        task_executor="container_apps",
+        dispatch_backend="local",
+        azure_storage_connection_string=None,
+    )
+    assert settings.dispatch_backend == "local"
+    assert settings.task_executor == "container_apps"
+
+
 class TestPrintConfigErrors:
     """Tests for the human-friendly startup error formatter."""
 

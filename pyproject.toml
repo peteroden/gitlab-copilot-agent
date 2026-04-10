@@ -89,6 +89,7 @@ select = [
 ]
 ignore = [
     "ANN401",        # disallows Any — pyright strict + comment convention handles this
+    "D107",          # __init__ docstrings — class docstring covers constructor args
     "D212",          # conflicts with D213
     "RUF100",        # defer until existing noqa audit — 19 load-bearing noqa comments reference non-selected rules
 ]

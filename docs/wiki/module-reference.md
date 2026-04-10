@@ -14,7 +14,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `health() -> dict[str, object]`: Health check endpoint, includes GitLab poller status if enabled
 - `config_reload(body: RenderedMap, request: Request) -> dict`: Hot-reload project registry from new mapping JSON (requires `X-Gitlab-Token` auth)
 - `_cleanup_stale_repos(clone_dir: str | None) -> None`: Remove leftover `mr-review-*` dirs on startup
-- `_create_executor(backend: str, settings: Settings | None) -> TaskExecutor`: Factory for LocalTaskExecutor or KubernetesTaskExecutor
+- `_create_executor(backend: str, settings: Settings | None) -> TaskExecutor`: Factory for LocalTaskExecutor or RemoteTaskExecutor. Supports `dispatch_backend="local"` bypass.
 
 **Key Globals**:
 - `app: FastAPI`: FastAPI application instance with lifespan and webhook router
@@ -281,32 +281,22 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 ---
 
-### `k8s_executor.py`
-**Purpose**: KubernetesTaskExecutor — dispatches tasks as K8s Jobs, reads results from Redis.
+### `remote_executor.py`
+**Purpose**: Unified remote task executor — claim-check dispatch for any KEDA-backed backend (K8s Jobs or ACA Job executions). Replaces the former `k8s_executor.py` and `aca_executor.py`.
 
 **Key Constants**:
-- `_RESULT_KEY_PREFIX = "result:"`
-- `_JOB_POLL_INTERVAL = 2`
-- `_TTL_AFTER_FINISHED = 300`
-- `_ANNOTATION_KEY = "results.copilot-agent/summary"`
-
-**Key Classes**:
-- `KubernetesTaskExecutor`: Implements `TaskExecutor`
-  - `execute(task: TaskParams) -> TaskResult`: Create Job, poll for completion, retrieve result from Redis. On 409 (Job exists): replaces stale completed Jobs (with retry backoff), reuses running ones.
-  - `_create_job(job_name: str, task: TaskParams) -> None`: Create K8s Job with task env vars and optional hostAliases
-  - `_create_job_with_retry(job_name: str, task: TaskParams) -> None`: Retry `_create_job` with exponential backoff on 409 (handles async K8s deletion)
-  - `_read_job_status(job_name: str) -> str`: Return "succeeded", "failed", or "running"
-  - `_read_job_annotation(job_name: str) -> str | None`: Read result annotation
-  - `_read_pod_logs(job_name: str) -> str`: Read pod logs for failed Job
-  - `_delete_job(job_name: str) -> None`: Delete Job after timeout/failure
-  - `_wait_for_result(redis_client: Redis, job_name: str, task: TaskParams) -> TaskResult`: Poll Redis and Job status
+- `_POLL_INTERVAL = 5`: Seconds between result blob checks
+- `_LOCK_PREFIX = "remote_exec:"`: Idempotency lock prefix
 
 **Key Functions**:
-- `_sanitize_job_name(task_type: str, task_id: str) -> str`: Build k8s-compliant Job name
-- `_build_env(task: TaskParams, settings: Settings) -> list[dict[str, str]]`: Env vars for Job container
-- `_parse_host_aliases(raw: str) -> list[object] | None`: Parse K8S_JOB_HOST_ALIASES JSON
+- `parse_result(raw: str, task_type: str) -> TaskResult`: Parse result JSON or wrap raw string. Handles review, coding, and error result types with traceback logging.
 
-**Internal Imports**: `config`, `task_executor`
+**Key Classes**:
+- `RemoteTaskExecutor`: Implements `TaskExecutor`
+  - `execute(task: TaskParams) -> TaskResult`: Check cache, check lock, upload tarball, enqueue, poll for result
+  - `_poll_result(task: TaskParams) -> TaskResult`: Poll ResultStore until result or timeout
+
+**Internal Imports**: `task_executor`, `git_operations`, `concurrency`
 
 **Depended On By**: `main.py` (instantiation when `task_executor=kubernetes`)
 
@@ -818,7 +808,7 @@ All use `frozen=True` config.
 | `coding_engine.py` | Processing | 109 | Coding prompt construction |
 | `prompt_defaults.py` | Processing | 164 | System prompt defaults & resolution |
 | `task_executor.py` | Execution | 53 | TaskExecutor protocol |
-| `k8s_executor.py` | Execution | 219 | K8s Job orchestration |
+| `remote_executor.py` | Execution | 162 | Unified claim-check dispatch (K8s + ACA) |
 | `copilot_session.py` | Execution | 143 | SDK wrapper |
 | `task_runner.py` | Execution | 134 | K8s Job entrypoint |
 | `gitlab_client.py` | Clients | 224 | GitLab API client |

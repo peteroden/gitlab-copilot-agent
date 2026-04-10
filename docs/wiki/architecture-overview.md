@@ -26,7 +26,7 @@ graph TB
     end
 
     subgraph "K8s / ACA Jobs (KEDA-triggered)"
-        K8SEXEC[k8s_executor.py / aca_executor.py]
+        K8SEXEC[remote_executor.py]
         KEDA[KEDA ScaledJob<br/>watches queue]
         JOB1[Job Pod 1<br/>Isolated Task]
         JOB2[Job Pod N<br/>Isolated Task]
@@ -105,7 +105,7 @@ graph TB
 
 ### 3. Execution Layer
 - **`task_executor.py`**: TaskExecutor protocol + LocalTaskExecutor
-- **`k8s_executor.py`**: KubernetesTaskExecutor (Job creation, result polling)
+- **`remote_executor.py`**: RemoteTaskExecutor — unified claim-check dispatch for K8s and ACA (replaces k8s_executor.py + aca_executor.py)
 - **`copilot_session.py`**: Copilot SDK wrapper (client init, session config, result extraction)
 - **`task_runner.py`**: K8s Job entrypoint (`python -m gitlab_copilot_agent.task_runner`)
 

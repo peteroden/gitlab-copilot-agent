@@ -58,12 +58,23 @@ def _cleanup_stale_repos(clone_dir: str | None = None) -> None:
 
 
 def _create_executor(backend: str, settings: Settings | None = None) -> TaskExecutor:
-    """Factory: create a TaskExecutor for the given backend."""
-    if backend == "kubernetes":
+    """Factory: create a TaskExecutor for the given backend.
+
+    Args:
+        backend: One of 'local', 'kubernetes', 'container_apps'.
+        settings: Required for remote backends (provides Azure Storage config).
+
+    Returns:
+        Configured TaskExecutor instance.
+    """
+    # Local dispatch mode bypasses Azure entirely
+    if backend == "local" or (settings and settings.dispatch_backend == "local"):
+        return LocalTaskExecutor()
+    if backend in ("kubernetes", "container_apps"):
         if settings is None:
-            msg = "Settings required for kubernetes executor"
+            msg = f"Settings required for {backend} executor"
             raise ValueError(msg)
-        from gitlab_copilot_agent.k8s_executor import KubernetesTaskExecutor
+        from gitlab_copilot_agent.remote_executor import RemoteTaskExecutor
 
         store = create_result_store(
             azure_storage_account_url=settings.azure_storage_account_url,
@@ -77,28 +88,8 @@ def _create_executor(backend: str, settings: Settings | None = None) -> TaskExec
             task_queue_name=settings.task_queue_name,
             task_blob_container=settings.task_blob_container,
         )
-        return KubernetesTaskExecutor(settings=settings, result_store=store, task_queue=task_queue)
-    if backend == "container_apps":
-        if settings is None:
-            msg = "Settings required for container_apps executor"
-            raise ValueError(msg)
-        from gitlab_copilot_agent.aca_executor import ContainerAppsTaskExecutor
-
-        task_queue = create_task_queue(
-            azure_storage_queue_url=settings.azure_storage_queue_url,
-            azure_storage_account_url=settings.azure_storage_account_url,
-            azure_storage_connection_string=settings.azure_storage_connection_string,
-            task_queue_name=settings.task_queue_name,
-            task_blob_container=settings.task_blob_container,
-        )
-        store = create_result_store(
-            azure_storage_account_url=settings.azure_storage_account_url,
-            azure_storage_connection_string=settings.azure_storage_connection_string,
-            task_blob_container=settings.task_blob_container,
-        )
-        return ContainerAppsTaskExecutor(
-            settings=settings, result_store=store, task_queue=task_queue
-        )
+        timeout = settings.k8s_job_timeout if backend == "kubernetes" else settings.aca_job_timeout
+        return RemoteTaskExecutor(result_store=store, task_queue=task_queue, job_timeout=timeout)
     return LocalTaskExecutor()
 
 

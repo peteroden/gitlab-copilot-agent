@@ -39,6 +39,28 @@ def test_create_executor_k8s_returns_executor() -> None:
     assert isinstance(executor, TaskExecutor)
 
 
+def test_create_executor_container_apps_returns_executor() -> None:
+    settings = make_settings(
+        task_executor="container_apps",
+        aca_subscription_id="sub",
+        aca_resource_group="rg",
+        aca_job_name="job",
+    )
+    with (
+        patch("gitlab_copilot_agent.main.create_result_store"),
+        patch("gitlab_copilot_agent.main.create_task_queue"),
+    ):
+        executor = _create_executor("container_apps", settings)
+    assert isinstance(executor, TaskExecutor)
+
+
+def test_create_executor_local_dispatch_backend() -> None:
+    """dispatch_backend=local returns LocalTaskExecutor even with k8s task_executor."""
+    settings = make_settings(dispatch_backend="local")
+    executor = _create_executor("kubernetes", settings)
+    assert isinstance(executor, LocalTaskExecutor)
+
+
 @pytest.mark.usefixtures("env_vars")
 async def test_health_returns_ok(client: AsyncClient) -> None:
     resp = await client.get("/health")

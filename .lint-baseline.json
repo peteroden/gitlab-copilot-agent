@@ -1,11 +1,6 @@
 {
-  "src/gitlab_copilot_agent/aca_executor.py": {
-    "D102": 1,
-    "D107": 1
-  },
   "src/gitlab_copilot_agent/azure_storage.py": {
-    "D102": 11,
-    "D107": 3
+    "D102": 11
   },
   "src/gitlab_copilot_agent/coding_engine.py": {
     "TC001": 1
@@ -13,7 +8,6 @@
   "src/gitlab_copilot_agent/coding_orchestrator.py": {
     "D101": 1,
     "D102": 1,
-    "D107": 1,
     "TC001": 5,
     "TC003": 1
   },
@@ -23,43 +17,30 @@
   "src/gitlab_copilot_agent/concurrency.py": {
     "D102": 25,
     "D105": 4,
-    "D107": 6,
     "TC003": 1
   },
   "src/gitlab_copilot_agent/credential_registry.py": {
-    "D107": 1,
     "RUF003": 1
   },
   "src/gitlab_copilot_agent/discussion_orchestrator.py": {
     "TC001": 4,
     "TC003": 1
   },
-  "src/gitlab_copilot_agent/git_operations.py": {
-    "D107": 1
-  },
   "src/gitlab_copilot_agent/gitlab_client.py": {
     "D101": 2,
     "D102": 17,
-    "D107": 1,
     "TC003": 1
   },
   "src/gitlab_copilot_agent/gitlab_poller.py": {
     "D102": 1,
-    "D107": 1,
     "TC001": 6
   },
   "src/gitlab_copilot_agent/jira_client.py": {
-    "D102": 3,
-    "D107": 1
+    "D102": 3
   },
   "src/gitlab_copilot_agent/jira_poller.py": {
     "D102": 1,
-    "D107": 1,
     "TC001": 5
-  },
-  "src/gitlab_copilot_agent/k8s_executor.py": {
-    "D102": 1,
-    "D107": 1
   },
   "src/gitlab_copilot_agent/main.py": {
     "PLW2901": 1,
@@ -73,7 +54,6 @@
   },
   "src/gitlab_copilot_agent/project_registry.py": {
     "D102": 4,
-    "D107": 1,
     "TC001": 3
   },
   "src/gitlab_copilot_agent/review_engine.py": {
@@ -110,9 +90,6 @@
   },
   "tests/test_git_operations.py": {
     "RUF043": 1
-  },
-  "tests/test_k8s_executor.py": {
-    "RUF006": 4
   },
   "tests/test_k8s_integration.py": {
     "N806": 1

@@ -1,23 +1,111 @@
 #!/usr/bin/env bash
-# E2E test: deploy agent to k3d, run all test flows against mock services.
+# E2E test: run all test flows against mock services.
+#
+# Modes:
+#   k3d   (default) — expects agent deployed in k3d, mocks running on host
+#   local — starts mocks + agent in-process with DISPATCH_BACKEND=local
+#
 # Tests: 1. Webhook MR review, 2. Jira polling, 3. @mention thread interaction,
-#        4. GitLab polling, 5. Hot-reload config, 6. Plugin install,
-#        7. Graceful shutdown, 8. Discussion history capture,
+#        4. GitLab polling, 5. Hot-reload config, 6. Plugin install (k3d only),
+#        7. Graceful shutdown (k3d only), 8. Discussion history capture,
 #        9. Incremental review, 10. Discussion summary activity section,
 #        11. Manual resolution suppression, 12. Commit message awareness.
-# Usage: ./tests/e2e/run.sh [agent-url] [mock-gitlab-url] [mock-jira-url]
+#
+# Usage:
+#   ./tests/e2e/run.sh [agent-url] [mock-gitlab-url] [mock-jira-url]     # k3d mode
+#   ./tests/e2e/run.sh --mode local                                       # local mode
 set -euo pipefail
+
+# --- Parse mode flag ---
+MODE="k3d"
+POSITIONAL=()
+for arg in "$@"; do
+    case $arg in
+        --mode=*) MODE="${arg#*=}"; shift ;;
+        --mode)   MODE="$2"; shift; shift ;;
+        *)        POSITIONAL+=("$arg") ;;
+    esac
+done
+set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
 AGENT_URL="${1:-http://localhost:8080}"
 MOCK_GITLAB_URL="${2:-http://localhost:9999}"
 MOCK_JIRA_URL="${3:-http://localhost:9997}"
-# Internal URL the agent uses inside k3d — must match GITLAB_URL in .env.e2e
-INTERNAL_GITLAB_URL="http://host.k3d.internal:9999"
+MOCK_LLM_PORT=9998
 WEBHOOK_SECRET="e2e-test-secret"
 TIMEOUT=120
 POLL_INTERVAL=3
+LOCAL_PIDS=()
 
-echo "=== E2E Test ==="
+# URL the agent uses to reach GitLab (for git clone).
+# k3d: agent runs in pod, reaches host via k3d internal DNS.
+# local: agent runs on same host as mocks.
+if [ "$MODE" = "local" ]; then
+    INTERNAL_GITLAB_URL="$MOCK_GITLAB_URL"
+    WEBHOOK_SECRET="e2e-local-secret"
+    TIMEOUT=60
+    POLL_INTERVAL=2
+else
+    INTERNAL_GITLAB_URL="http://host.k3d.internal:9999"
+fi
+
+# --- Local mode: start mocks + agent ---
+cleanup_local() {
+    for pid in "${LOCAL_PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    wait 2>/dev/null || true
+}
+
+if [ "$MODE" = "local" ]; then
+    trap cleanup_local EXIT
+    echo "=== E2E Test (local dispatch) ==="
+    echo "Starting mock services..."
+    uv run uvicorn tests.e2e.mock_gitlab:app --host 127.0.0.1 --port 9999 > /tmp/e2e-mock-gitlab.log 2>&1 &
+    LOCAL_PIDS+=($!)
+    uv run uvicorn tests.e2e.mock_llm:app --host 127.0.0.1 --port "$MOCK_LLM_PORT" > /tmp/e2e-mock-llm.log 2>&1 &
+    LOCAL_PIDS+=($!)
+    uv run uvicorn tests.e2e.mock_jira:app --host 127.0.0.1 --port 9997 > /tmp/e2e-mock-jira.log 2>&1 &
+    LOCAL_PIDS+=($!)
+    for port in 9999 "$MOCK_LLM_PORT" 9997; do
+        timeout 15 bash -c "until curl -sf http://127.0.0.1:$port/health >/dev/null 2>&1; do sleep 0.5; done" \
+            || { echo "❌ mock on port $port failed to start"; exit 1; }
+    done
+
+    echo "Starting agent (DISPATCH_BACKEND=local)..."
+
+    # Plugins: point at the repo's test-marketplace fixture (Docker image
+    # copies it to /opt/test-marketplace; locally we use the source path).
+    LOCAL_MARKETPLACE="$(cd "$(dirname "$0")" && pwd)/test-marketplace"
+
+    GITLAB_URL="$MOCK_GITLAB_URL" \
+      GITLAB_TOKEN=test-token \
+      GITLAB_WEBHOOK_SECRET="$WEBHOOK_SECRET" \
+      COPILOT_PROVIDER_TYPE=openai \
+      COPILOT_PROVIDER_BASE_URL="http://127.0.0.1:${MOCK_LLM_PORT}/v1" \
+      COPILOT_PROVIDER_API_KEY=fake-key \
+      DISPATCH_BACKEND=local \
+      ALLOW_HTTP_CLONE=true \
+      LOG_LEVEL=info \
+      GITLAB_POLL=true \
+      GITLAB_POLL_INTERVAL=3 \
+      GITLAB_PROJECTS=999 \
+      JIRA_URL="$MOCK_JIRA_URL" \
+      JIRA_EMAIL=e2e@test.com \
+      JIRA_API_TOKEN=e2e-fake-jira-token \
+      JIRA_PROJECT_MAP='{"mappings":{"DEMO":{"repo":"repo","target_branch":"main","credential_ref":"default"}}}' \
+      JIRA_TRIGGER_STATUS="AI Ready" \
+      JIRA_POLL_INTERVAL=3 \
+      RESOLUTION_BEHAVIOR=suggest \
+      COPILOT_PLUGINS="${LOCAL_MARKETPLACE}/plugins/e2e-greeter" \
+      COPILOT_PLUGIN_MARKETPLACES="${LOCAL_MARKETPLACE}" \
+      uv run uvicorn gitlab_copilot_agent.main:app \
+        --host 127.0.0.1 --port 8080 > /tmp/e2e-agent.log 2>&1 &
+    LOCAL_PIDS+=($!)
+    AGENT_URL="http://127.0.0.1:8080"
+fi
+
+echo "=== E2E Test ($MODE mode) ==="
 echo "Agent:       $AGENT_URL"
 echo "Mock GitLab: $MOCK_GITLAB_URL"
 echo "Mock Jira:   $MOCK_JIRA_URL"
@@ -54,6 +142,14 @@ send_webhook() {
     [ "$STATUS" = "queued" ] && echo " ✅ queued" || { echo " ❌ $RESPONSE"; exit 1; }
 }
 
+dump_agent_logs() {
+    if [ "$MODE" = "local" ]; then
+        tail -30 /tmp/e2e-agent.log 2>/dev/null || true
+    else
+        kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true
+    fi
+}
+
 # 0. Wait for all services
 wait_for_health "$MOCK_GITLAB_URL/health" "mock GitLab" || exit 1
 wait_for_health "http://localhost:9998/health" "mock LLM" || exit 1
@@ -70,7 +166,7 @@ send_webhook '{
     "object_kind": "merge_request",
     "user": {"id": 1, "username": "e2e-test"},
     "project": {"id": 999, "path_with_namespace": "test/e2e-repo",
-                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+                "git_http_url": "'"$INTERNAL_GITLAB_URL"'/repo.git"},
     "object_attributes": {"iid": 1, "title": "E2E test MR", "description": "E2E test",
         "action": "open", "source_branch": "main", "target_branch": "main",
         "last_commit": {"id": "abc123abc123abc123abc123abc123abc123abc1", "message": "test"}, "url": "http://mock/mr/1", "oldrev": null}
@@ -78,7 +174,7 @@ send_webhook '{
 
 poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
-    "Waiting for review comments" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+    "Waiting for review comments" || { dump_agent_logs; exit 1; }
 
 # Verify at least one comment is an actual review (not a failure message)
 echo -n "Checking review is not a failure comment..."
@@ -88,7 +184,7 @@ import sys,json; ds=json.load(sys.stdin)
 has_review = any('position' in str(d) for d in ds)
 has_failure = any('failed' in str(d).lower() and 'position' not in str(d) for d in ds)
 print('yes' if has_review and not has_failure else 'no')")
-[ "$REVIEW_OK" = "yes" ] && echo " ✅" || { echo " ❌ (got failure comment instead of review)"; kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+[ "$REVIEW_OK" = "yes" ] && echo " ✅" || { echo " ❌ (got failure comment instead of review)"; dump_agent_logs; exit 1; }
 
 # === TEST 2: Jira polling → coding → MR creation ===
 echo ""; echo "--- Test 2: Jira Polling Flow ---"
@@ -101,12 +197,12 @@ curl -sf -X POST "$MOCK_GITLAB_URL/mock/reset-repo" > /dev/null
 
 poll_until "$MOCK_JIRA_URL/transitions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
-    "Waiting for Jira transitions" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+    "Waiting for Jira transitions" || { dump_agent_logs; exit 1; }
 
 # Wait for coding task to complete (comment on Jira = task finished)
 poll_until "$MOCK_JIRA_URL/comments" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
-    "Waiting for Jira comment" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+    "Waiting for Jira comment" || { dump_agent_logs; exit 1; }
 
 # Verify comment indicates success (not a failure message)
 echo -n "Checking Jira comment is success..."
@@ -168,7 +264,7 @@ send_webhook '{
     "object_kind": "note",
     "user": {"id": 2, "username": "developer"},
     "project": {"id": 999, "path_with_namespace": "test/e2e-repo",
-                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+                "git_http_url": "'"$INTERNAL_GITLAB_URL"'/repo.git"},
     "object_attributes": {"id": 5001, "note": "@mock-review-bot add error handling to main.py",
                           "noteable_type": "MergeRequest"},
     "merge_request": {"iid": 1, "title": "E2E test MR",
@@ -177,7 +273,7 @@ send_webhook '{
 
 poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
-    "Waiting for agent response" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+    "Waiting for agent response" || { dump_agent_logs; exit 1; }
 
 # Clean up seeded discussions
 curl -sf -X DELETE "$MOCK_GITLAB_URL/mock/discussions" > /dev/null
@@ -206,7 +302,7 @@ curl -sf -X POST "$MOCK_GITLAB_URL/mock/open-mrs" \
 
 poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
-    "Waiting for poller review" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+    "Waiting for poller review" || { dump_agent_logs; exit 1; }
 
 echo -n "Checking poller review is not a failure..."
 POLL_REVIEW_OK=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
@@ -251,7 +347,7 @@ send_webhook '{
     "object_kind": "merge_request",
     "user": {"id": 1, "username": "e2e-test"},
     "project": {"id": 999, "path_with_namespace": "test/e2e-repo",
-                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+                "git_http_url": "'"$INTERNAL_GITLAB_URL"'/repo.git"},
     "object_attributes": {"iid": 99, "title": "Plugin test MR", "description": "Verify plugins",
         "action": "open", "source_branch": "main", "target_branch": "main",
         "last_commit": {"id": "aaa111bbb222ccc333ddd444eee555fff666aaa1", "message": "plugin test"}, "url": "http://mock/mr/99", "oldrev": null}
@@ -260,11 +356,15 @@ send_webhook '{
 # Wait for the task to complete (review posted)
 poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
-    "Waiting for plugin-enabled review" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+    "Waiting for plugin-enabled review" || { dump_agent_logs; exit 1; }
 
-# Check job pod logs for plugin setup evidence
-echo -n "Checking pod logs for plugin installation..."
-PLUGIN_LOG=$(kubectl logs -l app.kubernetes.io/component=job --tail=200 2>/dev/null || echo "")
+# Check logs for plugin setup evidence (agent log in local mode, job pod in k3d)
+echo -n "Checking logs for plugin installation..."
+if [ "$MODE" = "local" ]; then
+    PLUGIN_LOG=$(cat /tmp/e2e-agent.log 2>/dev/null || echo "")
+else
+    PLUGIN_LOG=$(kubectl logs -l app.kubernetes.io/component=job --tail=200 2>/dev/null || echo "")
+fi
 if echo "$PLUGIN_LOG" | grep -q "plugin_installed\|plugin_setup_complete\|e2e-greeter"; then
     echo " ✅ (plugin setup confirmed in logs)"
 elif echo "$PLUGIN_LOG" | grep -q "plugin"; then
@@ -273,44 +373,47 @@ else
     echo " ⚠️ (no plugin log evidence — check COPILOT_PLUGINS config)"
 fi
 
-# === TEST 7: Graceful Shutdown ===
+# === TEST 7: Graceful Shutdown (k3d only) ===
 echo ""; echo "--- Test 7: Graceful Shutdown ---"
 
-echo -n "Deleting controller pod (triggers SIGTERM via k8s)..."
-POD=$(kubectl get pods -l app.kubernetes.io/component=controller -o name | head -1)
-if [ -z "$POD" ]; then
-    echo " ⚠️ skipped (no controller pod found)"
+if [ "$MODE" = "local" ]; then
+    echo " ⏭️  skipped (pod lifecycle test — k3d only)"
 else
-    # kubectl delete sends SIGTERM through the container runtime, which
-    # correctly delivers to PID 1 (unlike bare kill inside the container).
-    kubectl delete "$POD" --grace-period=30 --wait=false 2>/dev/null
-    echo " ✅"
-
-    echo -n "Waiting for pod termination..."
-    for i in $(seq 1 30); do
-        PHASE=$(kubectl get "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || echo "gone")
-        if [ "$PHASE" = "gone" ] || [ "$PHASE" = "Succeeded" ] || [ "$PHASE" = "Failed" ]; then
-            echo " ✅ (phase=$PHASE)"; break
-        fi
-        [ "$i" -eq 30 ] && { echo " ❌ pod still present (phase=$PHASE)"; exit 1; }
-        sleep 2; echo -n "."
-    done
-
-    echo -n "Checking previous pod logs for shutdown..."
-    # Deployment creates a new pod; the old one's logs may be gone.
-    # Check OTEL logs or new pod's previous container logs for evidence.
-    sleep 3
-    NEW_POD=$(kubectl get pods -l app.kubernetes.io/component=controller -o name 2>/dev/null | head -1)
-    if [ -n "$NEW_POD" ] && [ "$NEW_POD" != "$POD" ]; then
-        echo " ✅ (replacement pod $NEW_POD started)"
+    echo -n "Deleting controller pod (triggers SIGTERM via k8s)..."
+    POD=$(kubectl get pods -l app.kubernetes.io/component=controller -o name | head -1)
+    if [ -z "$POD" ]; then
+        echo " ⚠️ skipped (no controller pod found)"
     else
-        echo " ⚠️ (could not verify shutdown logs — pod replaced)"
+        # kubectl delete sends SIGTERM through the container runtime, which
+        # correctly delivers to PID 1 (unlike bare kill inside the container).
+        kubectl delete "$POD" --grace-period=30 --wait=false 2>/dev/null
+        echo " ✅"
+
+        echo -n "Waiting for pod termination..."
+        for i in $(seq 1 30); do
+            PHASE=$(kubectl get "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || echo "gone")
+            if [ "$PHASE" = "gone" ] || [ "$PHASE" = "Succeeded" ] || [ "$PHASE" = "Failed" ]; then
+                echo " ✅ (phase=$PHASE)"; break
+            fi
+            [ "$i" -eq 30 ] && { echo " ❌ pod still present (phase=$PHASE)"; exit 1; }
+            sleep 2; echo -n "."
+        done
+
+        echo -n "Checking previous pod logs for shutdown..."
+        sleep 3
+        NEW_POD=$(kubectl get pods -l app.kubernetes.io/component=controller -o name 2>/dev/null | head -1)
+        if [ -n "$NEW_POD" ] && [ "$NEW_POD" != "$POD" ]; then
+            echo " ✅ (replacement pod $NEW_POD started)"
+        else
+            echo " ⚠️ (could not verify shutdown logs — pod replaced)"
+        fi
     fi
 fi
 
 # === TEST 8: Discussion History Capture (#321) ===
 echo ""; echo "--- Test 8: Discussion History Capture ---"
-# Agent pod was restarted by Test 7 — wait for it to be healthy again
+# In k3d mode, agent was restarted by Test 7 — wait for health again.
+# In local mode, agent is still running.
 wait_for_health "$AGENT_URL/health" "agent (post-restart)" 40 || exit 1
 # Pre-seed a discussion thread so the agent processes non-empty history
 curl -sf -X DELETE "$MOCK_GITLAB_URL/discussions" > /dev/null
@@ -348,7 +451,7 @@ send_webhook '{
     "object_kind": "merge_request",
     "user": {"id": 1, "username": "e2e-test"},
     "project": {"id": 999, "path_with_namespace": "test/e2e-repo",
-                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+                "git_http_url": "'"$INTERNAL_GITLAB_URL"'/repo.git"},
     "object_attributes": {"iid": 321, "title": "Discussion history test MR", "description": "Test with prior feedback",
         "action": "open", "source_branch": "main", "target_branch": "main",
         "last_commit": {"id": "d15c321d15c321d15c321d15c321d15c321d15c3", "message": "test discussions"}, "url": "http://mock/mr/321", "oldrev": null}
@@ -356,7 +459,7 @@ send_webhook '{
 
 poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
-    "Waiting for review with discussion context" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+    "Waiting for review with discussion context" || { dump_agent_logs; exit 1; }
 
 echo -n "Verifying review completed with non-empty discussion history..."
 REVIEW_POSTED=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
@@ -382,7 +485,7 @@ send_webhook '{
     "object_kind": "merge_request",
     "user": {"id": 1, "username": "dev"},
     "project": {"id": 999, "path_with_namespace": "test/repo",
-                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+                "git_http_url": "'"$INTERNAL_GITLAB_URL"'/repo.git"},
     "object_attributes": {
         "iid": 9,
         "title": "Incremental test",
@@ -398,7 +501,7 @@ send_webhook '{
 
 poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; ds=json.load(sys.stdin); print(sum(1 for d in ds if d.get('_type')=='note' and 'mr-review-agent: last_reviewed_sha=' in d.get('body','')))" \
-    "Waiting for first review comments" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+    "Waiting for first review comments" || { dump_agent_logs; exit 1; }
 
 echo "PASS: Summary note contains SHA marker"
 
@@ -429,7 +532,7 @@ send_webhook '{
     "object_kind": "merge_request",
     "user": {"id": 1, "username": "dev"},
     "project": {"id": 999, "path_with_namespace": "test/repo",
-                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+                "git_http_url": "'"$INTERNAL_GITLAB_URL"'/repo.git"},
     "object_attributes": {
         "iid": 9,
         "title": "Incremental test",
@@ -445,7 +548,7 @@ send_webhook '{
 
 poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
-    "Waiting for incremental review comments" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+    "Waiting for incremental review comments" || { dump_agent_logs; exit 1; }
 
 echo "PASS: Incremental review posted comments"
 
@@ -459,7 +562,7 @@ send_webhook '{
     "object_kind": "merge_request",
     "user": {"id": 1, "username": "e2e-test"},
     "project": {"id": 999, "path_with_namespace": "test/e2e-repo",
-                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+                "git_http_url": "'"$INTERNAL_GITLAB_URL"'/repo.git"},
     "object_attributes": {"iid": 610, "title": "Activity section test MR", "description": "Feature 6 E2E",
         "action": "open", "source_branch": "main", "target_branch": "main",
         "last_commit": {"id": "f6a610f6a610f6a610f6a610f6a610f6a610f6a6", "message": "test activity section"}, "url": "http://mock/mr/610", "oldrev": null}
@@ -467,7 +570,7 @@ send_webhook '{
 
 poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
-    "Waiting for review with activity section" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+    "Waiting for review with activity section" || { dump_agent_logs; exit 1; }
 
 echo -n "Verifying summary note contains Review Activity section..."
 ACTIVITY_OK=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
@@ -520,7 +623,7 @@ send_webhook '{
     "object_kind": "merge_request",
     "user": {"id": 1, "username": "e2e-test"},
     "project": {"id": 999, "path_with_namespace": "test/e2e-repo",
-                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+                "git_http_url": "'"$INTERNAL_GITLAB_URL"'/repo.git"},
     "object_attributes": {"iid": 711, "title": "Manual resolution test MR", "description": "Test suppressed feedback",
         "action": "open", "source_branch": "main", "target_branch": "main",
         "last_commit": {"id": "f7a0000f7a0000f7a0000f7a0000f7a0000f7a00", "message": "test manual resolution"}, "url": "http://mock/mr/711", "oldrev": null}
@@ -528,7 +631,7 @@ send_webhook '{
 
 poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
-    "Waiting for review with suppressed feedback" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+    "Waiting for review with suppressed feedback" || { dump_agent_logs; exit 1; }
 
 echo -n "Verifying resolved discussion not re-raised..."
 RERAISE_CHECK=$(curl -sf "$MOCK_GITLAB_URL/discussions" | python3 -c "
@@ -560,7 +663,7 @@ send_webhook '{
     "object_kind": "merge_request",
     "user": {"id": 1, "username": "e2e-test"},
     "project": {"id": 999, "path_with_namespace": "test/e2e-repo",
-                "git_http_url": "http://host.k3d.internal:9999/repo.git"},
+                "git_http_url": "'"$INTERNAL_GITLAB_URL"'/repo.git"},
     "object_attributes": {"iid": 12, "title": "Commit aware MR", "description": "Test commit awareness",
         "action": "open", "source_branch": "main", "target_branch": "main",
         "last_commit": {"id": "ccc333ccc333ccc333ccc333ccc333ccc333ccc3", "message": "test commits"}, "url": "http://mock/mr/12", "oldrev": null}
@@ -568,7 +671,7 @@ send_webhook '{
 
 poll_until "$MOCK_GITLAB_URL/discussions" \
     "import sys,json; d=json.load(sys.stdin); print(len(d) if d else 0)" \
-    "Waiting for review with commit context" || { kubectl logs -l app.kubernetes.io/name=gitlab-copilot-agent --tail=50 2>/dev/null || true; exit 1; }
+    "Waiting for review with commit context" || { dump_agent_logs; exit 1; }
 
 echo "PASS: Review completed with commit awareness"
 

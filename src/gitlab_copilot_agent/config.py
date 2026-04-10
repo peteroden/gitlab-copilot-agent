@@ -141,9 +141,10 @@ class Settings(BaseSettings):
     )
 
     # Dispatch backend (determines queue + result store)
-    dispatch_backend: Literal["azure_storage"] = Field(
+    dispatch_backend: Literal["azure_storage", "local"] = Field(
         default="azure_storage",
-        description="Dispatch backend: 'azure_storage' (Queue + Blob via Claim Check)",
+        description="Dispatch backend: 'azure_storage' (Queue + Blob via Claim Check) "
+        "or 'local' (in-memory, no Azure dependencies)",
     )
     azure_storage_account_url: str | None = Field(
         default=None,
@@ -281,7 +282,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_aca_resources(self) -> "Settings":
-        if self.task_executor == "container_apps":
+        if self.task_executor == "container_apps" and self.dispatch_backend != "local":
             missing = [
                 name
                 for name, val in [
@@ -297,7 +298,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_azure_storage(self) -> "Settings":
-        if self.dispatch_backend == "azure_storage" and not self.azure_storage_connection_string:
+        if self.dispatch_backend != "azure_storage":
+            return self  # local mode — skip Azure validation
+        if not self.azure_storage_connection_string:
             missing = [
                 name
                 for name, val in [
@@ -358,8 +361,9 @@ class TaskRunnerSettings(BaseSettings):
     log_level: str = Field(default="info", description="Log level")
 
     # Azure Storage (for queue-based dispatch)
-    dispatch_backend: Literal["azure_storage"] = Field(
-        default="azure_storage", description="Dispatch backend"
+    dispatch_backend: Literal["azure_storage", "local"] = Field(
+        default="azure_storage",
+        description="Dispatch backend: 'azure_storage' or 'local' (in-memory)",
     )
     azure_storage_account_url: str | None = Field(
         default=None, description="Azure Blob Storage endpoint"
