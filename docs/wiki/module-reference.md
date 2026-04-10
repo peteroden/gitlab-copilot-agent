@@ -10,7 +10,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Purpose**: FastAPI application entrypoint, lifespan management, poller startup.
 
 **Key Functions**:
-- `lifespan(app: FastAPI) -> AsyncIterator[None]`: Initialize telemetry, load settings, build credential/project registries, start pollers, graceful shutdown
+- `lifespan(app: FastAPI) -> AsyncIterator[None]`: Initialize telemetry, load settings, build `AppContext` container, start pollers, graceful shutdown
 - `health() -> dict[str, object]`: Health check endpoint, includes GitLab poller status if enabled
 - `config_reload(body: RenderedMap, request: Request) -> dict`: Hot-reload project registry from new mapping JSON (requires `X-Gitlab-Token` auth)
 - `_cleanup_stale_repos(clone_dir: str | None) -> None`: Remove leftover `mr-review-*` dirs on startup
@@ -19,7 +19,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Globals**:
 - `app: FastAPI`: FastAPI application instance with lifespan and webhook router
 
-**Internal Imports**: `config`, `telemetry`, `gitlab_client`, `gitlab_poller`, `jira_client`, `jira_poller`, `webhook`, `concurrency`, `state`, `task_executor`, `coding_orchestrator`, `git_operations`, `mapping_models`, `credential_registry`, `project_registry`
+**Internal Imports**: `config`, `container`, `telemetry`, `gitlab_client`, `gitlab_poller`, `jira_client`, `jira_poller`, `webhook`, `concurrency`, `state`, `task_executor`, `coding_orchestrator`, `git_operations`, `mapping_models`, `credential_registry`, `project_registry`
 
 **Depended On By**: Deployed as uvicorn entrypoint
 
@@ -31,14 +31,14 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Functions**:
 - `webhook(request: Request, background_tasks: BackgroundTasks, x_gitlab_token: str | None) -> dict[str, str]`: POST endpoint, validates HMAC, dispatches to background handlers
 - `_validate_webhook_token(received: str | None, expected: str) -> None`: HMAC comparison using `hmac.compare_digest`
-- `_process_review(request: Request, payload: MergeRequestWebhookPayload) -> None`: Background task for MR review. Resolves per-project `resolution_behavior` from project registry
+- `_process_review(request: Request, payload: MergeRequestWebhookPayload) -> None`: Background task for MR review. Uses `get_services()` for typed access to settings, executor, credential_registry. Resolves per-project `resolution_behavior` from project registry.
 - `_is_agent_directed(payload: NoteWebhookPayload, agent_identity: AgentIdentity, request: Request) -> bool`: Check if note @mentions the agent
-- `_process_discussion(request: Request, payload: NoteWebhookPayload, agent_identity: AgentIdentity) -> None`: Background task for discussion interactions. Resolves per-project `resolution_behavior` from project registry
+- `_process_discussion(request: Request, payload: NoteWebhookPayload, agent_identity: AgentIdentity) -> None`: Background task for discussion interactions. Uses `get_services()` for typed access. Resolves per-project `resolution_behavior` from project registry.
 
 **Key Constants**:
 - `HANDLED_ACTIONS = frozenset({"open", "update", "reopen"})`: MR actions that trigger review
 
-**Internal Imports**: `models`, `orchestrator`, `discussion_orchestrator`, `discussion_models`, `metrics`, `concurrency`, `project_registry`, `credential_registry`
+**Internal Imports**: `models`, `orchestrator`, `discussion_orchestrator`, `discussion_models`, `metrics`, `container`, `project_registry`
 
 **Depended On By**: `main.py` (includes router)
 
@@ -612,7 +612,7 @@ All use `frozen=True` config.
 ---
 
 ### `mapping_models.py`
-**Purpose**: Pydantic models for YAML source mappings and rendered JSON format.
+**Purpose**: Pydantic models for YAML source mappings and rendered JSON format (v1 config).
 
 **Key Models**:
 - `MappingSource`: YAML source with `defaults` + `bindings` list
@@ -623,14 +623,43 @@ All use `frozen=True` config.
 
 ---
 
+### `config_v2.py`
+**Purpose**: GitLab-centric YAML config models (v2). Replaces Jira-keyed `mapping_models.py` for project configuration.
+
+**Key Models**:
+- `ConfigFile`: Root model with `version: 2`, `gitlab`, `dispatch`, `copilot`, `server`, `prompts`, `defaults`, `projects`, `integrations`
+- `ProjectConfig`: Single GitLab project; all fields except `repo` are optional (fall back to `ConfigDefaults`)
+- `JiraIntegrationConfig`: Jira integration referenced by projects via name
+
+**Key Functions**:
+- `load_config_file(path: Path | None) -> ConfigFile`: Load + validate YAML, audit-log marketplace URLs (S10)
+
+**Depended On By**: `mapping_cli.py`, `project_registry.py`
+
+---
+
+### `container.py`
+**Purpose**: Frozen `AppContext` dataclass replacing `app.state` service locator. Provides typed dependency injection.
+
+**Key Types**:
+- `AppContext`: Frozen dataclass holding `settings`, `executor`, `repo_locks`, `dedup_store`, `review_tracker`, `credential_registry`, `allowed_project_ids`
+
+**Key Functions**:
+- `get_services(request: Request) -> AppContext`: FastAPI `Depends()` accessor
+
+**Depended On By**: `webhook.py`, `main.py`
+
+---
+
 ### `credential_registry.py`
-**Purpose**: Resolve credential aliases to GitLab tokens from environment.
+**Purpose**: Resolve credential aliases to GitLab tokens from environment. TTL-cached identity resolution.
 
 **Key Methods**:
 - `from_env() -> CredentialRegistry`: Reads `GITLAB_TOKEN` + `GITLAB_TOKEN__<ALIAS>` env vars
 - `resolve(credential_ref: str) -> str`: Returns token for alias, raises `KeyError` if unknown
+- `resolve_identity(credential_ref: str, gitlab_url: str) -> AgentIdentity`: TTL-cached identity lookup (default 1hr, `time.monotonic()`)
 
-**Depended On By**: `project_registry.py`, `main.py`
+**Depended On By**: `project_registry.py`, `main.py`, `gitlab_poller.py`
 
 ---
 
@@ -638,8 +667,8 @@ All use `frozen=True` config.
 **Purpose**: Fully resolved project context for runtime use.
 
 **Key Types**:
-- `ResolvedProject`: Frozen dataclass — `jira_project`, `repo`, `gitlab_project_id`, `clone_url`, `target_branch`, `credential_ref`, `token` (masked in repr)
-- `ProjectRegistry`: Registry with `from_rendered_map()` async factory, `get_by_jira()`, `jira_keys()`
+- `ResolvedProject`: Frozen Pydantic model — `jira_project` (optional), `repo`, `gitlab_project_id`, `clone_url`, `target_branch`, `credential_ref`, `token` (masked in repr)
+- `ProjectRegistry`: Registry with `from_rendered_map()` (v1) and `from_config()` (v2) async factories, `get_by_jira()`, `get_by_project_id()`, `jira_keys()`
 
 **Depended On By**: `jira_poller.py`, `coding_orchestrator.py`, `main.py`
 

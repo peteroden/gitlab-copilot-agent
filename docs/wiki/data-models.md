@@ -4,6 +4,78 @@ All Pydantic models in the codebase, grouped by module and purpose.
 
 ---
 
+## Config v2 Models (`config_v2.py`)
+
+GitLab-centric YAML configuration. All models use `strict=True` validation.
+
+### `ConfigFile`
+**Purpose**: Root config model (version 2). Primary non-secret config source.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `version` | `Literal[2]` | — | Schema version, must be 2 |
+| `gitlab` | `GitLabConfig` | — | GitLab instance URL |
+| `dispatch` | `DispatchConfig` | `local` backend | Task dispatch backend |
+| `copilot` | `CopilotConfig` | `gpt-4` | Global Copilot defaults |
+| `server` | `ServerConfig` | defaults | Server operational config |
+| `prompts` | `PromptsConfig` | all `None` | Prompt overrides |
+| `defaults` | `ConfigDefaults` | defaults | Default values for projects |
+| `projects` | `list[ProjectConfig]` | `[]` | GitLab project definitions |
+| `integrations` | `list[IntegrationConfig]` | `[]` | Named integrations |
+
+**Validators**: `_validate_integration_refs` (all project integration refs must exist), `_validate_unique_repos` (no duplicate repos)
+
+**Methods**: `resolve_project(project)` — apply defaults to a project; `get_integration(name)` — lookup by name
+
+---
+
+### `ProjectConfig`
+**Purpose**: A single GitLab project. All fields except `repo` are optional and fall back to `ConfigDefaults`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `repo` | `str` | — | GitLab `path_with_namespace` |
+| `credential_ref` | `str \| None` | `None` | Credential alias |
+| `target_branch` | `str \| None` | `None` | MR target branch |
+| `resolution_behavior` | `ResolutionBehavior \| None` | `None` | `auto-resolve`, `suggest`, or `off` |
+| `webhook` | `bool \| None` | `None` | Webhook trigger enabled |
+| `poll` | `PollConfig \| None` | `None` | Polling configuration |
+| `copilot` | `CopilotConfig \| None` | `None` | Per-project Copilot overrides |
+| `integrations` | `list[str]` | `[]` | Integration names |
+
+---
+
+### `JiraIntegrationConfig`
+**Purpose**: Jira integration referenced by projects.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `str` | — | Unique name referenced by projects |
+| `type` | `Literal["jira"]` | — | Integration discriminator |
+| `project_key` | `str` | — | Jira project key |
+| `trigger_status` | `str` | `"AI Ready"` | Status that triggers agent |
+| `in_progress_status` | `str` | `"In Progress"` | Status after pickup |
+| `in_review_status` | `str` | `"In Review"` | Status after MR creation |
+
+---
+
+### `AppContext` (`container.py`)
+**Purpose**: Frozen dataclass holding all immutable service references. Created in lifespan, accessed via `get_services(request)`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `settings` | `Settings` | Environment-based config |
+| `executor` | `TaskExecutor` | Task execution backend |
+| `repo_locks` | `DistributedLock` | Concurrency locks |
+| `dedup_store` | `DeduplicationStore` | Deduplication tracking |
+| `review_tracker` | `ReviewedMRTracker` | In-memory SHA dedup |
+| `credential_registry` | `CredentialRegistry` | Token + identity resolution (TTL-cached) |
+| `allowed_project_ids` | `frozenset[int] \| None` | Project allowlist |
+
+**Note**: Mutable state (`project_registry`, pollers) stays on `app.state` directly for hot-reload support.
+
+---
+
 ## Webhook Models (`models.py`)
 
 All models use `strict=True` validation.
