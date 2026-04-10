@@ -82,10 +82,28 @@ class GitLabPoller:
         self._task = asyncio.create_task(self._poll_loop())
 
     async def stop(self) -> None:
+        """Cancel the polling loop."""
         if self._task:
             self._task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._task
+
+    def update_project_registry(self, registry: ProjectRegistry | None) -> None:
+        """Swap the project registry and clear cached per-project clients.
+
+        Called by ``/config/reload`` to hot-swap the registry without
+        restarting the poller.
+        """
+        self._project_registry = registry
+        self._project_clients.clear()
+
+    def status(self) -> dict[str, object]:
+        """Return health-check status for the poller."""
+        return {
+            "running": self._task is not None and not self._task.done(),
+            "failures": self._failures,
+            "watermark": self._watermark,
+        }
 
     async def _poll_loop(self) -> None:
         while True:

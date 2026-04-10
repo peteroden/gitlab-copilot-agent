@@ -58,7 +58,7 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
     executor = svc.executor
     review_tracker = svc.review_tracker
     credential_registry = svc.credential_registry
-    registry: ProjectRegistry | None = getattr(request.app.state, "project_registry", None)
+    registry: ProjectRegistry | None = request.app.state.project_registry
     mr = payload.object_attributes
     project_id = payload.project.id
     head_sha = mr.last_commit.id
@@ -116,7 +116,7 @@ async def _is_agent_directed(
     if discussion_id and payload.merge_request:
         svc = get_services(request)
         settings = svc.settings
-        registry: ProjectRegistry | None = getattr(request.app.state, "project_registry", None)
+        registry: ProjectRegistry | None = request.app.state.project_registry
         token = _resolve_project_token(payload.project.id, registry, settings.gitlab_token)
         try:
             gl_client = GitLabClient(settings.gitlab_url, token)
@@ -146,7 +146,7 @@ async def _process_discussion(
     settings = svc.settings
     executor = svc.executor
     repo_locks = svc.repo_locks
-    registry: ProjectRegistry | None = getattr(request.app.state, "project_registry", None)
+    registry: ProjectRegistry | None = request.app.state.project_registry
     project_token = _resolve_project_token(payload.project.id, registry, settings.gitlab_token)
 
     # Resolve resolution behavior from project registry or global settings
@@ -242,7 +242,7 @@ async def webhook(
         credential_registry = svc.credential_registry
 
         # Resolve the credential_ref for this project (not always "default")
-        registry: ProjectRegistry | None = getattr(request.app.state, "project_registry", None)
+        registry: ProjectRegistry | None = request.app.state.project_registry
         credential_ref = "default"
         if registry is not None:
             resolved = registry.get_by_project_id(note_payload.project.id)

@@ -176,6 +176,8 @@ async def client(env_vars: None) -> AsyncIterator[AsyncClient]:
     ctx = make_app_context()
     app.state.ctx = ctx
     app.state.project_registry = None
+    app.state.jira_poller = None
+    app.state.gl_poller = None
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

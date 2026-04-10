@@ -213,10 +213,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             jira_client, settings.jira, project_registry, handler, allowed_project_ids
         )
         await poller.start()
-        app.state.jira_poller = poller
         await log.ainfo("jira_poller_started", interval=settings.jira.poll_interval)
-
-    app.state.project_registry = project_registry
 
     if settings.gitlab_poll and allowed_project_ids:
         gl_client_poll = GitLabClient(settings.gitlab_url, settings.gitlab_token)
@@ -232,12 +229,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             poll_interval=settings.gitlab_poll_interval,
         )
         await gl_poller.start()
-        app.state.gl_poller = gl_poller
         await log.ainfo(
             "gitlab_poller_started",
             interval=settings.gitlab_poll_interval,
             projects=sorted(allowed_project_ids),
         )
+
+    # Always set mutable state — even None — so direct attribute access
+    # works without getattr() fallbacks in webhook.py and config_reload.
+    app.state.project_registry = project_registry
+    app.state.jira_poller = poller
+    app.state.gl_poller = gl_poller
 
     await log.ainfo("service started", gitlab_url=settings.gitlab_url)
     yield
@@ -282,14 +284,11 @@ FastAPIInstrumentor.instrument_app(app)
 
 @app.get("/health")
 async def health() -> dict[str, object]:
+    """Health check endpoint."""
     result: dict[str, object] = {"status": "ok"}
-    gl_poller = getattr(app.state, "gl_poller", None)
+    gl_poller: GitLabPoller | None = app.state.gl_poller
     if gl_poller is not None:
-        result["gitlab_poller"] = {
-            "running": gl_poller._task is not None and not gl_poller._task.done(),
-            "failures": gl_poller._failures,
-            "watermark": gl_poller._watermark,
-        }
+        result["gitlab_poller"] = gl_poller.status()
     return result
 
 
@@ -311,7 +310,7 @@ async def config_reload(
     if received is None or not hmac.compare_digest(received, secret):
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    poller: JiraPoller | None = getattr(app.state, "jira_poller", None)
+    poller: JiraPoller | None = app.state.jira_poller
     if poller is None:
         return {"status": "error", "detail": "Jira poller not active"}
     creds = CredentialRegistry.from_env()
@@ -322,10 +321,9 @@ async def config_reload(
         return {"status": "error", "detail": "Invalid configuration — check server logs"}
     await poller.reload_registry(registry)
     app.state.project_registry = registry
-    gl_poller: GitLabPoller | None = getattr(app.state, "gl_poller", None)
+    gl_poller: GitLabPoller | None = app.state.gl_poller
     if gl_poller is not None:
-        gl_poller._project_registry = registry  # pyright: ignore[reportPrivateUsage]
-        gl_poller._project_clients.clear()  # pyright: ignore[reportPrivateUsage]
+        gl_poller.update_project_registry(registry)
     return {
         "status": "ok",
         "jira_keys": sorted(registry.jira_keys()),

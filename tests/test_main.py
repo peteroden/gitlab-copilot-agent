@@ -308,7 +308,7 @@ async def test_lifespan_no_poller_when_poll_disabled(env_vars: None) -> None:
     """When GITLAB_POLL is not set, no poller is created."""
     test_app = FastAPI()
     async with lifespan(test_app):
-        assert not hasattr(test_app.state, "gl_poller")
+        assert test_app.state.gl_poller is None
 
 
 def test_config_poll_requires_projects(
@@ -348,13 +348,12 @@ async def test_health_with_poller(client: AsyncClient) -> None:
 
     from gitlab_copilot_agent.main import app
 
-    mock_task = MagicMock()
-    mock_task.done.return_value = False
-
     mock_poller = MagicMock()
-    mock_poller._task = mock_task
-    mock_poller._failures = 0
-    mock_poller._watermark = "2026-01-01T00:00:00Z"
+    mock_poller.status.return_value = {
+        "running": True,
+        "failures": 0,
+        "watermark": "2026-01-01T00:00:00Z",
+    }
     app.state.gl_poller = mock_poller
 
     resp = await client.get("/health")
@@ -364,7 +363,7 @@ async def test_health_with_poller(client: AsyncClient) -> None:
     assert data["gitlab_poller"]["failures"] == 0
     assert data["gitlab_poller"]["watermark"] == "2026-01-01T00:00:00Z"
 
-    del app.state.gl_poller
+    app.state.gl_poller = None
 
 
 @pytest.mark.asyncio
