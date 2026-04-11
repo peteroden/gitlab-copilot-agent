@@ -328,7 +328,7 @@ class DiscussionPipeline:
 
     # -- error handling ----------------------------------------------------
 
-    async def handle_error(self, pipeline_context: DiscussionContext, exc: BaseException) -> None:
+    async def handle_error(self, pipeline_context: DiscussionContext, exc: Exception) -> None:
         """Post failure comment to MR."""
         event = self._event
         mr_iid = event.mr_iid

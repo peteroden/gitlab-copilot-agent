@@ -16,6 +16,7 @@ import structlog
 
 from gitlab_copilot_agent.coding_engine import run_coding_task, strip_json_block
 from gitlab_copilot_agent.coding_workflow import apply_coding_result
+from gitlab_copilot_agent.error_messages import user_error_message
 from gitlab_copilot_agent.git_operations import (
     TransientCloneError,
     git_clone,
@@ -227,7 +228,7 @@ class CodingPipeline:
                     issue_key,
                     f"⚠️ Git clone failed after {exc.attempts} attempts "
                     f"due to a transient error.\n\n"
-                    f"**Error:** {exc}\n\n"
+                    f"**Error:** {user_error_message(str(exc))}\n\n"
                     f"This issue has been left in '{self._mapping.in_progress_status}'. "
                     f"The agent will retry on the next poll cycle.",
                 )
@@ -239,7 +240,7 @@ class CodingPipeline:
             try:
                 await self._jira.add_comment(
                     issue_key,
-                    f"⚠️ Automated implementation failed.\n\n**Error:** {exc}",
+                    f"⚠️ Automated implementation failed.\n\n{user_error_message(str(exc))}",
                 )
             except Exception:
                 await self._log.aexception("failure_comment_post_failed")
