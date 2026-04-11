@@ -48,11 +48,11 @@ _TEST_MAPPING = ResolvedProject(
 )
 
 
-@patch("gitlab_copilot_agent.coding_orchestrator.run_coding_task")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_push")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_commit")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_unique_branch")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
+@patch("gitlab_copilot_agent.coding_pipeline.run_coding_task")
+@patch("gitlab_copilot_agent.coding_pipeline.git_push")
+@patch("gitlab_copilot_agent.coding_pipeline.git_commit")
+@patch("gitlab_copilot_agent.coding_pipeline.git_unique_branch")
+@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
 async def test_handle_full_pipeline(
     mock_clone: AsyncMock,
     mock_branch: AsyncMock,
@@ -79,11 +79,11 @@ async def test_handle_full_pipeline(
     mock_jira.add_comment.assert_awaited_once()
 
 
-@patch("gitlab_copilot_agent.coding_orchestrator.run_coding_task")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_push")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_commit")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_unique_branch")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
+@patch("gitlab_copilot_agent.coding_pipeline.run_coding_task")
+@patch("gitlab_copilot_agent.coding_pipeline.git_push")
+@patch("gitlab_copilot_agent.coding_pipeline.git_commit")
+@patch("gitlab_copilot_agent.coding_pipeline.git_unique_branch")
+@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
 async def test_in_review_transition_failure_is_non_blocking(
     mock_clone: AsyncMock,
     mock_branch: AsyncMock,
@@ -110,11 +110,11 @@ async def test_in_review_transition_failure_is_non_blocking(
     mock_jira.add_comment.assert_awaited_once()
 
 
-@patch("gitlab_copilot_agent.coding_orchestrator.run_coding_task")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_push")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_commit")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_unique_branch")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
+@patch("gitlab_copilot_agent.coding_pipeline.run_coding_task")
+@patch("gitlab_copilot_agent.coding_pipeline.git_push")
+@patch("gitlab_copilot_agent.coding_pipeline.git_commit")
+@patch("gitlab_copilot_agent.coding_pipeline.git_unique_branch")
+@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
 async def test_custom_in_review_status_used(
     mock_clone: AsyncMock,
     mock_branch: AsyncMock,
@@ -146,7 +146,7 @@ async def test_custom_in_review_status_used(
     mock_jira.transition_issue.assert_any_await("PROJ-42", "QA Review")
 
 
-@patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
+@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
 async def test_coding_failure_posts_comment_to_jira(
     mock_clone: AsyncMock,
 ) -> None:
@@ -164,7 +164,7 @@ async def test_coding_failure_posts_comment_to_jira(
     assert "Automated implementation failed" in call_args[0][1]
 
 
-@patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
+@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
 async def test_coding_failure_comment_posting_failure_is_logged(
     mock_clone: AsyncMock,
 ) -> None:
@@ -180,9 +180,9 @@ async def test_coding_failure_comment_posting_failure_is_logged(
     mock_jira.add_comment.assert_awaited_once()
 
 
-@patch("gitlab_copilot_agent.coding_orchestrator.run_coding_task")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_unique_branch")
-@patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
+@patch("gitlab_copilot_agent.coding_pipeline.run_coding_task")
+@patch("gitlab_copilot_agent.coding_pipeline.git_unique_branch")
+@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
 async def test_task_execution_failure_posts_error_details(
     mock_clone: AsyncMock,
     mock_branch: AsyncMock,
@@ -204,7 +204,7 @@ async def test_task_execution_failure_posts_error_details(
     assert "missing files_changed" in comment
 
 
-@patch("gitlab_copilot_agent.coding_orchestrator.git_clone")
+@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
 async def test_transient_clone_failure_posts_detailed_comment(
     mock_clone: AsyncMock,
 ) -> None:
