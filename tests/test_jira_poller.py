@@ -5,7 +5,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from gitlab_copilot_agent.concurrency import MemoryDedup
 from gitlab_copilot_agent.config import JiraSettings
+from gitlab_copilot_agent.dedup import DeduplicationService
 from gitlab_copilot_agent.jira_models import JiraIssue, JiraIssueFields, JiraStatus
 from gitlab_copilot_agent.jira_poller import JiraPoller
 from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
@@ -122,7 +124,8 @@ async def test_poll_once_skips_processed_issues(
     mock_jira_client.search_issues.return_value = [issue]
 
     settings = make_jira_settings()
-    poller = JiraPoller(mock_jira_client, settings, project_map, mock_handler)
+    dedup = DeduplicationService(MemoryDedup())
+    poller = JiraPoller(mock_jira_client, settings, project_map, mock_handler, dedup=dedup)
 
     # First poll — issue should be processed
     await poller._poll_once()

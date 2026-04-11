@@ -6,12 +6,13 @@ import asyncio
 import shutil
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import structlog
 
 from gitlab_copilot_agent.coding_engine import run_coding_task, strip_json_block
 from gitlab_copilot_agent.coding_workflow import apply_coding_result
-from gitlab_copilot_agent.concurrency import DistributedLock, MemoryLock, ProcessedIssueTracker
+from gitlab_copilot_agent.concurrency import DistributedLock, MemoryLock
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.git_operations import (
     TransientCloneError,
@@ -28,6 +29,9 @@ from gitlab_copilot_agent.project_registry import ResolvedProject
 from gitlab_copilot_agent.task_executor import TaskExecutionError, TaskExecutor
 from gitlab_copilot_agent.telemetry import get_tracer
 
+if TYPE_CHECKING:
+    from gitlab_copilot_agent.dedup import DeduplicationService
+
 log = structlog.get_logger()
 _tracer = get_tracer(__name__)
 
@@ -40,14 +44,14 @@ class CodingOrchestrator:
         jira: JiraClient,
         executor: TaskExecutor,
         repo_locks: DistributedLock | None = None,
-        tracker: ProcessedIssueTracker | None = None,
+        dedup: DeduplicationService | None = None,
     ) -> None:
         self._settings = settings
         self._gitlab = gitlab
         self._jira = jira
         self._executor = executor
         self._repo_locks = repo_locks or MemoryLock()
-        self._tracker = tracker or ProcessedIssueTracker()
+        self._dedup = dedup
 
     async def _transition_to_in_review(
         self,
@@ -65,7 +69,7 @@ class CodingOrchestrator:
             )
 
     async def handle(self, issue: JiraIssue, project_mapping: ResolvedProject) -> None:
-        if self._tracker.is_processed(issue.key):
+        if self._dedup is not None and await self._dedup.is_issue_seen(issue.key):
             return
 
         start = time.monotonic()
@@ -145,7 +149,8 @@ class CodingOrchestrator:
                     await self._jira.add_comment(issue.key, f"MR created: {mr_url}")
                     await self._transition_to_in_review(issue.key, project_mapping, bound_log)
                     await bound_log.ainfo("coding_task_complete", mr_iid=mr_iid)
-                    self._tracker.mark(issue.key)
+                    if self._dedup is not None:
+                        await self._dedup.mark_issue(issue.key)
                     outcome = "success"
                 except TransientCloneError as exc:
                     await bound_log.aexception("coding_task_transient_failure")

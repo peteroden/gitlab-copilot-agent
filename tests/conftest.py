@@ -110,16 +110,16 @@ def make_settings(**overrides: Any) -> Settings:
 
 def make_app_context(**overrides: Any) -> AppContext:
     """Create an AppContext with test defaults. Override any field."""
-    from gitlab_copilot_agent.concurrency import MemoryDedup, RepoLockManager, ReviewedMRTracker
+    from gitlab_copilot_agent.concurrency import MemoryDedup, RepoLockManager
     from gitlab_copilot_agent.credential_registry import CredentialRegistry
+    from gitlab_copilot_agent.dedup import DeduplicationService
 
     settings = overrides.pop("settings", None) or make_settings()
     defaults: dict[str, Any] = {
         "settings": settings,
         "executor": LocalTaskExecutor(),
         "repo_locks": RepoLockManager(),
-        "dedup_store": MemoryDedup(),
-        "review_tracker": ReviewedMRTracker(),
+        "dedup": DeduplicationService(MemoryDedup()),
         "credential_registry": CredentialRegistry(default_token=GITLAB_TOKEN),
     }
     return AppContext(**(defaults | overrides))
