@@ -34,6 +34,13 @@ AGENT_USERNAME = "copilot-bot"
 NOTE_AUTHOR_USER_ID = 1
 
 
+@pytest.fixture
+def mock_handle_review() -> AsyncMock:
+    """Mock handle_review to prevent background tasks from hitting the network."""
+    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock) as mock:
+        yield mock
+
+
 @pytest.mark.parametrize("token", [None, "wrong-token"])
 async def test_webhook_rejects_bad_token(client: AsyncClient, token: str | None) -> None:
     headers = {"X-Gitlab-Token": token} if token else {}
@@ -71,11 +78,13 @@ async def test_webhook_ignores_unhandled_action(client: AsyncClient) -> None:
     [("open", {}), ("update", {"oldrev": "prev_sha"})],
 )
 async def test_webhook_queues_handled_actions(
-    client: AsyncClient, action: str, extra: dict[str, str]
+    client: AsyncClient,
+    action: str,
+    extra: dict[str, str],
+    mock_handle_review: AsyncMock,
 ) -> None:
     payload = make_mr_payload(action=action, **extra)
-    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
-        resp = await client.post("/webhook", json=payload, headers=HEADERS)
+    resp = await client.post("/webhook", json=payload, headers=HEADERS)
     assert resp.status_code == 200
     assert resp.json() == {"status": "queued"}
 
@@ -148,41 +157,41 @@ async def test_webhook_skips_duplicate_head_sha(client: AsyncClient) -> None:
     assert resp.json() == {"status": "skipped", "reason": "already reviewed"}
 
 
-async def test_webhook_queues_new_head_sha(client: AsyncClient) -> None:
+async def test_webhook_queues_new_head_sha(
+    client: AsyncClient, mock_handle_review: AsyncMock
+) -> None:
     """New SHA on same MR is NOT skipped."""
     await app.state.app_context.dedup.mark_review(PROJECT_ID, MR_IID, "old_sha")
 
     payload = make_mr_payload(last_commit={"id": "new_sha", "message": "new commit"})
-    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
-        resp = await client.post("/webhook", json=payload, headers=HEADERS)
+    resp = await client.post("/webhook", json=payload, headers=HEADERS)
     assert resp.json() == {"status": "queued"}
 
 
-async def test_webhook_marks_sha_after_successful_review(client: AsyncClient) -> None:
+async def test_webhook_marks_sha_after_successful_review(
+    client: AsyncClient, mock_handle_review: AsyncMock
+) -> None:
     """SHA is marked as reviewed only after handle_review succeeds."""
     dedup = app.state.app_context.dedup
     assert not await dedup.is_review_seen(PROJECT_ID, MR_IID, "abc123")
 
-    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
-        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
-        assert resp.json() == {"status": "queued"}
-        await asyncio.sleep(0.1)  # let background task complete
+    resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+    assert resp.json() == {"status": "queued"}
+    await asyncio.sleep(0.1)
 
     assert await dedup.is_review_seen(PROJECT_ID, MR_IID, "abc123")
 
 
-async def test_webhook_does_not_mark_sha_on_review_failure(client: AsyncClient) -> None:
+async def test_webhook_does_not_mark_sha_on_review_failure(
+    client: AsyncClient, mock_handle_review: AsyncMock
+) -> None:
     """SHA is NOT marked if handle_review raises."""
     dedup = app.state.app_context.dedup
+    mock_handle_review.side_effect = RuntimeError("boom")
 
-    with patch(
-        "gitlab_copilot_agent.webhook.handle_review",
-        new_callable=AsyncMock,
-        side_effect=RuntimeError("boom"),
-    ):
-        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
-        assert resp.json() == {"status": "queued"}
-        await asyncio.sleep(0.1)
+    resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+    assert resp.json() == {"status": "queued"}
+    await asyncio.sleep(0.1)
 
     assert not await dedup.is_review_seen(PROJECT_ID, MR_IID, "abc123")
 
@@ -195,32 +204,35 @@ async def test_webhook_ignores_title_only_update(client: AsyncClient) -> None:
     assert resp.json() == {"status": "ignored", "reason": "no new commits"}
 
 
-async def test_webhook_queues_update_with_new_commits(client: AsyncClient) -> None:
+async def test_webhook_queues_update_with_new_commits(
+    client: AsyncClient, mock_handle_review: AsyncMock
+) -> None:
     """Update events WITH oldrev (new commits pushed) are queued."""
     payload = make_mr_payload(action="update", oldrev="previous_sha_value")
-    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
-        resp = await client.post("/webhook", json=payload, headers=HEADERS)
+    resp = await client.post("/webhook", json=payload, headers=HEADERS)
     assert resp.json() == {"status": "queued"}
 
 
 # -- Allowlist tests --
 
 
-async def test_webhook_accepts_when_allowlist_is_none(client: AsyncClient) -> None:
+async def test_webhook_accepts_when_allowlist_is_none(
+    client: AsyncClient, mock_handle_review: AsyncMock
+) -> None:
     """Backward compat: no allowlist configured means all projects pass."""
     assert app.state.app_context.allowed_project_ids is None
-    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
-        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+    resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
     assert resp.json()["status"] == "queued"
 
 
-async def test_webhook_accepts_when_project_in_allowlist(client: AsyncClient) -> None:
+async def test_webhook_accepts_when_project_in_allowlist(
+    client: AsyncClient, mock_handle_review: AsyncMock
+) -> None:
     """Events from allowed projects are processed normally."""
     app.state.app_context = dataclasses.replace(
         app.state.app_context, allowed_project_ids=frozenset({PROJECT_ID})
     )
-    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
-        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+    resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
     assert resp.json()["status"] == "queued"
 
 
@@ -252,35 +264,35 @@ def _make_project_registry(project_id: int = PROJECT_ID) -> ProjectRegistry:
     )
 
 
-async def test_webhook_review_uses_per_project_token(client: AsyncClient) -> None:
+async def test_webhook_review_uses_per_project_token(
+    client: AsyncClient, mock_handle_review: AsyncMock
+) -> None:
     """MR review resolves per-project token from registry."""
     app.state.project_registry = _make_project_registry()
-    mock_handle = AsyncMock()
     try:
-        with patch("gitlab_copilot_agent.webhook.handle_review", mock_handle):
-            resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
-            assert resp.json() == {"status": "queued"}
-            await asyncio.sleep(0.1)
+        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+        assert resp.json() == {"status": "queued"}
+        await asyncio.sleep(0.1)
 
-        mock_handle.assert_awaited_once()
-        event = mock_handle.call_args[0][1]
+        mock_handle_review.assert_awaited_once()
+        event = mock_handle_review.call_args[0][1]
         assert event.token == PER_PROJECT_TOKEN
     finally:
         app.state.project_registry = None
 
 
-async def test_webhook_review_falls_back_to_global_token(client: AsyncClient) -> None:
+async def test_webhook_review_falls_back_to_global_token(
+    client: AsyncClient, mock_handle_review: AsyncMock
+) -> None:
     """MR review falls back to global token when project not in registry."""
     app.state.project_registry = _make_project_registry(project_id=9999)
-    mock_handle = AsyncMock()
     try:
-        with patch("gitlab_copilot_agent.webhook.handle_review", mock_handle):
-            resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
-            assert resp.json() == {"status": "queued"}
-            await asyncio.sleep(0.1)
+        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+        assert resp.json() == {"status": "queued"}
+        await asyncio.sleep(0.1)
 
-        mock_handle.assert_awaited_once()
-        event = mock_handle.call_args[0][1]
+        mock_handle_review.assert_awaited_once()
+        event = mock_handle_review.call_args[0][1]
         assert event.token == GITLAB_TOKEN
     finally:
         app.state.project_registry = None
@@ -306,34 +318,34 @@ async def test_webhook_discussion_uses_per_project_token(client: AsyncClient) ->
         app.state.project_registry = None
 
 
-async def test_webhook_review_works_without_registry(client: AsyncClient) -> None:
+async def test_webhook_review_works_without_registry(
+    client: AsyncClient, mock_handle_review: AsyncMock
+) -> None:
     """MR review works when no project registry is configured."""
     assert app.state.project_registry is None
-    mock_handle = AsyncMock()
-    with patch("gitlab_copilot_agent.webhook.handle_review", mock_handle):
-        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
-        assert resp.json() == {"status": "queued"}
-        await asyncio.sleep(0.1)
+    resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+    assert resp.json() == {"status": "queued"}
+    await asyncio.sleep(0.1)
 
-    mock_handle.assert_awaited_once()
-    event = mock_handle.call_args[0][1]
+    mock_handle_review.assert_awaited_once()
+    event = mock_handle_review.call_args[0][1]
     assert event.token == GITLAB_TOKEN
 
 
-async def test_webhook_review_passes_credential_registry(client: AsyncClient) -> None:
+async def test_webhook_review_passes_credential_registry(
+    client: AsyncClient, mock_handle_review: AsyncMock
+) -> None:
     """MR review forwards credential_registry from app context."""
     mock_registry = MagicMock()
     app.state.app_context = dataclasses.replace(
         app.state.app_context, credential_registry=mock_registry
     )
-    mock_handle = AsyncMock()
-    with patch("gitlab_copilot_agent.webhook.handle_review", mock_handle):
-        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
-        assert resp.json() == {"status": "queued"}
-        await asyncio.sleep(0.1)
+    resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+    assert resp.json() == {"status": "queued"}
+    await asyncio.sleep(0.1)
 
-    mock_handle.assert_awaited_once()
-    _, kwargs = mock_handle.call_args
+    mock_handle_review.assert_awaited_once()
+    _, kwargs = mock_handle_review.call_args
     assert kwargs["credential_registry"] is mock_registry
 
 
@@ -528,23 +540,20 @@ async def test_is_agent_directed_thread_participation(
 # -- Reopen event tests --
 
 
-async def test_reopen_triggers_review(client: AsyncClient) -> None:
+async def test_reopen_triggers_review(client: AsyncClient, mock_handle_review: AsyncMock) -> None:
     """Webhook with action='reopen' is queued for review."""
     payload = make_mr_payload(action="reopen")
-    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
-        resp = await client.post("/webhook", json=payload, headers=HEADERS)
+    resp = await client.post("/webhook", json=payload, headers=HEADERS)
 
     assert resp.status_code == 200
     assert resp.json() == {"status": "queued"}
 
 
-async def test_reopen_no_oldrev_check(client: AsyncClient) -> None:
+async def test_reopen_no_oldrev_check(client: AsyncClient, mock_handle_review: AsyncMock) -> None:
     """Reopen with oldrev=None is still queued (not ignored like update)."""
     payload = make_mr_payload(action="reopen")
-    # Ensure no oldrev key in the payload
     payload["object_attributes"].pop("oldrev", None)
-    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
-        resp = await client.post("/webhook", json=payload, headers=HEADERS)
+    resp = await client.post("/webhook", json=payload, headers=HEADERS)
 
     assert resp.status_code == 200
     assert resp.json() == {"status": "queued"}
