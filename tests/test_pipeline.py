@@ -109,3 +109,28 @@ class TestRunPipeline:
 
         pipeline.handle_error.assert_not_awaited()
         pipeline.cleanup.assert_awaited_once()
+
+    async def test_suppress_exception_returns_normally(self) -> None:
+        """When handle_error sets suppress_exception, runner returns without raising."""
+        pipeline = _StubPipeline()
+        pipeline.prepare.side_effect = RuntimeError("transient")
+
+        async def suppress(pc: BasePipelineContext, exc: Exception) -> None:
+            pc.outcome = "transient_failure"
+            pc.suppress_exception = True
+
+        pipeline.handle_error.side_effect = suppress
+        pipeline_context = BasePipelineContext()
+
+        result = await run_pipeline(pipeline, pipeline_context)  # type: ignore[arg-type]
+        assert result.outcome == "transient_failure"
+
+    async def test_suppress_exception_does_not_suppress_cancelled_error(self) -> None:
+        """suppress_exception=True does not swallow CancelledError."""
+        pipeline = _StubPipeline()
+        pipeline.execute.side_effect = asyncio.CancelledError()
+        pipeline_context = BasePipelineContext()
+        pipeline_context.suppress_exception = True
+
+        with pytest.raises(asyncio.CancelledError):
+            await run_pipeline(pipeline, pipeline_context)  # type: ignore[arg-type]

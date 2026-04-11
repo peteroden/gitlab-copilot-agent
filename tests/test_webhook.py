@@ -74,7 +74,8 @@ async def test_webhook_queues_handled_actions(
     client: AsyncClient, action: str, extra: dict[str, str]
 ) -> None:
     payload = make_mr_payload(action=action, **extra)
-    resp = await client.post("/webhook", json=payload, headers=HEADERS)
+    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
+        resp = await client.post("/webhook", json=payload, headers=HEADERS)
     assert resp.status_code == 200
     assert resp.json() == {"status": "queued"}
 
@@ -152,7 +153,8 @@ async def test_webhook_queues_new_head_sha(client: AsyncClient) -> None:
     await app.state.app_context.dedup.mark_review(PROJECT_ID, MR_IID, "old_sha")
 
     payload = make_mr_payload(last_commit={"id": "new_sha", "message": "new commit"})
-    resp = await client.post("/webhook", json=payload, headers=HEADERS)
+    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
+        resp = await client.post("/webhook", json=payload, headers=HEADERS)
     assert resp.json() == {"status": "queued"}
 
 
@@ -196,7 +198,8 @@ async def test_webhook_ignores_title_only_update(client: AsyncClient) -> None:
 async def test_webhook_queues_update_with_new_commits(client: AsyncClient) -> None:
     """Update events WITH oldrev (new commits pushed) are queued."""
     payload = make_mr_payload(action="update", oldrev="previous_sha_value")
-    resp = await client.post("/webhook", json=payload, headers=HEADERS)
+    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
+        resp = await client.post("/webhook", json=payload, headers=HEADERS)
     assert resp.json() == {"status": "queued"}
 
 
@@ -206,7 +209,8 @@ async def test_webhook_queues_update_with_new_commits(client: AsyncClient) -> No
 async def test_webhook_accepts_when_allowlist_is_none(client: AsyncClient) -> None:
     """Backward compat: no allowlist configured means all projects pass."""
     assert app.state.app_context.allowed_project_ids is None
-    resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
+        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
     assert resp.json()["status"] == "queued"
 
 
@@ -215,7 +219,8 @@ async def test_webhook_accepts_when_project_in_allowlist(client: AsyncClient) ->
     app.state.app_context = dataclasses.replace(
         app.state.app_context, allowed_project_ids=frozenset({PROJECT_ID})
     )
-    resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
+        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
     assert resp.json()["status"] == "queued"
 
 
@@ -526,7 +531,8 @@ async def test_is_agent_directed_thread_participation(
 async def test_reopen_triggers_review(client: AsyncClient) -> None:
     """Webhook with action='reopen' is queued for review."""
     payload = make_mr_payload(action="reopen")
-    resp = await client.post("/webhook", json=payload, headers=HEADERS)
+    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
+        resp = await client.post("/webhook", json=payload, headers=HEADERS)
 
     assert resp.status_code == 200
     assert resp.json() == {"status": "queued"}
@@ -537,7 +543,8 @@ async def test_reopen_no_oldrev_check(client: AsyncClient) -> None:
     payload = make_mr_payload(action="reopen")
     # Ensure no oldrev key in the payload
     payload["object_attributes"].pop("oldrev", None)
-    resp = await client.post("/webhook", json=payload, headers=HEADERS)
+    with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
+        resp = await client.post("/webhook", json=payload, headers=HEADERS)
 
     assert resp.status_code == 200
     assert resp.json() == {"status": "queued"}

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 import pytest
 
@@ -35,7 +37,8 @@ CHANGES_PUSHED_MARKER = "✅ Changes pushed."
 GENERIC_ERROR_SNIPPET = "❌ Unable to process your request"
 
 # -- Module path prefix for patches --
-_MOD = "gitlab_copilot_agent.discussion_orchestrator"
+_MOD = "gitlab_copilot_agent.discussion_pipeline"
+_ORCH = "gitlab_copilot_agent.discussion_orchestrator"
 
 
 # -- Factories --
@@ -120,7 +123,7 @@ def _wire_gitlab_sdk(mock_gitlab_cls: MagicMock, disc_obj: MagicMock) -> None:
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 async def test_qa_reply_no_code_changes(
     mock_client_cls: MagicMock,
     mock_run: AsyncMock,
@@ -172,7 +175,7 @@ async def test_qa_reply_no_code_changes(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 async def test_coding_reply_with_changes(
     mock_client_cls: MagicMock,
     mock_run: AsyncMock,
@@ -224,7 +227,7 @@ async def test_coding_reply_with_changes(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 async def test_coding_reply_empty_patch(
     mock_client_cls: MagicMock,
     mock_run: AsyncMock,
@@ -267,7 +270,7 @@ async def test_coding_reply_empty_patch(
     assert CHANGES_PUSHED_MARKER not in posted_body
 
 
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 async def test_triggering_discussion_not_found(
     mock_client_cls: MagicMock,
     tmp_path: Path,
@@ -296,7 +299,7 @@ async def test_triggering_discussion_not_found(
     executor.execute.assert_not_awaited()
 
 
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 @patch(f"{_MOD}.run_discussion")
 @patch(f"{_MOD}.build_discussion_prompt")
 async def test_task_execution_error_posts_user_error(
@@ -331,7 +334,7 @@ async def test_task_execution_error_posts_user_error(
     assert "❌" in posted_body
 
 
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 async def test_general_exception_posts_generic_error(
     mock_client_cls: MagicMock,
     tmp_path: Path,
@@ -359,7 +362,7 @@ async def test_general_exception_posts_generic_error(
 
 
 @patch(f"{_MOD}.shutil.rmtree")
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 async def test_cleanup_runs_on_failure(
     mock_client_cls: MagicMock,
     mock_rmtree: MagicMock,
@@ -390,7 +393,7 @@ async def test_cleanup_runs_on_failure(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 async def test_repo_lock_used_when_provided(
     mock_client_cls: MagicMock,
     mock_run: AsyncMock,
@@ -444,7 +447,7 @@ async def test_repo_lock_used_when_provided(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 async def test_deleted_branch_replies_with_warning(
     mock_client_cls: MagicMock,
     mock_run: AsyncMock,
@@ -505,7 +508,7 @@ def _make_resolution(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 async def test_discussion_interaction_auto_resolve(
     mock_client_cls: MagicMock,
     mock_run: AsyncMock,
@@ -558,7 +561,7 @@ async def test_discussion_interaction_auto_resolve(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 async def test_discussion_interaction_suggest_no_resolve(
     mock_client_cls: MagicMock,
     mock_run: AsyncMock,
@@ -604,7 +607,7 @@ async def test_discussion_interaction_suggest_no_resolve(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 async def test_discussion_interaction_off_no_action(
     mock_client_cls: MagicMock,
     mock_run: AsyncMock,
@@ -650,7 +653,7 @@ async def test_discussion_interaction_off_no_action(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 async def test_discussion_interaction_partial_never_resolved(
     mock_client_cls: MagicMock,
     mock_run: AsyncMock,
@@ -696,7 +699,7 @@ async def test_discussion_interaction_partial_never_resolved(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_MOD}.GitLabClient")
+@patch(f"{_ORCH}.GitLabClient")
 async def test_discussion_interaction_resolution_error_logged(
     mock_client_cls: MagicMock,
     mock_run: AsyncMock,

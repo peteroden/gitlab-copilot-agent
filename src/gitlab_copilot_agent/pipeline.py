@@ -38,6 +38,7 @@ class BasePipelineContext(BaseModel):
 
     repo_path: Path | None = None
     outcome: str = "error"
+    suppress_exception: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +146,11 @@ async def run_pipeline[PipelineContextT: BasePipelineContext](
             duration_s=round(time.monotonic() - start, 3),
         )
 
-    if primary_exc is not None:
+    # Re-raise unless handle_error explicitly suppressed an Exception
+    # (BaseException like CancelledError always propagates)
+    if primary_exc is not None and not (
+        isinstance(primary_exc, Exception) and pipeline_context.suppress_exception
+    ):
         raise primary_exc
 
     return pipeline_context

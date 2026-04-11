@@ -91,6 +91,15 @@ class Settings(BaseSettings):
         default=None, description="Appended to default discussion system prompt"
     )
 
+    # Prompt delivery strategy
+    prompt_strategy: Literal["inline", "file-based"] = Field(
+        default="inline",
+        description=(
+            "How to deliver context to the LLM: 'inline' (current behavior) "
+            "or 'file-based' (diff via git, context as files — future)"
+        ),
+    )
+
     # Server
     host: str = Field(default="0.0.0.0", description="Server bind host")
     port: int = Field(default=8000, description="Server bind port")

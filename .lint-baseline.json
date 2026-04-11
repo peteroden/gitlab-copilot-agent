@@ -5,22 +5,12 @@
   "src/gitlab_copilot_agent/coding_engine.py": {
     "TC001": 1
   },
-  "src/gitlab_copilot_agent/coding_orchestrator.py": {
-    "D101": 1,
-    "D102": 1,
-    "TC001": 5,
-    "TC003": 1
-  },
   "src/gitlab_copilot_agent/coding_workflow.py": {
     "TC003": 1
   },
   "src/gitlab_copilot_agent/concurrency.py": {
     "D102": 21,
     "D105": 2,
-    "TC003": 1
-  },
-  "src/gitlab_copilot_agent/discussion_orchestrator.py": {
-    "TC001": 4,
     "TC003": 1
   },
   "src/gitlab_copilot_agent/gitlab_client.py": {
@@ -77,9 +67,6 @@
   },
   "tests/test_demo_provision/conftest.py": {
     "RET504": 1
-  },
-  "tests/test_discussion_orchestrator.py": {
-    "TC003": 1
   },
   "tests/test_git_operations.py": {
     "RUF043": 1
