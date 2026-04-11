@@ -28,7 +28,7 @@ from gitlab_copilot_agent.gitlab_client import GitLabClient  # noqa: TC001
 from gitlab_copilot_agent.jira_client import JiraClient  # noqa: TC001
 from gitlab_copilot_agent.jira_models import JiraIssue  # noqa: TC001
 from gitlab_copilot_agent.metrics import coding_tasks_duration, coding_tasks_total
-from gitlab_copilot_agent.pipeline import BasePipelineContext
+from gitlab_copilot_agent.pipeline import BasePipelineContext, post_pipeline_error, stage_requires
 from gitlab_copilot_agent.project_registry import ResolvedProject  # noqa: TC001
 from gitlab_copilot_agent.task_executor import (
     TaskExecutionError,
@@ -145,15 +145,15 @@ class CodingPipeline:
 
     async def process(self, pipeline_context: CodingContext) -> None:
         """Apply patch, commit, push, create MR, update Jira."""
-        assert pipeline_context.raw_result is not None
-        assert pipeline_context.repo_path is not None
+        raw_result = stage_requires(pipeline_context.raw_result, "raw_result")
+        repo_path = stage_requires(pipeline_context.repo_path, "repo_path")
 
         issue = self._issue
         mapping = self._mapping
 
-        await apply_coding_result(pipeline_context.raw_result, pipeline_context.repo_path)
+        await apply_coding_result(raw_result, repo_path)
         has_changes = await git_commit(
-            pipeline_context.repo_path,
+            repo_path,
             f"feat({issue.key.lower()}): {issue.fields.summary}",
             self._settings.agent_author_name,
             self._settings.agent_author_email,
@@ -165,15 +165,14 @@ class CodingPipeline:
             return
 
         await git_push(
-            pipeline_context.repo_path,
+            repo_path,
             "origin",
             pipeline_context.branch,
             mapping.token,
         )
         mr_title = f"feat({issue.key.lower()}): {issue.fields.summary}"
         mr_desc = (
-            f"Automated implementation for {issue.key}."
-            f"\n\n{strip_json_block(pipeline_context.raw_result.summary)}"
+            f"Automated implementation for {issue.key}.\n\n{strip_json_block(raw_result.summary)}"
         )
         mr_iid = await self._gl.create_merge_request(
             mapping.gitlab_project_id,
@@ -234,22 +233,15 @@ class CodingPipeline:
                 )
             except Exception:
                 await self._log.aexception("failure_comment_post_failed")
-        elif isinstance(exc, TaskExecutionError):
-            await self._log.aexception("coding_task_execution_failed")
+            return
+
+        if isinstance(exc, TaskExecutionError):
             pipeline_context.outcome = "task_failure"
-            try:
-                await self._jira.add_comment(
-                    issue_key,
-                    f"⚠️ Automated implementation failed.\n\n{user_error_message(str(exc))}",
-                )
-            except Exception:
-                await self._log.aexception("failure_comment_post_failed")
-        else:
-            await self._log.aexception("coding_task_failed")
-            try:
-                await self._jira.add_comment(
-                    issue_key,
-                    "⚠️ Automated implementation failed. Check service logs for details.",
-                )
-            except Exception:
-                await self._log.aexception("failure_comment_post_failed")
+
+        await post_pipeline_error(
+            self._log,
+            exc,
+            lambda msg: self._jira.add_comment(issue_key, msg),
+            task_error_prefix="⚠️ Automated implementation failed.",
+            generic_msg="⚠️ Automated implementation failed. Check service logs for details.",
+        )

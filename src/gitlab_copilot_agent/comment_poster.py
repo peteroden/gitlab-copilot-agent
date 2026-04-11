@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
 from typing import TYPE_CHECKING
 
@@ -11,10 +10,8 @@ import structlog
 from gitlab_copilot_agent.incremental import format_sha_marker
 
 if TYPE_CHECKING:
-    import gitlab as gl
-
     from gitlab_copilot_agent.comment_parser import ParsedReview, Resolution
-    from gitlab_copilot_agent.gitlab_client import MRChange, MRDiffRef
+    from gitlab_copilot_agent.gitlab_client import GitLabClient, MRChange, MRDiffRef
     from gitlab_copilot_agent.mapping_models import ResolutionBehavior
 
 log = structlog.get_logger()
@@ -90,8 +87,10 @@ def _is_valid_position(file: str, line: int, valid_positions: set[tuple[str, int
     return (file, line) in valid_positions
 
 
-def _handle_resolutions(
-    mr: object,  # gitlab MR object
+async def _handle_resolutions(
+    gl_client: GitLabClient,
+    project_id: int,
+    mr_iid: int,
     resolutions: list[Resolution],
     resolution_behavior: ResolutionBehavior,
     allowed_discussion_ids: frozenset[str] = frozenset(),
@@ -111,16 +110,17 @@ def _handle_resolutions(
             )
             continue
         try:
-            disc = mr.discussions.get(r.discussion_id)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownVariableType, reportUnknownMemberType]
-
             if resolution_behavior == "auto-resolve" and r.status == "resolved":
-                disc.notes.create({"body": f"✅ {r.message}"})  # pyright: ignore[reportUnknownMemberType]
-                disc.resolved = True  # pyright: ignore[reportAttributeAccessIssue]
-                disc.save()  # pyright: ignore[reportUnknownMemberType]
+                await gl_client.reply_to_discussion(
+                    project_id, mr_iid, r.discussion_id, f"✅ {r.message}"
+                )
+                await gl_client.resolve_discussion(project_id, mr_iid, r.discussion_id)
                 resolved_count += 1
             elif r.status in ("resolved", "partial"):
                 prefix = "✅" if r.status == "resolved" else "⚠️"
-                disc.notes.create({"body": f"{prefix} {r.message}"})  # pyright: ignore[reportUnknownMemberType]
+                await gl_client.reply_to_discussion(
+                    project_id, mr_iid, r.discussion_id, f"{prefix} {r.message}"
+                )
         except Exception:
             log.warning(
                 "resolution_action_failed",
@@ -132,7 +132,7 @@ def _handle_resolutions(
 
 
 async def post_review(
-    gitlab_client: gl.Gitlab,
+    gl_client: GitLabClient,
     project_id: int,
     mr_iid: int,
     diff_refs: MRDiffRef,
@@ -147,100 +147,102 @@ async def post_review(
     Validates comment positions against MR diff before attempting inline discussions.
     Invalid positions are posted as fallback notes with file:line context.
     """
+    # Precompute valid positions once for all comments
+    valid_positions: set[tuple[str, int]] = set()
+    diff_files: set[str] = set()
+    for change in changes:
+        diff_files.add(change.new_path)
+        valid_positions |= _parse_hunk_lines(change.diff, change.new_path)
 
-    def _post() -> None:
-        project = gitlab_client.projects.get(project_id)
-        mr = project.mergerequests.get(mr_iid)
+    # Track posting outcomes for activity summary
+    posted_inline = 0
+    posted_fallback = 0
+    skipped = 0
 
-        # Precompute valid positions once for all comments
-        valid_positions: set[tuple[str, int]] = set()
-        diff_files: set[str] = set()
-        for change in changes:
-            diff_files.add(change.new_path)
-            valid_positions |= _parse_hunk_lines(change.diff, change.new_path)
+    for c in review.comments:
+        body = f"**[{c.severity.upper()}]** {c.comment}"
+        if c.suggestion is not None:
+            start = c.suggestion_start_offset
+            end = c.suggestion_end_offset
+            body += f"\n\n```suggestion:-{start}+{end}\n{c.suggestion}\n```"
 
-        # Track posting outcomes for activity summary
-        posted_inline = 0
-        posted_fallback = 0
-        skipped = 0
+        # Skip comments on files not in the diff entirely
+        if c.file not in diff_files:
+            log.info("comment_skipped_not_in_diff", file=c.file, line=c.line)
+            skipped += 1
+            continue
 
-        for c in review.comments:
-            body = f"**[{c.severity.upper()}]** {c.comment}"
-            if c.suggestion is not None:
-                start = c.suggestion_start_offset
-                end = c.suggestion_end_offset
-                body += f"\n\n```suggestion:-{start}+{end}\n{c.suggestion}\n```"
-
-            # Skip comments on files not in the diff entirely
-            if c.file not in diff_files:
-                log.info("comment_skipped_not_in_diff", file=c.file, line=c.line)
+        # Validate position before attempting inline comment
+        if not _is_valid_position(c.file, c.line, valid_positions):
+            log.warning(
+                "comment_position_invalid",
+                file=c.file,
+                line=c.line,
+            )
+            try:
+                await gl_client.post_mr_comment(
+                    project_id, mr_iid, f"{body}\n\n`{c.file}:{c.line}`"
+                )
+                posted_fallback += 1
+            except Exception:
+                log.warning("fallback_note_failed", file=c.file, line=c.line, exc_info=True)
                 skipped += 1
-                continue
+            continue
 
-            # Validate position before attempting inline comment
-            if not _is_valid_position(c.file, c.line, valid_positions):
+        # Position is valid, attempt inline comment
+        try:
+            await gl_client.create_mr_discussion(
+                project_id,
+                mr_iid,
+                body,
+                {
+                    "base_sha": diff_refs.base_sha,
+                    "start_sha": diff_refs.start_sha,
+                    "head_sha": diff_refs.head_sha,
+                    "position_type": "text",
+                    "old_path": c.file,
+                    "new_path": c.file,
+                    "new_line": c.line,
+                },
+            )
+            posted_inline += 1
+        except Exception:
+            log.warning("inline_comment_failed", file=c.file, line=c.line, exc_info=True)
+            try:
+                await gl_client.post_mr_comment(
+                    project_id, mr_iid, f"{body}\n\n`{c.file}:{c.line}`"
+                )
+                posted_fallback += 1
+            except Exception:
                 log.warning(
-                    "comment_position_invalid",
+                    "fallback_note_also_failed",
                     file=c.file,
                     line=c.line,
+                    exc_info=True,
                 )
-                try:
-                    mr.notes.create({"body": f"{body}\n\n`{c.file}:{c.line}`"})
-                    posted_fallback += 1
-                except Exception:
-                    log.warning("fallback_note_failed", file=c.file, line=c.line, exc_info=True)
-                    skipped += 1
-                continue
+                skipped += 1
 
-            # Position is valid, attempt inline comment
-            try:
-                mr.discussions.create(
-                    {
-                        "body": body,
-                        "position": {
-                            "base_sha": diff_refs.base_sha,
-                            "start_sha": diff_refs.start_sha,
-                            "head_sha": diff_refs.head_sha,
-                            "position_type": "text",
-                            "old_path": c.file,
-                            "new_path": c.file,
-                            "new_line": c.line,
-                        },
-                    }
-                )
-                posted_inline += 1
-            except Exception:
-                log.warning("inline_comment_failed", file=c.file, line=c.line, exc_info=True)
-                try:
-                    mr.notes.create({"body": f"{body}\n\n`{c.file}:{c.line}`"})
-                    posted_fallback += 1
-                except Exception:
-                    log.warning(
-                        "fallback_note_also_failed",
-                        file=c.file,
-                        line=c.line,
-                        exc_info=True,
-                    )
-                    skipped += 1
-
-        # Handle resolutions for prior feedback
-        resolved = 0
-        if review.resolutions:
-            resolved = _handle_resolutions(
-                mr, review.resolutions, resolution_behavior, allowed_discussion_ids
-            )
-            if resolved > 0:
-                log.info("discussions_resolved", count=resolved)
-
-        # Compose summary note with optional activity section
-        summary_body = f"## Code Review Summary\n\n{review.summary}"
-        activity = _build_activity_section(
-            posted_inline, posted_fallback, review.resolutions or [], resolved
+    # Handle resolutions for prior feedback
+    resolved = 0
+    if review.resolutions:
+        resolved = await _handle_resolutions(
+            gl_client,
+            project_id,
+            mr_iid,
+            review.resolutions,
+            resolution_behavior,
+            allowed_discussion_ids,
         )
-        if activity:
-            summary_body += f"\n\n{activity}"
-        if head_sha:
-            summary_body += f"\n\n{format_sha_marker(head_sha)}"
-        mr.notes.create({"body": summary_body})
+        if resolved > 0:
+            log.info("discussions_resolved", count=resolved)
 
-    await asyncio.to_thread(_post)
+    # Compose summary note with optional activity section
+    summary_body = f"## Code Review Summary\n\n{review.summary}"
+    activity = _build_activity_section(
+        posted_inline, posted_fallback, review.resolutions or [], resolved
+    )
+    if activity:
+        summary_body += f"\n\n{activity}"
+    if head_sha:
+        summary_body += f"\n\n{format_sha_marker(head_sha)}"
+    await gl_client.post_mr_comment(project_id, mr_iid, summary_body)

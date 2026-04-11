@@ -5,14 +5,31 @@ from __future__ import annotations
 
 import os
 import sys
+from urllib.parse import quote
 
-import gitlab
+import httpx
 import structlog
 
 log = structlog.get_logger()
 
 
+def _get_all_pages(client: httpx.Client, path: str, **params: str) -> list[dict]:
+    """Fetch all pages of a paginated GitLab API endpoint."""
+    results: list[dict] = []
+    page = 1
+    while True:
+        resp = client.get(path, params={**params, "page": str(page), "per_page": "100"})
+        resp.raise_for_status()
+        data = resp.json()
+        if not data:
+            break
+        results.extend(data)
+        page += 1
+    return results
+
+
 def main() -> None:
+    """Close existing demo MR, delete branch, and recreate with buggy code."""
     gl_url = os.environ.get("GITLAB_URL", "https://gitlab.com")
     gl_token = os.environ.get("GITLAB_TOKEN")
     if not gl_token:
@@ -20,34 +37,58 @@ def main() -> None:
         sys.exit(1)
 
     project_path = sys.argv[1] if len(sys.argv) > 1 else "peteroden/copilot-demo"
+    encoded_path = quote(project_path, safe="")
 
-    gl = gitlab.Gitlab(gl_url, private_token=gl_token)
-    gl.auth()
-    project = gl.projects.get(project_path)
+    gl = httpx.Client(
+        base_url=f"{gl_url}/api/v4",
+        headers={"PRIVATE-TOKEN": gl_token},
+    )
+
+    # Verify authentication
+    auth_resp = gl.get("/user")
+    auth_resp.raise_for_status()
+
+    # Verify project access
+    proj_resp = gl.get(f"/projects/{encoded_path}")
+    proj_resp.raise_for_status()
 
     branch_name = "feature/add-search-endpoint"
+    encoded_branch = quote(branch_name, safe="")
 
     # Close existing MRs on that branch
-    for mr in project.mergerequests.list(state="opened", get_all=True):
-        if mr.source_branch == branch_name:
-            mr.state_event = "close"
-            mr.save()
-            print(f"Closed MR !{mr.iid}")
+    open_mrs = _get_all_pages(gl, f"/projects/{encoded_path}/merge_requests", state="opened")
+    for mr in open_mrs:
+        if mr["source_branch"] == branch_name:
+            close_resp = gl.put(
+                f"/projects/{encoded_path}/merge_requests/{mr['iid']}",
+                json={"state_event": "close"},
+            )
+            close_resp.raise_for_status()
+            print(f"Closed MR !{mr['iid']}")
 
     # Delete the branch
-    try:
-        project.branches.delete(branch_name)
+    del_resp = gl.delete(f"/projects/{encoded_path}/repository/branches/{encoded_branch}")
+    if del_resp.status_code < 300:
         print(f"Deleted branch {branch_name}")
-    except Exception:
+    else:
         print(f"Branch {branch_name} not found (already deleted)")
 
     # Recreate branch from main
-    project.branches.create({"branch": branch_name, "ref": "main"})
+    create_resp = gl.post(
+        f"/projects/{encoded_path}/repository/branches",
+        params={"branch": branch_name, "ref": "main"},
+    )
+    create_resp.raise_for_status()
     print(f"Created fresh branch {branch_name}")
 
     # Check existing files
-    tree = project.repository_tree(ref=branch_name, recursive=True, get_all=True)
-    existing = {item["path"] for item in tree}
+    tree_items = _get_all_pages(
+        gl,
+        f"/projects/{encoded_path}/repository/tree",
+        ref=branch_name,
+        recursive="true",
+    )
+    existing = {item["path"] for item in tree_items}
 
     search_py = '''\
 """Search functionality for the Blog Post API."""
@@ -130,17 +171,20 @@ def create_post(title: str, content: str, author: str, api_key: str):
         },
     ]
 
-    project.commits.create(
-        {
+    commit_resp = gl.post(
+        f"/projects/{encoded_path}/repository/commits",
+        json={
             "branch": branch_name,
             "commit_message": "Add search endpoint with keyword matching",
             "actions": actions,
-        }
+        },
     )
+    commit_resp.raise_for_status()
     print("Pushed buggy files to branch")
 
-    mr = project.mergerequests.create(
-        {
+    mr_resp = gl.post(
+        f"/projects/{encoded_path}/merge_requests",
+        json={
             "source_branch": branch_name,
             "target_branch": "main",
             "title": "Add post search endpoint",
@@ -148,9 +192,13 @@ def create_post(title: str, content: str, author: str, api_key: str):
                 "Adds a search endpoint to find posts by keyword.\n\n"
                 "This MR has intentional issues for the agent to review."
             ),
-        }
+        },
     )
-    print(f"✅ Created MR !{mr.iid}: {mr.web_url}")
+    mr_resp.raise_for_status()
+    mr_data = mr_resp.json()
+    print(f"✅ Created MR !{mr_data['iid']}: {mr_data['web_url']}")
+
+    gl.close()
 
 
 if __name__ == "__main__":

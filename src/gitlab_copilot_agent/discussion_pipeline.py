@@ -11,7 +11,6 @@ import asyncio
 import shutil
 from typing import TYPE_CHECKING
 
-import gitlab
 import structlog
 
 from gitlab_copilot_agent.coding_workflow import apply_coding_result
@@ -34,7 +33,7 @@ from gitlab_copilot_agent.git_operations import (
     validate_clone_url_host,
 )
 from gitlab_copilot_agent.gitlab_client import GitLabClient, MRDetails  # noqa: TC001
-from gitlab_copilot_agent.pipeline import BasePipelineContext
+from gitlab_copilot_agent.pipeline import BasePipelineContext, post_pipeline_error, stage_requires
 from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.task_executor import (
     CodingResult,
@@ -183,13 +182,11 @@ class DiscussionPipeline:
             discussions = await self._gl.list_mr_discussions(event.project_id, mr_iid)
             triggering = _find_triggering_discussion(discussions, note_id)
             if triggering:
-                gl = gitlab.Gitlab(self._settings.gitlab_url, private_token=event.token)
-                gl_project = gl.projects.get(event.project_id)
-                gl_mr = gl_project.mergerequests.get(mr_iid)
-                disc_obj = gl_mr.discussions.get(triggering.discussion_id)
-                await asyncio.to_thread(
-                    disc_obj.notes.create,
-                    {"body": branch_deleted_message(event.branch)},
+                await self._gl.reply_to_discussion(
+                    event.project_id,
+                    mr_iid,
+                    triggering.discussion_id,
+                    branch_deleted_message(event.branch),
                 )
         except Exception:
             await self._log.awarning("branch_deleted_reply_failed", exc_info=True)
@@ -201,8 +198,10 @@ class DiscussionPipeline:
         if pipeline_context.branch_deleted or pipeline_context.triggering is None:
             return
 
-        assert pipeline_context.mr_details is not None
-        assert pipeline_context.discussion_history is not None
+        mr_details = stage_requires(pipeline_context.mr_details, "mr_details")
+        discussion_history = stage_requires(
+            pipeline_context.discussion_history, "discussion_history"
+        )
 
         pipeline_context.raw_result = await run_discussion(
             self._executor,
@@ -211,8 +210,8 @@ class DiscussionPipeline:
             self._event.clone_url,
             system_prompt=get_prompt(self._settings, "discussion"),
             user_prompt=build_discussion_prompt(
-                pipeline_context.mr_details,
-                pipeline_context.discussion_history,
+                mr_details,
+                discussion_history,
                 pipeline_context.triggering,
             ),
             source_branch=self._event.branch,
@@ -236,62 +235,61 @@ class DiscussionPipeline:
         if pipeline_context.branch_deleted or pipeline_context.triggering is None:
             return
 
-        assert pipeline_context.raw_result is not None
-        assert pipeline_context.response is not None
-        assert pipeline_context.repo_path is not None
+        raw_result = stage_requires(pipeline_context.raw_result, "raw_result")
+        response = stage_requires(pipeline_context.response, "response")
+        repo_path = stage_requires(pipeline_context.repo_path, "repo_path")
 
         event = self._event
-        response = pipeline_context.response
+        # Validated non-None by TaskEvent model_validator for discussion events
+        mr_iid: int = event.mr_iid  # type: ignore[assignment]
 
         # Apply code changes if present
-        has_patch = isinstance(pipeline_context.raw_result, CodingResult) and bool(
-            pipeline_context.raw_result.patch
-        )
+        has_patch = isinstance(raw_result, CodingResult) and bool(raw_result.patch)
         commit_subject = (event.note_body or "discussion fix")[:50]
 
         if has_patch:
-            await apply_coding_result(pipeline_context.raw_result, pipeline_context.repo_path)
+            await apply_coding_result(raw_result, repo_path)
             has_changes = await git_commit(
-                pipeline_context.repo_path,
+                repo_path,
                 f"fix: {commit_subject}",
                 self._settings.agent_author_name,
                 self._settings.agent_author_email,
             )
             if has_changes:
-                await git_push(pipeline_context.repo_path, "origin", event.branch, event.token)
+                await git_push(repo_path, "origin", event.branch, event.token)
                 response = response.model_copy(
                     update={"reply": f"{response.reply}\n\n✅ Changes pushed."}
                 )
 
         # Post reply to the existing thread
-        gl = gitlab.Gitlab(self._settings.gitlab_url, private_token=event.token)
-        gl_project = gl.projects.get(event.project_id)
-        gl_mr = gl_project.mergerequests.get(event.mr_iid or 0)
-        disc_obj = gl_mr.discussions.get(pipeline_context.triggering.discussion_id)
-        await asyncio.to_thread(disc_obj.notes.create, {"body": response.reply})
+        await self._gl.reply_to_discussion(
+            event.project_id,
+            mr_iid,
+            pipeline_context.triggering.discussion_id,
+            response.reply,
+        )
         await self._log.ainfo("discussion_reply_posted")
         pipeline_context.reply_posted = True
 
         # Handle resolution
-        await self._handle_resolution(pipeline_context, disc_obj, response)
+        await self._handle_resolution(pipeline_context, response)
 
     async def _handle_resolution(
         self,
         pipeline_context: DiscussionContext,
-        disc_obj: object,
         response: DiscussionResponse,
     ) -> None:
         """Resolve thread if appropriate based on resolution behavior."""
-        assert pipeline_context.triggering is not None
+        triggering = stage_requires(pipeline_context.triggering, "triggering")
         event = self._event
+        # Validated non-None by TaskEvent model_validator for discussion events
+        mr_iid: int = event.mr_iid  # type: ignore[assignment]
         resolution_behavior: ResolutionBehavior = event.resolution_behavior
 
-        first_note = (
-            pipeline_context.triggering.notes[0] if pipeline_context.triggering.notes else None
-        )
+        first_note = triggering.notes[0] if triggering.notes else None
         is_agent_thread = (
             first_note is not None
-            and pipeline_context.triggering.is_inline
+            and triggering.is_inline
             and first_note.author_id == self._agent.user_id
         )
 
@@ -301,21 +299,24 @@ class DiscussionPipeline:
                     response.resolution.status == "resolved"
                     and resolution_behavior == "auto-resolve"
                 ):
-                    disc_obj.resolved = True  # type: ignore[union-attr]
-                    await asyncio.to_thread(disc_obj.save)  # type: ignore[union-attr]
+                    await self._gl.resolve_discussion(
+                        event.project_id,
+                        mr_iid,
+                        triggering.discussion_id,
+                    )
                     await self._log.ainfo(
                         "discussion_auto_resolved",
-                        discussion_id=pipeline_context.triggering.discussion_id,
+                        discussion_id=triggering.discussion_id,
                     )
                 elif response.resolution.status == "partial":
                     await self._log.ainfo(
                         "discussion_partial_resolution",
-                        discussion_id=pipeline_context.triggering.discussion_id,
+                        discussion_id=triggering.discussion_id,
                     )
             except Exception:
                 await self._log.awarning(
                     "discussion_resolution_failed",
-                    discussion_id=pipeline_context.triggering.discussion_id,
+                    discussion_id=triggering.discussion_id,
                     exc_info=True,
                 )
 
@@ -331,32 +332,28 @@ class DiscussionPipeline:
     async def handle_error(self, pipeline_context: DiscussionContext, exc: Exception) -> None:
         """Post failure comment to MR."""
         event = self._event
-        mr_iid = event.mr_iid
-        if mr_iid is None:
+        if event.mr_iid is None:
             return
 
+        async def _post(msg: str) -> None:
+            await self._gl.post_mr_comment(event.project_id, event.mr_iid, msg)  # type: ignore[arg-type]
+
         if isinstance(exc, TaskExecutionError):
-            error_str = str(exc)
-            await self._log.aerror("discussion_task_failed", error=error_str)
+            # Post sanitized message directly — no prefix wrapper
+            await self._log.aerror("pipeline_task_failed", error=str(exc))
             try:
-                await self._gl.post_mr_comment(
-                    event.project_id, mr_iid, user_error_message(error_str)
-                )
+                await _post(user_error_message(str(exc)))
             except Exception:
-                await self._log.awarning("error_comment_failed", exc_info=True)
-        else:
-            await self._log.aerror(
-                "discussion_interaction_failed",
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-            try:
-                await self._gl.post_mr_comment(
-                    event.project_id,
-                    mr_iid,
-                    "❌ Unable to process your request. "
-                    "The service encountered an unexpected error. "
-                    "Please try again or contact the project administrator.",
-                )
-            except Exception:
-                await self._log.awarning("error_comment_failed", exc_info=True)
+                await self._log.awarning("failure_comment_post_failed", exc_info=True)
+            return
+
+        await post_pipeline_error(
+            self._log,
+            exc,
+            _post,
+            generic_msg=(
+                "❌ Unable to process your request. "
+                "The service encountered an unexpected error. "
+                "Please try again or contact the project administrator."
+            ),
+        )

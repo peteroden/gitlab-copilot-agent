@@ -109,9 +109,7 @@ def test_copilot_session_duration_records_task_type() -> None:
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_review_pipeline_records_success_metrics(
-    _mock_gl: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     _mock_post: AsyncMock,
@@ -143,9 +141,7 @@ async def test_review_pipeline_records_success_metrics(
 
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_review_pipeline_records_error_metrics(
-    _mock_gl: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
 ) -> None:
@@ -171,9 +167,7 @@ async def test_review_pipeline_records_error_metrics(
 
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_review_task_execution_failure_posts_comment_without_raising(
-    _mock_gl: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
 ) -> None:

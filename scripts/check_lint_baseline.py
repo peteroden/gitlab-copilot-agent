@@ -88,8 +88,10 @@ def main() -> int:
     current_total = sum(c for codes in current.values() for c in codes.values())
     baseline_total = sum(c for codes in baseline.values() for c in codes.values())
     if current_total < baseline_total:
-        print(f"Lint ratchet OK — improved! {baseline_total} → {current_total} "
-              f"(-{baseline_total - current_total})")
+        print(
+            f"Lint ratchet OK — improved! {baseline_total} → {current_total} "
+            f"(-{baseline_total - current_total})"
+        )
         print("Run: uv run python scripts/check_lint_baseline.py --update")
     else:
         print(f"Lint ratchet OK — {current_total} violations (baseline: {baseline_total})")

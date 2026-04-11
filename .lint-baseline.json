@@ -65,9 +65,6 @@
   "tests/test_credential_registry.py": {
     "RUF043": 1
   },
-  "tests/test_demo_provision/conftest.py": {
-    "RET504": 1
-  },
   "tests/test_git_operations.py": {
     "RUF043": 1
   },
