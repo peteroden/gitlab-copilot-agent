@@ -17,7 +17,7 @@ import os
 import re
 import time
 
-import gitlab
+import httpx
 import structlog
 
 from gitlab_copilot_agent.discussion_models import AgentIdentity
@@ -139,16 +139,11 @@ class CredentialRegistry:
 async def _fetch_identity(gitlab_url: str, token: str) -> AgentIdentity:
     """Authenticate against GitLab and return the caller's identity.
 
-    Uses :func:`asyncio.to_thread` because python-gitlab is synchronous.
+    Uses a one-shot httpx request to ``GET /api/v4/user``.
     """
-
-    def _sync_auth() -> AgentIdentity:
-        gl = gitlab.Gitlab(gitlab_url, private_token=token)
-        gl.auth()
-        user = gl.user
-        if user is None:  # pragma: no cover – defensive
-            msg = "gl.auth() succeeded but gl.user is None"
-            raise RuntimeError(msg)
-        return AgentIdentity(user_id=user.id, username=user.username)
-
-    return await asyncio.to_thread(_sync_auth)
+    url = f"{gitlab_url.rstrip('/')}/api/v4/user"
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(url, headers={"PRIVATE-TOKEN": token})
+        resp.raise_for_status()
+    data = resp.json()
+    return AgentIdentity(user_id=data["id"], username=data["username"])

@@ -19,16 +19,12 @@
     "D105": 4,
     "TC003": 1
   },
-  "src/gitlab_copilot_agent/credential_registry.py": {
-    "RUF003": 1
-  },
   "src/gitlab_copilot_agent/discussion_orchestrator.py": {
     "TC001": 4,
     "TC003": 1
   },
   "src/gitlab_copilot_agent/gitlab_client.py": {
-    "D101": 2,
-    "D102": 17,
+    "D102": 15,
     "TC003": 1
   },
   "src/gitlab_copilot_agent/gitlab_poller.py": {
