@@ -19,7 +19,7 @@ from tests.conftest import (
     HEADERS,
     MR_PAYLOAD,
     make_settings,
-    make_webhook_payload,
+    make_task_event,
 )
 
 
@@ -132,7 +132,7 @@ async def test_review_pipeline_records_success_metrics(
         patch("gitlab_copilot_agent.orchestrator.reviews_total", mock_total),
         patch("gitlab_copilot_agent.orchestrator.reviews_duration", mock_duration),
     ):
-        await handle_review(make_settings(), make_webhook_payload(), AsyncMock())
+        await handle_review(make_settings(), make_task_event(), AsyncMock())
 
     mock_total.add.assert_called_once_with(1, {"outcome": "success"})
     mock_duration.record.assert_called_once()
@@ -162,7 +162,7 @@ async def test_review_pipeline_records_error_metrics(
         patch("gitlab_copilot_agent.orchestrator.reviews_duration", mock_duration),
         pytest.raises(RuntimeError),
     ):
-        await handle_review(make_settings(), make_webhook_payload(), AsyncMock())
+        await handle_review(make_settings(), make_task_event(), AsyncMock())
 
     mock_total.add.assert_called_once_with(1, {"outcome": "error"})
     mock_duration.record.assert_called_once()
@@ -188,7 +188,7 @@ async def test_review_task_execution_failure_posts_comment_without_raising(
     mock_run_review.side_effect = TaskExecutionError("Task failed: runner error")
 
     with pytest.raises(TaskExecutionError, match="runner error"):
-        await handle_review(make_settings(), make_webhook_payload(), AsyncMock())
+        await handle_review(make_settings(), make_task_event(), AsyncMock())
 
     mock_gl.post_mr_comment.assert_awaited_once()
     comment = mock_gl.post_mr_comment.call_args[0][2]

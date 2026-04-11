@@ -14,7 +14,7 @@ from gitlab_copilot_agent.gitlab_client import MRAuthor, MRListItem, NoteListIte
 from gitlab_copilot_agent.gitlab_poller import GitLabPoller
 from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
 from gitlab_copilot_agent.task_executor import TaskExecutionError
-from tests.conftest import GITLAB_URL, MR_IID, PROJECT_ID, make_settings
+from tests.conftest import GITLAB_TOKEN, GITLAB_URL, MR_IID, PROJECT_ID, make_settings
 
 # -- Constants --
 MR_SHA = "deadbeef1234"
@@ -112,8 +112,8 @@ async def test_poll_once_discovers_mr(mock_hr: AsyncMock) -> None:
     cl.list_project_mrs.return_value = [_mr_item()]
     await poller._poll_once()
     mock_hr.assert_called_once()
-    assert mock_hr.call_args[0][1].object_attributes.iid == MR_IID
-    assert mock_hr.call_args[0][1].project.git_http_url == f"{GITLAB_URL}/{PATH_WITH_NS}.git"
+    assert mock_hr.call_args[0][1].mr_iid == MR_IID
+    assert mock_hr.call_args[0][1].clone_url == f"{GITLAB_URL}/{PATH_WITH_NS}.git"
 
 
 @pytest.mark.asyncio
@@ -227,9 +227,9 @@ async def test_note_discovery_triggers_discussion_orchestrator(
     cl.list_mr_discussions.return_value = [_discussion()]
     await poller._poll_once()
     mock_hd.assert_called_once()
-    payload = mock_hd.call_args[0][1]
-    assert payload.object_attributes.note == MENTION_BODY
-    assert payload.merge_request.iid == MR_IID
+    event = mock_hd.call_args[0][1]
+    assert event.note_body == MENTION_BODY
+    assert event.mr_iid == MR_IID
 
 
 @pytest.mark.asyncio
@@ -309,10 +309,9 @@ async def test_note_payload_has_correct_project_info(
     cl.list_project_mrs.return_value = [_mr_item()]
     cl.list_mr_discussions.return_value = [_discussion()]
     await poller._poll_once()
-    payload = mock_hd.call_args[0][1]
-    assert payload.project.path_with_namespace == PATH_WITH_NS
-    assert payload.project.git_http_url == f"{GITLAB_URL}/{PATH_WITH_NS}.git"
-    assert payload.user.username == NOTE_AUTHOR.username
+    event = mock_hd.call_args[0][1]
+    assert event.repo == PATH_WITH_NS
+    assert event.clone_url == f"{GITLAB_URL}/{PATH_WITH_NS}.git"
 
 
 @pytest.mark.asyncio
@@ -370,8 +369,8 @@ async def test_poll_passes_per_project_token_to_review(mock_hr: AsyncMock) -> No
     cl.list_project_mrs.return_value = [_mr_item()]
     await poller._poll_once()
     mock_hr.assert_called_once()
-    _, kwargs = mock_hr.call_args
-    assert kwargs["project_token"] == PER_PROJECT_TOKEN
+    event = mock_hr.call_args[0][1]
+    assert event.token == PER_PROJECT_TOKEN
 
 
 @pytest.mark.asyncio
@@ -388,22 +387,23 @@ async def test_poll_passes_credential_registry_and_ref_to_review(mock_hr: AsyncM
     mock_hr.assert_called_once()
     _, kwargs = mock_hr.call_args
     assert kwargs["credential_registry"] is creds
-    assert kwargs["credential_ref"] == "default"
-    assert kwargs["resolution_behavior"] == "suggest"
+    event = mock_hr.call_args[0][1]
+    assert event.credential_ref == "default"
+    assert event.resolution_behavior == "suggest"
 
 
 @pytest.mark.asyncio
 @patch(_HANDLE_REVIEW, new_callable=AsyncMock)
-async def test_poll_falls_back_to_none_when_not_in_registry(mock_hr: AsyncMock) -> None:
-    """Poller passes None token when project not in registry (global fallback)."""
+async def test_poll_falls_back_to_global_token_when_not_in_registry(mock_hr: AsyncMock) -> None:
+    """Poller uses global token when project not in registry."""
     registry = _make_project_registry(project_id=9999)
     poller, cl, _ = _poller()
     poller._project_registry = registry
     cl.list_project_mrs.return_value = [_mr_item()]
     await poller._poll_once()
     mock_hr.assert_called_once()
-    _, kwargs = mock_hr.call_args
-    assert kwargs["project_token"] is None
+    event = mock_hr.call_args[0][1]
+    assert event.token == GITLAB_TOKEN
 
 
 @pytest.mark.asyncio
@@ -421,8 +421,8 @@ async def test_poll_passes_per_project_token_to_discussion_orchestrator(
     cl.list_mr_discussions.return_value = [_discussion()]
     await poller._poll_once()
     mock_hd.assert_called_once()
-    _, kwargs = mock_hd.call_args
-    assert kwargs["project_token"] == PER_PROJECT_TOKEN
+    event = mock_hd.call_args[0][1]
+    assert event.token == PER_PROJECT_TOKEN
 
 
 @pytest.mark.asyncio

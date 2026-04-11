@@ -8,6 +8,7 @@ from httpx import ASGITransport, AsyncClient
 
 from gitlab_copilot_agent.app_context import AppContext
 from gitlab_copilot_agent.config import Settings
+from gitlab_copilot_agent.events import TaskEvent
 from gitlab_copilot_agent.gitlab_client import MRChange, MRDiffRef
 from gitlab_copilot_agent.main import app
 from gitlab_copilot_agent.models import (
@@ -155,6 +156,29 @@ def make_webhook_payload(**attr_overrides: Any) -> MergeRequestWebhookPayload:
         project=WebhookProject(**MR_PAYLOAD["project"]),
         object_attributes=MRObjectAttributes(**attrs),
     )
+
+
+def make_task_event(**overrides: Any) -> TaskEvent:
+    """Create a TaskEvent with test defaults for the review path.
+
+    Override any field. For discussion events, pass ``task_type="discussion"``
+    plus ``note_id`` and ``note_body``.
+    """
+    defaults: dict[str, Any] = {
+        "task_type": "review",
+        "project_id": PROJECT_ID,
+        "repo": "group/my-project",
+        "clone_url": "https://gitlab.example.com/group/my-project.git",
+        "branch": "feature/x",
+        "target_branch": "main",
+        "mr_iid": MR_IID,
+        "head_sha": "abc123",
+        "trigger_source": "webhook",
+        "token": GITLAB_TOKEN,
+        "credential_ref": "default",
+        "resolution_behavior": "suggest",
+    }
+    return TaskEvent(**(defaults | overrides))
 
 
 # -- Fixtures --

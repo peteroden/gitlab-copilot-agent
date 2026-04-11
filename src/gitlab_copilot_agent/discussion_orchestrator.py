@@ -23,6 +23,7 @@ from gitlab_copilot_agent.discussion_engine import (
 )
 from gitlab_copilot_agent.discussion_models import AgentIdentity, Discussion, DiscussionHistory
 from gitlab_copilot_agent.error_messages import branch_deleted_message, user_error_message
+from gitlab_copilot_agent.events import TaskEvent
 from gitlab_copilot_agent.git_operations import (
     TransientCloneError,
     git_commit,
@@ -31,7 +32,6 @@ from gitlab_copilot_agent.git_operations import (
 )
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.mapping_models import ResolutionBehavior
-from gitlab_copilot_agent.models import NoteWebhookPayload
 from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.task_executor import (
     CodingResult,
@@ -58,30 +58,36 @@ def _find_triggering_discussion(
 
 async def handle_discussion_interaction(
     settings: Settings,
-    payload: NoteWebhookPayload,
+    event: TaskEvent,
     executor: TaskExecutor,
     agent_identity: AgentIdentity,
-    project_token: str | None = None,
     repo_locks: DistributedLock | None = None,
-    resolution_behavior: ResolutionBehavior = "suggest",
 ) -> None:
     """Handle an @mention or thread-reply interaction on an MR.
 
     Full pipeline: clone → fetch context → build prompt → LLM → post reply.
     If the LLM returns code changes, also commit and push.
     """
-    mr = payload.merge_request
-    project = payload.project
-    note_id = payload.object_attributes.id
+    project_id = event.project_id
+    mr_iid = event.mr_iid
+    if mr_iid is None:
+        msg = "discussion events require mr_iid"
+        raise ValueError(msg)
+    note_id = event.note_id
+    if note_id is None:
+        msg = "discussion events require note_id"
+        raise ValueError(msg)
+    clone_url = event.clone_url
+    token = event.token
+    resolution_behavior: ResolutionBehavior = event.resolution_behavior
 
     with _tracer.start_as_current_span(
         "mr.discussion_interaction",
-        attributes={"project_id": project.id, "mr_iid": mr.iid},
+        attributes={"project_id": project_id, "mr_iid": mr_iid},
     ):
-        bound_log = log.bind(project_id=project.id, mr_iid=mr.iid, note_id=note_id)
+        bound_log = log.bind(project_id=project_id, mr_iid=mr_iid, note_id=note_id)
         await bound_log.ainfo("discussion_interaction_started")
 
-        token = project_token or settings.gitlab_token
         gl_client = GitLabClient(settings.gitlab_url, token)
         repo_path: Path | None = None
 
@@ -90,10 +96,10 @@ async def handle_discussion_interaction(
             try:
                 # 1. Clone repo (always — questions may need full context)
                 try:
-                    validate_clone_url_host(project.git_http_url, settings.gitlab_url)
+                    validate_clone_url_host(clone_url, settings.gitlab_url)
                     repo_path = await gl_client.clone_repo(
-                        project.git_http_url,
-                        mr.source_branch,
+                        clone_url,
+                        event.branch,
                         token,
                         clone_dir=settings.clone_dir,
                     )
@@ -102,21 +108,21 @@ async def handle_discussion_interaction(
                     if "not found" in clone_err or "not allowed" in clone_err:
                         await bound_log.awarning(
                             "branch_deleted_or_inaccessible",
-                            branch=mr.source_branch,
+                            branch=event.branch,
                             error=str(clone_exc),
                         )
                         # Try to reply in the triggering thread
                         try:
-                            discussions = await gl_client.list_mr_discussions(project.id, mr.iid)
+                            discussions = await gl_client.list_mr_discussions(project_id, mr_iid)
                             triggering = _find_triggering_discussion(discussions, note_id)
                             if triggering:
                                 gl = gitlab.Gitlab(settings.gitlab_url, private_token=token)
-                                gl_project = gl.projects.get(project.id)
-                                gl_mr = gl_project.mergerequests.get(mr.iid)
+                                gl_project = gl.projects.get(project_id)
+                                gl_mr = gl_project.mergerequests.get(mr_iid)
                                 disc_obj = gl_mr.discussions.get(triggering.discussion_id)
                                 await asyncio.to_thread(
                                     disc_obj.notes.create,
-                                    {"body": branch_deleted_message(mr.source_branch)},
+                                    {"body": branch_deleted_message(event.branch)},
                                 )
                         except Exception:
                             await bound_log.awarning("branch_deleted_reply_failed", exc_info=True)
@@ -124,8 +130,8 @@ async def handle_discussion_interaction(
                     raise
 
                 # 2. Fetch MR details + discussions
-                mr_details = await gl_client.get_mr_details(project.id, mr.iid)
-                discussions = await gl_client.list_mr_discussions(project.id, mr.iid)
+                mr_details = await gl_client.get_mr_details(project_id, mr_iid)
+                discussions = await gl_client.list_mr_discussions(project_id, mr_iid)
                 discussion_history = DiscussionHistory(
                     discussions=discussions, agent=agent_identity
                 )
@@ -142,10 +148,10 @@ async def handle_discussion_interaction(
                     executor,
                     settings,
                     str(repo_path),
-                    project.git_http_url,
+                    clone_url,
                     system_prompt=get_prompt(settings, "discussion"),
                     user_prompt=user_prompt,
-                    source_branch=mr.source_branch,
+                    source_branch=event.branch,
                     note_id=note_id,
                 )
 
@@ -159,24 +165,27 @@ async def handle_discussion_interaction(
                     has_code_changes=has_patch,
                 )
 
+                # Build commit message from note body or fallback
+                commit_subject = (event.note_body or "discussion fix")[:50]
+
                 if has_patch:
                     await apply_coding_result(result, repo_path)
                     has_changes = await git_commit(
                         repo_path,
-                        f"fix: {payload.object_attributes.note[:50]}",
+                        f"fix: {commit_subject}",
                         settings.agent_author_name,
                         settings.agent_author_email,
                     )
                     if has_changes:
-                        await git_push(repo_path, "origin", mr.source_branch, token)
+                        await git_push(repo_path, "origin", event.branch, token)
                         response = response.model_copy(
                             update={"reply": f"{response.reply}\n\n✅ Changes pushed."}
                         )
 
                 # 7. Post reply to the existing thread
                 gl = gitlab.Gitlab(settings.gitlab_url, private_token=token)
-                gl_project = gl.projects.get(project.id)
-                gl_mr = gl_project.mergerequests.get(mr.iid)
+                gl_project = gl.projects.get(project_id)
+                gl_mr = gl_project.mergerequests.get(mr_iid)
                 disc_obj = gl_mr.discussions.get(triggering.discussion_id)
                 await asyncio.to_thread(disc_obj.notes.create, {"body": response.reply})
                 await bound_log.ainfo("discussion_reply_posted")
@@ -221,7 +230,7 @@ async def handle_discussion_interaction(
                 )
                 try:
                     await gl_client.post_mr_comment(
-                        project.id, mr.iid, user_error_message(error_str)
+                        project_id, mr_iid, user_error_message(error_str)
                     )
                 except Exception:
                     await bound_log.awarning("error_comment_failed", exc_info=True)
@@ -234,8 +243,8 @@ async def handle_discussion_interaction(
                 )
                 try:
                     await gl_client.post_mr_comment(
-                        project.id,
-                        mr.iid,
+                        project_id,
+                        mr_iid,
                         "❌ Unable to process your request. "
                         "The service encountered an unexpected error. "
                         "Please try again or contact the project administrator.",
@@ -248,7 +257,7 @@ async def handle_discussion_interaction(
                     await asyncio.to_thread(shutil.rmtree, repo_path, True)
 
         if repo_locks:
-            async with repo_locks.acquire(project.git_http_url):
+            async with repo_locks.acquire(clone_url):
                 await _execute()
         else:
             await _execute()

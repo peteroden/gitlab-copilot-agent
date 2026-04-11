@@ -11,6 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from gitlab_copilot_agent.app_context import get_app_context
 from gitlab_copilot_agent.discussion_models import AgentIdentity
 from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
+from gitlab_copilot_agent.events import TaskEvent
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.metrics import webhook_errors_total, webhook_received_total
 from gitlab_copilot_agent.models import MergeRequestWebhookPayload, NoteWebhookPayload
@@ -71,17 +72,29 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
             resolution_behavior = resolved.resolution_behavior
             credential_ref = resolved.credential_ref
 
-    bound = log.bind(project_id=project_id, mr_iid=mr.iid, head_sha=head_sha)
+    event = TaskEvent(
+        task_type="review",
+        project_id=project_id,
+        repo=payload.project.path_with_namespace,
+        clone_url=payload.project.git_http_url,
+        branch=mr.source_branch,
+        target_branch=mr.target_branch,
+        mr_iid=mr.iid,
+        head_sha=head_sha,
+        trigger_source="webhook",
+        token=project_token,
+        credential_ref=credential_ref,
+        resolution_behavior=resolution_behavior,
+    )
+
+    bound = log.bind(**event.log_safe())
     bound.info("background_review_starting")
     try:
         await handle_review(
             settings,
-            payload,
+            event,
             executor,
-            project_token=project_token,
             credential_registry=credential_registry,
-            resolution_behavior=resolution_behavior,
-            credential_ref=credential_ref,
         )
         review_tracker.mark(project_id, mr.iid, head_sha)
         # Also mark in shared dedup store so the poller won't re-review
@@ -151,26 +164,44 @@ async def _process_discussion(
 
     # Resolve resolution behavior from project registry or global settings
     resolution_behavior = settings.resolution_behavior
+    credential_ref = "default"
     if registry is not None:
         resolved_project = registry.get_by_project_id(payload.project.id)
         if resolved_project is not None:
             resolution_behavior = resolved_project.resolution_behavior
+            credential_ref = resolved_project.credential_ref
+
+    mr_iid = payload.merge_request.iid if payload.merge_request else 0
+    event = TaskEvent(
+        task_type="discussion",
+        project_id=payload.project.id,
+        repo=payload.project.path_with_namespace,
+        clone_url=payload.project.git_http_url,
+        branch=payload.merge_request.source_branch,
+        target_branch=payload.merge_request.target_branch,
+        mr_iid=mr_iid,
+        trigger_source="webhook",
+        token=project_token,
+        credential_ref=credential_ref,
+        resolution_behavior=resolution_behavior,
+        note_id=payload.object_attributes.id,
+        discussion_id=payload.object_attributes.discussion_id,
+        note_body=payload.object_attributes.note,
+    )
 
     bound = log.bind(
         project_id=payload.project.id,
-        mr_iid=payload.merge_request.iid if payload.merge_request else None,
+        mr_iid=mr_iid,
         note_body=payload.object_attributes.note[:80],
     )
     bound.info("background_discussion_starting")
     try:
         await handle_discussion_interaction(
             settings,
-            payload,
+            event,
             executor,
             agent_identity,
-            project_token=project_token,
             repo_locks=repo_locks,
-            resolution_behavior=resolution_behavior,
         )
         bound.info("background_discussion_completed")
     except Exception:
