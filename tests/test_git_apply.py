@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from gitlab_copilot_agent.git_operations import (
-    _validate_patch,
+from gitlab_copilot_agent.git import (
     git_apply_patch,
     git_diff_staged,
     git_head_sha,
 )
+from gitlab_copilot_agent.git.patches import _validate_patch
 
 
 @pytest.fixture

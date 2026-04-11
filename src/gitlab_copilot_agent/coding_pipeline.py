@@ -17,7 +17,7 @@ import structlog
 from gitlab_copilot_agent.coding_engine import run_coding_task, strip_json_block
 from gitlab_copilot_agent.coding_workflow import apply_coding_result
 from gitlab_copilot_agent.error_messages import user_error_message
-from gitlab_copilot_agent.git_operations import (
+from gitlab_copilot_agent.git import (
     TransientCloneError,
     git_clone,
     git_commit,

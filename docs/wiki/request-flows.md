@@ -31,7 +31,7 @@ sequenceDiagram
     WH->>WH: Check project allowlist
     WH->>WH: Check action in HANDLED_ACTIONS
     WH->>WH: Check oldrev (skip if None)
-    WH->>WH: Check ReviewedMRTracker (skip if seen)
+    WH->>WH: Check DeduplicationService (skip if seen)
     
     WH->>WH: Add _process_review to background_tasks
     WH-->>GL: 200 {"status": "queued"}
@@ -40,7 +40,7 @@ sequenceDiagram
     
     WH->>ORCH: handle_review(settings, payload, executor, resolution_behavior)
     ORCH->>GLCL: clone_repo(git_http_url, source_branch, token)
-    GLCL->>GLCL: git_operations.git_clone()
+    GLCL->>GLCL: git.clone.git_clone()
     GLCL-->>ORCH: repo_path: Path
     
     ORCH->>GLCL: list_mr_discussions(project_id, mr_iid)
@@ -69,7 +69,7 @@ sequenceDiagram
         COP->>SDK: session.send({"prompt": user_prompt})
         SDK-->>COP: assistant.message events
         COP-->>EXEC: raw_review: str
-    else KubernetesTaskExecutor
+    else RemoteTaskExecutor
         EXEC->>EXEC: create_namespaced_job()
         Note over EXEC: Job runs task_runner.py
         EXEC->>EXEC: _wait_for_result (poll Redis)
@@ -138,7 +138,7 @@ sequenceDiagram
     participant DE as discussion_engine.py
     participant GLCL as gitlab_client.py
     participant EXEC as TaskExecutor
-    participant GIT as git_operations.py
+    participant GIT as git/
 
     GL->>WH: POST /webhook (note event)
     WH->>WH: _validate_webhook_token()
@@ -316,7 +316,7 @@ sequenceDiagram
     participant POLL as jira_poller.py
     participant JCL as jira_client.py
     participant CODING as coding_orchestrator.py
-    participant GIT as git_operations.py
+    participant GIT as git/
     participant EXEC as TaskExecutor
     participant COP as copilot_session.py
     participant GLCL as gitlab_client.py
@@ -410,7 +410,7 @@ sequenceDiagram
 
 ### Task Execution
 - LocalTaskExecutor: exceptions propagate to caller
-- KubernetesTaskExecutor:
+- RemoteTaskExecutor:
   - Job timeout: delete Job, raise TimeoutError
   - Job failure: read pod logs, delete Job, raise RuntimeError with logs
   - Redis unavailable: exception propagates

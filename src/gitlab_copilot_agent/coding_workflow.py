@@ -6,7 +6,7 @@ from pathlib import Path
 
 import structlog
 
-from gitlab_copilot_agent.git_operations import git_apply_patch, git_head_sha
+from gitlab_copilot_agent.git import git_apply_patch, git_head_sha
 from gitlab_copilot_agent.task_executor import CodingResult, TaskResult
 
 log = structlog.get_logger()

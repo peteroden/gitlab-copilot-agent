@@ -26,7 +26,7 @@ from gitlab_copilot_agent.discussion_models import (
     DiscussionHistory,
 )
 from gitlab_copilot_agent.error_messages import branch_deleted_message, user_error_message
-from gitlab_copilot_agent.git_operations import (
+from gitlab_copilot_agent.git import (
     TransientCloneError,
     git_commit,
     git_push,

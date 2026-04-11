@@ -14,7 +14,7 @@ from gitlab_copilot_agent.coding_engine import parse_agent_output
 from gitlab_copilot_agent.concurrency import QueueMessage, TaskQueue
 from gitlab_copilot_agent.config import TaskRunnerSettings
 from gitlab_copilot_agent.copilot_session import run_copilot_session
-from gitlab_copilot_agent.git_operations import (
+from gitlab_copilot_agent.git import (
     MAX_PATCH_SIZE,
     extract_repo_tarball,
     git_diff_staged,

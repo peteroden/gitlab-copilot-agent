@@ -187,7 +187,7 @@ Each GitLab token maps to a different user. The `CredentialRegistry` lazily disc
 
 ### Clone URLs
 
-**Validation**: `git_operations.py` → `_validate_clone_url()`
+**Validation**: `git/validation.py` → `_validate_clone_url()`
 
 **Checks**:
 1. Valid URL format (via `urlparse`)
@@ -240,7 +240,7 @@ Each GitLab token maps to a different user. The `CredentialRegistry` lazily disc
 
 **Source**: K8s Job pod captures `git diff --cached --binary` after Copilot modifies files, stores as `CodingResult.patch` in Redis.
 
-**Validation** (`coding_workflow.py` → `apply_coding_result()`, `git_operations.py` → `_validate_patch()`):
+**Validation** (`coding_workflow.py` → `apply_coding_result()`, `git/patches.py` → `_validate_patch()`):
 
 **Checks**:
 1. `base_sha` validation — patch base must match local HEAD (detects clone divergence or replay)
@@ -322,7 +322,7 @@ Only the secrets needed by Job pods are mounted. **GITLAB_TOKEN is never passed 
 - No network egress policy yet (attacker can still exfiltrate via DNS/HTTP — see Recommended Hardening)
 - Egress restricted by NetworkPolicy when deployed via Helm (allows Copilot API, Azure Storage, DNS — GitLab egress still permitted but no longer needed)
 
-**Code**: `k8s_executor.py` → `_create_job()`
+**Code**: `remote_executor.py` → `execute()`
 
 ### Azure Container Apps Executor
 
@@ -348,7 +348,7 @@ Only the secrets needed by Job pods are mounted. **GITLAB_TOKEN is never passed 
 
 **Result Path**: Job stores result in Azure Blob Storage (via private endpoint). Controller reads result — only the controller posts API calls.
 
-**Code**: `aca_executor.py` → `_start_execution()`
+**Code**: `remote_executor.py` → `execute()` (unified for both K8s and ACA backends)
 
 ### Plugin Isolation
 - Per-session HOME directory (`tempfile.mkdtemp()`) prevents plugin state leakage between sessions/repos
@@ -386,7 +386,7 @@ Only the secrets needed by Job pods are mounted. **GITLAB_TOKEN is never passed 
 
 ### Exclusion from Logs
 
-**Git Errors**: `git_operations.py` → token replaced with `***` in error messages.
+**Git Errors**: `git/` package → token replaced with `***` in error messages.
 
 **URL Sanitization**: `_sanitize_url_for_log()` removes credentials from URLs.
 

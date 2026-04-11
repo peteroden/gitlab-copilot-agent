@@ -8,7 +8,7 @@ OTEL setup, all 7 metrics, structured logging, trace correlation, Azure App Insi
 
 ### Initialization
 
-**Location**: `telemetry.py` → `init_telemetry()`
+**Location**: `telemetry/tracing.py` → `init_telemetry()`
 
 **Gated By**: `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable
 
@@ -228,7 +228,7 @@ copilot_session_duration.record(elapsed, {"task_type": "review"})
 
 ### Configuration
 
-**Location**: `telemetry.py` → `configure_logging()`
+**Location**: `telemetry/logging.py` → `configure_logging()`
 
 **Library**: structlog
 
@@ -305,7 +305,7 @@ with _tracer.start_as_current_span("mr.review", attributes={"project_id": projec
 
 ### Trace Context in Logs
 
-**Processor**: `telemetry.py` → `add_trace_context()`
+**Processor**: `telemetry/logging.py` → `add_trace_context()`
 
 **Behavior**:
 1. Get current span from context
@@ -325,9 +325,9 @@ with _tracer.start_as_current_span("mr.review", attributes={"project_id": projec
 ```
 http.request (FastAPI)
 └── mr.review (orchestrator.py)
-    ├── git.clone (git_operations.py)
+    ├── git.clone (git/clone.py)
     ├── copilot.session (copilot_session.py)
-    └── git.cleanup (git_operations.py)
+    └── git.cleanup (git/clone.py)
 ```
 
 **Attributes**: Each span includes relevant context (project_id, mr_iid, repo_path, etc.)

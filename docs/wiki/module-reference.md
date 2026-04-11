@@ -19,7 +19,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Globals**:
 - `app: FastAPI`: FastAPI application instance with lifespan and webhook router
 
-**Internal Imports**: `config`, `app_context`, `telemetry`, `gitlab_client`, `gitlab_poller`, `jira_client`, `jira_poller`, `webhook`, `concurrency`, `state`, `task_executor`, `coding_orchestrator`, `git_operations`, `mapping_models`, `credential_registry`, `project_registry`
+**Internal Imports**: `config/`, `app_context`, `telemetry/`, `gitlab_client`, `gitlab_poller`, `jira_client`, `jira_poller`, `webhook`, `concurrency/`, `state`, `task_executor`, `coding_orchestrator`, `git/`, `mapping_models`, `credential_registry`, `project_registry`, `dedup`, `events`
 
 **Depended On By**: Deployed as uvicorn entrypoint
 
@@ -121,7 +121,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `handle_discussion_interaction(settings: Settings, payload: NoteWebhookPayload, executor: TaskExecutor, agent_identity: AgentIdentity, project_token: str | None = None, repo_locks: DistributedLock | None = None, resolution_behavior: str = "suggest") -> None`: Full discussion pipeline — clone → fetch MR details & discussions → find triggering thread → build prompt → run LLM → parse response → post reply (+ optional commit/push) → handle resolution per `resolution_behavior`
 - `_find_triggering_discussion(discussions: list[Discussion], note_id: int) -> Discussion | None`: Locate the discussion containing the triggering note
 
-**Internal Imports**: `discussion_engine`, `discussion_models`, `coding_workflow`, `git_operations`, `gitlab_client`, `task_executor`, `telemetry`, `concurrency`, `config`, `models`, `prompt_defaults`
+**Internal Imports**: `discussion_engine`, `discussion_models`, `coding_workflow`, `git/`, `gitlab_client`, `task_executor`, `telemetry/`, `concurrency/`, `config/`, `models`, `prompt_defaults`, `events`, `pipeline`, `discussion_pipeline`
 
 **Depended On By**: `webhook.py`
 
@@ -168,7 +168,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
     - Adds Jira comment with MR URL
     - Emits `coding_tasks_total` and `coding_tasks_duration` metrics
 
-**Internal Imports**: `config`, `gitlab_client`, `jira_client`, `jira_models`, `project_registry`, `task_executor`, `git_operations`, `coding_engine`, `coding_workflow`, `metrics`, `telemetry`, `concurrency`
+**Internal Imports**: `config/`, `gitlab_client`, `jira_client`, `jira_models`, `project_registry`, `task_executor`, `git/`, `coding_engine`, `coding_workflow`, `metrics`, `telemetry/`, `concurrency/`, `events`, `pipeline`, `coding_pipeline`
 
 **Depended On By**: `main.py` (as Jira poller handler)
 
@@ -251,7 +251,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 **Key Functions**:
 - `apply_coding_result(result: TaskResult, repo_path: Path) -> None`: Validate `base_sha`, apply patch via `git apply --3way` if `CodingResult` has a patch. No-op for local executor (empty patch).
 
-**Internal Imports**: `task_executor`, `git_operations`, `telemetry`
+**Internal Imports**: `task_executor`, `git/`, `telemetry/`
 
 **Depended On By**: `coding_orchestrator.py`
 
@@ -296,7 +296,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - `execute(task: TaskParams) -> TaskResult`: Check cache, check lock, upload tarball, enqueue, poll for result
   - `_poll_result(task: TaskParams) -> TaskResult`: Poll ResultStore until result or timeout
 
-**Internal Imports**: `task_executor`, `git_operations`, `concurrency`
+**Internal Imports**: `task_executor`, `git/`, `concurrency/`
 
 **Depended On By**: `main.py` (instantiation when `task_executor=kubernetes`)
 
@@ -352,7 +352,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 **Security**: Zero GitLab credentials. Repo received via blob transfer from controller.
 
-**Internal Imports**: `config`, `copilot_session`, `git_operations`, `coding_engine`, `prompt_defaults`
+**Internal Imports**: `config/`, `copilot_session`, `git/`, `coding_engine`, `prompt_defaults`
 
 **Depended On By**: K8s Job container command
 
@@ -383,7 +383,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - `_request(method, path, *, idempotent, **kwargs) -> Response`: HTTP request with retry on 429/5xx for idempotent (GET) requests; respects `Retry-After` header
   - `_paginate(path, params) -> list[dict]`: Fetch all pages of a paginated endpoint
   - `get_mr_details(project_id, mr_iid) -> MRDetails`: Fetch MR changes; retries on null diff_refs (GitLab race)
-  - `clone_repo(clone_url, branch, token, clone_dir) -> Path`: Clone repo via git_operations
+  - `clone_repo(clone_url, branch, token, clone_dir) -> Path`: Clone repo via `git/` package
   - `cleanup(repo_path) -> None`: Remove cloned repo
   - `create_merge_request(...) -> int`: Create MR, return iid
   - `post_mr_comment(project_id, mr_iid, body) -> None`: Post MR note
@@ -398,7 +398,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - `compare_commits(project_id, from_sha, to_sha) -> list[MRChange]`: Compare two commits
   - `get_mr_commits(project_id, mr_iid) -> list[MRCommit]`: Fetch MR commits (paginated)
 
-**Internal Imports**: `git_operations`, `discussion_models`
+**Internal Imports**: `git/`, `discussion_models`
 
 **Depended On By**: `orchestrator.py`, `coding_orchestrator.py`, `gitlab_poller.py`, `main.py`
 
@@ -426,15 +426,21 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 
 ## Shared Utilities
 
-### `git_operations.py`
-**Purpose**: Git CLI wrappers (clone, branch, commit, push).
+### `git/` package (formerly `git_operations.py`)
+**Purpose**: Git CLI wrappers (clone, branch, commit, push, patch, archive, validation). Split from the former `git_operations.py` monolith into focused submodules.
+
+**Submodules**:
+- **`clone.py`**: Repository cloning (`git_clone`) with URL validation and credential embedding
+- **`operations.py`**: Branch, commit, push operations (`git_create_branch`, `git_unique_branch`, `git_commit`, `git_push`, `git_head_sha`)
+- **`patches.py`**: Patch application and staged diff capture (`git_apply_patch`, `git_diff_staged`, `_validate_patch`)
+- **`archive.py`**: Repository archiving utilities for remote executor blob transfer
+- **`validation.py`**: URL and patch validation (`_validate_clone_url`, `_sanitize_url_for_log`, `MAX_PATCH_SIZE`)
 
 **Key Constants**:
 - `CLONE_DIR_PREFIX = "mr-review-"`
-- `_GIT_TIMEOUT = 60`
 - `MAX_PATCH_SIZE = 10 * 1024 * 1024` (10 MB) — maximum allowed patch size for diff passback
 
-**Key Functions**:
+**Key Functions** (re-exported from `git/__init__.py`):
 - `git_clone(clone_url: str, branch: str, token: str, clone_dir: str | None) -> Path`: Clone repo with embedded credentials, validate URL
 - `git_create_branch(repo_path: Path, branch_name: str) -> None`: Create and checkout branch
 - `git_unique_branch(repo_path: Path, base_name: str) -> str`: Create branch with collision detection — appends `-2`, `-3`, etc. using `git ls-remote --heads` (works with shallow clones)
@@ -443,14 +449,10 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 - `git_apply_patch(repo_path: Path, patch: str) -> None`: Apply unified diff with `git apply --3way --binary`
 - `git_head_sha(repo_path: Path) -> str`: Get current HEAD commit SHA
 - `git_diff_staged(repo_path: Path) -> str`: Capture staged diff (`git diff --cached --binary`), preserves trailing whitespace
-- `_validate_patch(patch: str) -> None`: Validate patch (no `../` path traversal, size ≤ MAX_PATCH_SIZE)
-- `_validate_clone_url(url: str) -> None`: Ensure HTTPS, no embedded credentials, valid host/path
-- `_sanitize_url_for_log(url: str) -> str`: Remove credentials from URL
-- `_run_git(repo_path: Path, *args: str, sanitize_token: str | None, timeout: int) -> str`: Run git command, sanitize errors
 
-**Internal Imports**: `telemetry`
+**Internal Imports**: `telemetry/`
 
-**Depended On By**: `gitlab_client.py`, `coding_orchestrator.py`, `task_runner.py`, `coding_workflow.py`
+**Depended On By**: `gitlab_client.py`, `coding_orchestrator.py`, `task_runner.py`, `coding_workflow.py`, `review_pipeline.py`, `discussion_pipeline.py`, `coding_pipeline.py`
 
 ---
 
@@ -637,7 +639,7 @@ All use `frozen=True` config.
 **Purpose**: Frozen `AppContext` dataclass replacing `app.state` service locator. Provides typed dependency injection.
 
 **Key Types**:
-- `AppContext`: Frozen dataclass holding `settings`, `executor`, `repo_locks`, `dedup_store`, `review_tracker`, `credential_registry`, `allowed_project_ids`
+- `AppContext`: Frozen dataclass holding `settings`, `executor`, `repo_locks`, `dedup_store`, `dedup`, `credential_registry`, `allowed_project_ids`
 
 **Key Functions**:
 - `get_app_context(request: Request) -> AppContext`: FastAPI `Depends()` accessor
@@ -669,10 +671,16 @@ All use `frozen=True` config.
 
 ---
 
-### `config.py`
-**Purpose**: Application configuration via environment variables.
+### `config/` package (formerly `config.py`)
+**Purpose**: Application configuration via environment variables. Split from `config.py` into a package for better organization.
 
-**Key Models**:
+**Submodules**:
+- **`settings.py`**: `Settings` (BaseSettings) — all env vars (see configuration-reference.md), `JiraSettings`
+- **`runner_settings.py`**: `TaskRunnerSettings` for K8s Job entrypoint configuration
+- **`base.py`**: Shared mixins (`CopilotSettingsMixin`, `PromptSettingsMixin`, `DispatchSettingsMixin`) used by both `Settings` and `TaskRunnerSettings`
+- **`validators.py`**: Cross-field validators (auth checks, state backend validation, project list validation)
+
+**Key Models** (re-exported from `config/__init__.py`):
 - `JiraSettings`: url, email, api_token, trigger_status, in_progress_status, poll_interval, project_map_json
 - `Settings` (BaseSettings): All env vars (see configuration-reference.md)
   - `jira` property: return JiraSettings if all required fields set, else None
@@ -686,8 +694,12 @@ All use `frozen=True` config.
 
 ## State & Concurrency
 
-### `concurrency.py`
-**Purpose**: In-memory locking, deduplication, and tracking.
+### `concurrency/` package (formerly `concurrency.py`)
+**Purpose**: In-memory locking and deduplication primitives. Split from `concurrency.py` into a package.
+
+**Submodules**:
+- **`protocols.py`**: `DistributedLock` and `DeduplicationStore` protocol definitions, `TaskQueue`, `QueueMessage`
+- **`memory.py`**: `MemoryLock`, `MemoryDedup` in-memory implementations
 
 **Key Protocols**:
 - `DistributedLock`: `acquire(key: str, ttl_seconds: int) -> AbstractAsyncContextManager[None]`, `aclose()`
@@ -698,15 +710,100 @@ All use `frozen=True` config.
   - `acquire(key: str, ttl_seconds: int)`: Context manager, evicts unlocked entries after release
 - `MemoryDedup`: In-memory seen set with size-based eviction
   - `is_seen(key: str) -> bool`, `mark_seen(key: str, ttl_seconds: int) -> None`
-- `ProcessedIssueTracker`: Track processed Jira issue keys (LRU eviction)
-- `ReviewedMRTracker`: Track reviewed (project_id, mr_iid, head_sha) tuples (LRU eviction)
 
 **Aliases**:
 - `RepoLockManager = MemoryLock` (backward compatibility)
 
 **Internal Imports**: None
 
-**Depended On By**: `main.py`, `webhook.py`, `gitlab_poller.py`, `coding_orchestrator.py`
+**Depended On By**: `main.py`, `webhook.py`, `gitlab_poller.py`, `coding_orchestrator.py`, `dedup.py`
+
+---
+
+### `dedup.py`
+**Purpose**: Unified deduplication service consolidating all dedup logic into a single interface. Replaces the former `ReviewedMRTracker` and `ProcessedIssueTracker` classes.
+
+**Key Classes**:
+- `DeduplicationService`: Wraps a `DeduplicationStore` with typed helpers for each event kind
+  - `is_review_seen(project_id: int, mr_iid: int, head_sha: str) -> bool`
+  - `mark_review(project_id: int, mr_iid: int, head_sha: str) -> None`
+  - `is_note_seen(project_id: int, mr_iid: int, note_id: int) -> bool`
+  - `mark_note(project_id: int, mr_iid: int, note_id: int) -> None`
+  - `is_issue_seen(issue_key: str) -> bool`
+  - `mark_issue(issue_key: str) -> None`
+
+**Internal Imports**: `concurrency/`
+
+**Depended On By**: `webhook.py`, `gitlab_poller.py`, `jira_poller.py`, `app_context.py`
+
+---
+
+### `events.py`
+**Purpose**: Unified internal event model. Provides `TaskEvent` Pydantic model that replaces direct webhook payload passing between ingestion and processing layers.
+
+**Key Models**:
+- `TaskEvent`: Pydantic model representing a normalized event from any ingestion source (webhook, poller). Orchestrators and pipelines receive `TaskEvent` instead of raw webhook payloads.
+
+**Internal Imports**: `models`
+
+**Depended On By**: `webhook.py`, `gitlab_poller.py`, `orchestrator.py`, `discussion_orchestrator.py`, `review_pipeline.py`, `discussion_pipeline.py`, `coding_pipeline.py`
+
+---
+
+### `pipeline.py`
+**Purpose**: Pipeline protocol and runner for structured multi-stage processing. Defines a 4-stage protocol (prepare, execute, process, cleanup) and a `run_pipeline()` function that drives any conforming pipeline.
+
+**Key Protocols**:
+- `Pipeline`: Protocol with stages `prepare()`, `execute()`, `process()`, `cleanup()`
+
+**Key Classes**:
+- `BasePipelineContext`: Base dataclass for pipeline stage context
+
+**Key Functions**:
+- `run_pipeline(pipeline: Pipeline, context: BasePipelineContext) -> None`: Sequential runner that calls each stage, with cleanup in finally block
+
+**Internal Imports**: None
+
+**Depended On By**: `review_pipeline.py`, `discussion_pipeline.py`, `coding_pipeline.py`
+
+---
+
+### `review_pipeline.py`
+**Purpose**: MR review pipeline implementation. Orchestrators call `run_pipeline(ReviewPipeline(...), ctx)`.
+
+**Key Classes**:
+- `ReviewContext(BasePipelineContext)`: Context for review stages (settings, event, executor, etc.)
+- `ReviewPipeline`: Implements `Pipeline` — clone, review via LLM, parse, post comments
+
+**Internal Imports**: `pipeline`, `events`, `git/`, `gitlab_client`, `review_engine`, `comment_parser`, `comment_poster`, `telemetry/`
+
+**Depended On By**: `orchestrator.py`
+
+---
+
+### `discussion_pipeline.py`
+**Purpose**: Discussion interaction pipeline implementation. Handles @mention and thread-reply interactions.
+
+**Key Classes**:
+- `DiscussionContext(BasePipelineContext)`: Context for discussion stages
+- `DiscussionPipeline`: Implements `Pipeline` — clone, fetch context, LLM, reply ± commit/push ± resolve
+
+**Internal Imports**: `pipeline`, `events`, `git/`, `gitlab_client`, `discussion_engine`, `coding_workflow`, `telemetry/`, `concurrency/`
+
+**Depended On By**: `discussion_orchestrator.py`
+
+---
+
+### `coding_pipeline.py`
+**Purpose**: Jira coding task pipeline implementation. Handles issue-to-MR workflow.
+
+**Key Classes**:
+- `CodingContext(BasePipelineContext)`: Context for coding stages
+- `CodingPipeline`: Implements `Pipeline` — clone, branch, code via LLM, apply result, commit, push, create MR
+
+**Internal Imports**: `pipeline`, `events`, `git/`, `gitlab_client`, `jira_client`, `coding_engine`, `coding_workflow`, `telemetry/`, `concurrency/`
+
+**Depended On By**: `coding_orchestrator.py`
 
 ---
 
@@ -719,7 +816,7 @@ All use `frozen=True` config.
 - `create_result_store(*, azure_storage_account_url, azure_storage_connection_string, task_blob_container) -> ResultStore`: Factory — returns `BlobResultStore` when Azure Storage is configured, otherwise `MemoryResultStore`
 - `create_task_queue(*, azure_storage_queue_url, azure_storage_account_url, azure_storage_connection_string, task_queue_name, task_blob_container) -> TaskQueue`: Factory — returns `AzureStorageTaskQueue` when Azure Storage is configured, otherwise `MemoryTaskQueue`
 
-**Internal Imports**: `concurrency`, `azure_storage` (lazy)
+**Internal Imports**: `concurrency/`, `azure_storage` (lazy)
 
 **Depended On By**: `main.py`
 
@@ -727,13 +824,19 @@ All use `frozen=True` config.
 
 ## Telemetry
 
-### `telemetry.py`
-**Purpose**: OpenTelemetry tracing, metrics, and log export setup.
+### `telemetry/` package (formerly `telemetry.py`)
+**Purpose**: OpenTelemetry tracing, metrics, and log export setup. Split from `telemetry.py` into a package.
+
+**Submodules**:
+- **`tracing.py`**: TracerProvider setup, `get_tracer()`, span utilities
+- **`logging.py`**: Structlog configuration, `add_trace_context()` processor, `emit_to_otel_logs()` processor
+- **`exporters.py`**: OTLP exporter configuration (gRPC and HTTP/protobuf)
+- **`_state.py`**: Module-level state for provider instances
 
 **Key Constants**:
 - `_SERVICE_NAME = "gitlab-copilot-agent"`
 
-**Key Functions**:
+**Key Functions** (re-exported from `telemetry/__init__.py`):
 - `init_telemetry() -> None`: Configure OTEL providers, exporters, auto-instrumentation (FastAPI, httpx)
   - No-op if OTEL_EXPORTER_OTLP_ENDPOINT unset
   - Sets up TracerProvider, MeterProvider, LoggerProvider
@@ -745,7 +848,7 @@ All use `frozen=True` config.
 
 **Internal Imports**: None
 
-**Depended On By**: `main.py`, `orchestrator.py`, `coding_orchestrator.py`, `copilot_session.py`, `git_operations.py`, `jira_poller.py`
+**Depended On By**: `main.py`, `orchestrator.py`, `coding_orchestrator.py`, `copilot_session.py`, `git/`, `jira_poller.py`, `review_pipeline.py`, `discussion_pipeline.py`, `coding_pipeline.py`
 
 ---
 
@@ -818,19 +921,25 @@ All use `frozen=True` config.
 | `task_runner.py` | Execution | 134 | K8s Job entrypoint |
 | `gitlab_client.py` | Clients | 224 | GitLab API client |
 | `jira_client.py` | Clients | 117 | Jira API client |
-| `git_operations.py` | Utils | 194 | Git CLI wrappers |
+| `git/` | Utils | ~250 | Git CLI wrappers (clone, branch, commit, push, patch, archive) |
 | `comment_parser.py` | Utils | 75 | Review parsing |
 | `comment_poster.py` | Utils | 184 | Comment posting + activity summary |
 | `repo_config.py` | Utils | 184 | Repo config discovery |
 | `models.py` | Data | 79 | Webhook models |
 | `jira_models.py` | Data | 87 | Jira API models |
 | `discussion_models.py` | Data | 71 | MR discussion history models |
-| `config.py` | Data | 137 | Settings |
-| `concurrency.py` | State | 208 | In-memory locks/dedup |
+| `config/` | Data | ~200 | Settings (env vars, mixins, validators) |
+| `concurrency/` | State | ~150 | In-memory locks/dedup protocols + implementations |
+| `dedup.py` | State | ~80 | Unified DeduplicationService |
+| `events.py` | Data | ~80 | TaskEvent internal event model |
+| `pipeline.py` | Processing | ~120 | Pipeline protocol + runner |
+| `review_pipeline.py` | Processing | ~180 | Review pipeline implementation |
+| `discussion_pipeline.py` | Processing | ~220 | Discussion pipeline implementation |
+| `coding_pipeline.py` | Processing | ~150 | Coding pipeline implementation |
 | `state.py` | State | 79 | Factory functions for concurrency primitives |
-| `telemetry.py` | Telemetry | 130 | OTEL setup |
+| `telemetry/` | Telemetry | ~180 | OTEL setup (tracing, logging, exporters) |
 | `metrics.py` | Telemetry | 52 | Metrics instruments |
 | `process_sandbox.py` | Utils | 20 | CLI path resolution |
 | `plugin_manager.py` | Utils | 88 | Plugin installation |
 
-**Total: 33 modules, ~3,925 lines of code**
+**Total: 40 modules/packages, ~5,300 lines of code**

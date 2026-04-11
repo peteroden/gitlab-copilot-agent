@@ -8,10 +8,12 @@
   "src/gitlab_copilot_agent/coding_workflow.py": {
     "TC003": 1
   },
-  "src/gitlab_copilot_agent/concurrency.py": {
-    "D102": 21,
-    "D105": 2,
-    "TC003": 1
+  "src/gitlab_copilot_agent/concurrency/memory.py": {
+    "D102": 11,
+    "D105": 2
+  },
+  "src/gitlab_copilot_agent/concurrency/protocols.py": {
+    "D102": 10
   },
   "src/gitlab_copilot_agent/gitlab_client.py": {
     "D102": 15,
