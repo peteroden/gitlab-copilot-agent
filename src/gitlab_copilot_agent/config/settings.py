@@ -1,11 +1,16 @@
-"""Application configuration via environment variables."""
+"""Controller settings loaded from environment variables."""
 
 import warnings
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings
 
+from gitlab_copilot_agent.config.base import (
+    CopilotSettingsMixin,
+    DispatchSettingsMixin,
+    PromptSettingsMixin,
+)
 from gitlab_copilot_agent.mapping_models import ResolutionBehavior
 
 
@@ -32,7 +37,9 @@ class JiraSettings(BaseModel):
     )
 
 
-class Settings(BaseSettings):
+class Settings(  # pyright: ignore[reportIncompatibleVariableOverride]
+    CopilotSettingsMixin, PromptSettingsMixin, DispatchSettingsMixin, BaseSettings
+):
     """Service configuration loaded from environment variables."""
 
     model_config = {"env_prefix": ""}
@@ -43,52 +50,6 @@ class Settings(BaseSettings):
     gitlab_webhook_secret: str | None = Field(
         default=None,
         description="Secret for validating webhook payloads (required for webhook mode)",
-    )
-
-    # Copilot / LLM
-    copilot_model: str = Field(default="gpt-4", description="Model to use for reviews")
-    copilot_provider_type: str | None = Field(
-        default=None, description="BYOK provider type: 'azure', 'openai', or None for Copilot"
-    )
-    copilot_provider_base_url: str | None = Field(
-        default=None, description="BYOK provider base URL"
-    )
-    copilot_provider_api_key: str | None = Field(default=None, description="BYOK provider API key")
-    github_token: str | None = Field(
-        default=None, description="GitHub token for Copilot auth (if not using BYOK)"
-    )
-    copilot_plugins: str | list[str] = Field(
-        default_factory=list,
-        description="Service-level Copilot CLI plugins to install at runtime",
-    )
-    copilot_plugin_marketplaces: str | list[str] = Field(
-        default_factory=list, description="Custom plugin marketplace URLs"
-    )
-
-    # System prompts (override or append to built-in defaults)
-    system_prompt: str | None = Field(
-        default=None, description="Global base prompt prepended to all persona prompts"
-    )
-    system_prompt_suffix: str | None = Field(
-        default=None, description="Appended to global base prompt"
-    )
-    coding_system_prompt: str | None = Field(
-        default=None, description="Full override of coding system prompt"
-    )
-    coding_system_prompt_suffix: str | None = Field(
-        default=None, description="Appended to default coding system prompt"
-    )
-    review_system_prompt: str | None = Field(
-        default=None, description="Full override of review system prompt"
-    )
-    review_system_prompt_suffix: str | None = Field(
-        default=None, description="Appended to default review system prompt"
-    )
-    discussion_system_prompt: str | None = Field(
-        default=None, description="Full override of discussion system prompt"
-    )
-    discussion_system_prompt_suffix: str | None = Field(
-        default=None, description="Appended to default discussion system prompt"
     )
 
     # Prompt delivery strategy
@@ -149,31 +110,6 @@ class Settings(BaseSettings):
         default=600, description="Container Apps Job execution timeout in seconds"
     )
 
-    # Dispatch backend (determines queue + result store)
-    dispatch_backend: Literal["azure_storage", "local"] = Field(
-        default="azure_storage",
-        description="Dispatch backend: 'azure_storage' (Queue + Blob via Claim Check) "
-        "or 'local' (in-memory, no Azure dependencies)",
-    )
-    azure_storage_account_url: str | None = Field(
-        default=None,
-        description="Azure Blob Storage endpoint, e.g. https://<acct>.blob.core.windows.net",
-    )
-    azure_storage_queue_url: str | None = Field(
-        default=None,
-        description="Azure Queue Storage endpoint, e.g. https://<acct>.queue.core.windows.net",
-    )
-    azure_storage_connection_string: str | None = Field(
-        default=None,
-        description="Azure Storage connection string (for Azurite/K8s); overrides URL-based auth",
-    )
-    task_queue_name: str = Field(
-        default="task-queue", description="Azure Storage Queue name for task dispatch"
-    )
-    task_blob_container: str = Field(
-        default="task-data", description="Azure Blob container for params and results"
-    )
-
     # Git clone retry
     git_clone_max_retries: int = Field(
         default=3, ge=1, description="Max retry attempts for transient git clone failures"
@@ -227,19 +163,6 @@ class Settings(BaseSettings):
     jira_project_map: str | None = Field(
         default=None, description="JSON: Jira project key → GitLab project config"
     )
-
-    @field_validator("copilot_plugins", "copilot_plugin_marketplaces", mode="before")
-    @classmethod
-    def _parse_comma_list(cls, v: object) -> object:
-        if isinstance(v, str):
-            v = v.strip()
-            if not v:
-                return []
-            # Try JSON first, fall back to comma-separated
-            if v.startswith("["):
-                return v  # let pydantic handle JSON
-            return [item.strip() for item in v.split(",") if item.strip()]
-        return v
 
     @property
     def jira(self) -> JiraSettings | None:
@@ -323,92 +246,4 @@ class Settings(BaseSettings):
                     f"dispatch_backend='azure_storage' requires: {', '.join(missing)} "
                     f"(or set AZURE_STORAGE_CONNECTION_STRING)"
                 )
-        return self
-
-
-class TaskRunnerSettings(BaseSettings):
-    """Minimal settings for the task runner job.
-
-    Unlike the full ``Settings``, this has no controller-specific validations
-    (webhook secret, polling projects, k8s/ACA executor config).  The task
-    runner only needs Copilot/LLM credentials and prompt configuration.
-    It receives the repo via blob transfer — no GitLab credentials needed.
-    """
-
-    model_config = {"env_prefix": ""}
-
-    # Copilot / LLM
-    copilot_model: str = Field(default="gpt-4", description="Model to use")
-    copilot_provider_type: str | None = Field(default=None, description="BYOK provider type")
-    copilot_provider_base_url: str | None = Field(default=None, description="BYOK provider URL")
-    copilot_provider_api_key: str | None = Field(default=None, description="BYOK provider API key")
-    github_token: str | None = Field(default=None, description="GitHub token for Copilot auth")
-    copilot_plugins: str | list[str] = Field(
-        default_factory=list,
-        description="Service-level Copilot CLI plugins to install at runtime",
-    )
-    copilot_plugin_marketplaces: str | list[str] = Field(
-        default_factory=list, description="Custom plugin marketplace URLs"
-    )
-
-    # System prompts
-    system_prompt: str | None = Field(default=None, description="Global base prompt")
-    system_prompt_suffix: str | None = Field(default=None, description="Appended to global base")
-    coding_system_prompt: str | None = Field(default=None, description="Coding prompt override")
-    coding_system_prompt_suffix: str | None = Field(default=None, description="Coding suffix")
-    review_system_prompt: str | None = Field(default=None, description="Review prompt override")
-    review_system_prompt_suffix: str | None = Field(default=None, description="Review suffix")
-    discussion_system_prompt: str | None = Field(
-        default=None, description="Discussion prompt override"
-    )
-    discussion_system_prompt_suffix: str | None = Field(
-        default=None, description="Discussion suffix"
-    )
-
-    # Runtime
-    clone_dir: str | None = Field(default=None, description="Base directory for repo clones")
-    log_level: str = Field(default="info", description="Log level")
-
-    # Azure Storage (for queue-based dispatch)
-    dispatch_backend: Literal["azure_storage", "local"] = Field(
-        default="azure_storage",
-        description="Dispatch backend: 'azure_storage' or 'local' (in-memory)",
-    )
-    azure_storage_account_url: str | None = Field(
-        default=None, description="Azure Blob Storage endpoint"
-    )
-    azure_storage_queue_url: str | None = Field(
-        default=None, description="Azure Queue Storage endpoint"
-    )
-    azure_storage_connection_string: str | None = Field(
-        default=None, description="Azure Storage connection string (for Azurite/K8s)"
-    )
-    task_queue_name: str = Field(default="task-queue", description="Queue name")
-    task_blob_container: str = Field(default="task-data", description="Blob container name")
-
-    # Job timeout (must match controller's k8s_job_timeout for visibility calculation)
-    k8s_job_timeout: int = Field(default=600, description="Job timeout in seconds")
-    queue_visibility_buffer: int = Field(
-        default=60, description="Extra seconds added to job timeout for queue visibility"
-    )
-
-    @field_validator("copilot_plugins", "copilot_plugin_marketplaces", mode="before")
-    @classmethod
-    def _parse_comma_list(cls, v: object) -> object:
-        if isinstance(v, str):
-            v = v.strip()
-            if not v:
-                return []
-            # Try JSON first, fall back to comma-separated
-            if v.startswith("["):
-                return v  # let pydantic handle JSON
-            return [item.strip() for item in v.split(",") if item.strip()]
-        return v
-
-    @model_validator(mode="after")
-    def _check_auth(self) -> "TaskRunnerSettings":
-        if not self.github_token and not self.copilot_provider_type:
-            raise ValueError(
-                "No LLM authentication configured. Set GITHUB_TOKEN or COPILOT_PROVIDER_TYPE."
-            )
         return self
