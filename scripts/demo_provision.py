@@ -35,6 +35,7 @@ from demo_provision.config_generator import (  # noqa: E402
     print_config_output,
 )
 from demo_provision.gitlab_provisioner import (
+    build_client as gl_build_client,
     create_merge_request,
     create_webhook,
     get_namespace,
@@ -155,13 +156,10 @@ def main() -> None:
     jira_api_token = _require_value(args.jira_api_token, "JIRA_API_TOKEN")
 
     # --- GitLab provisioning ---
-    import gitlab
-
-    gl = gitlab.Gitlab(gitlab_url, private_token=gitlab_token)
-    gl.auth()
+    gl_client = gl_build_client(gitlab_url, gitlab_token)
 
     project_path = f"{args.gitlab_group}/{args.gitlab_project_name}"
-    existing = gl_get_project(gl, project_path)
+    existing = gl_get_project(gl_client, project_path)
     if existing and not args.use_existing_gitlab_project:
         print(
             f"Error: GitLab project '{project_path}' already exists.\n"
@@ -173,27 +171,34 @@ def main() -> None:
 
     if existing and args.use_existing_gitlab_project:
         project = existing
-        print(f"✅ Using existing GitLab project: {project.web_url}")
+        print(f"✅ Using existing GitLab project: {project['web_url']}")
     else:
-        namespace = get_namespace(gl, args.gitlab_group)
+        namespace = get_namespace(gl_client, args.gitlab_group)
         project = gl_create_project(
-            gl,
+            gl_client,
             name=args.gitlab_project_name,
-            namespace_id=namespace.id,
+            namespace_id=namespace["id"],
             description="Demo project for GitLab Copilot Agent showcase",
         )
 
         # Push demo template files
         template_files = load_template(TEMPLATE_DIR)
-        push_files(project, "main", template_files, "Initial demo code with intentional issues")
-        print(f"✅ GitLab project created: {project.web_url}")
+        push_files(
+            gl_client,
+            project["id"],
+            "main",
+            template_files,
+            "Initial demo code with intentional issues",
+        )
+        print(f"✅ GitLab project created: {project['web_url']}")
         print(f"   Pushed {len(template_files)} files to main branch")
 
     # --- Create demo MR for agent to review ---
     demo_mr = None
     try:
         demo_mr = create_merge_request(
-            project,
+            gl_client,
+            project["id"],
             source_branch="feature/add-search-endpoint",
             target_branch="main",
             title="Add post search endpoint",
@@ -302,7 +307,7 @@ def main() -> None:
             },
             commit_message="Add search endpoint with keyword matching",
         )
-        print(f"✅ Demo MR created: {demo_mr.web_url}")
+        print(f"✅ Demo MR created: {demo_mr['web_url']}")
     except Exception as e:
         print(f"⚠️  Could not create demo MR: {e}")
 
@@ -317,7 +322,7 @@ def main() -> None:
             print(f"✅ Detected ngrok tunnel: {webhook_url}")
 
     if webhook_url:
-        create_webhook(project, f"{webhook_url}/webhook", webhook_secret)
+        create_webhook(gl_client, project["id"], f"{webhook_url}/webhook", webhook_secret)
         webhook_configured = True
 
     # --- Jira provisioning ---
@@ -387,16 +392,16 @@ def main() -> None:
     # --- Output configuration ---
     print_config_output(
         gitlab_url=gitlab_url,
-        gitlab_project_url=project.web_url,
-        gitlab_project_path=project.path_with_namespace,
-        gitlab_project_id=project.id,
+        gitlab_project_url=project["web_url"],
+        gitlab_project_path=project["path_with_namespace"],
+        gitlab_project_id=project["id"],
         jira_url=jira_url,
         jira_project_key=args.jira_project_key,
         jira_issue_keys=issue_keys,
         webhook_secret=webhook_secret,
         webhook_url=webhook_url,
         webhook_configured=webhook_configured,
-        demo_mr_url=demo_mr.web_url if demo_mr else None,
+        demo_mr_url=demo_mr["web_url"] if demo_mr else None,
     )
 
 

@@ -201,7 +201,7 @@ async def test_task_execution_failure_posts_error_details(
     mock_jira.add_comment.assert_awaited_once()
     comment = mock_jira.add_comment.call_args[0][1]
     assert "Automated implementation failed" in comment
-    assert "missing files_changed" in comment
+    assert "unexpected error" in comment.lower()
 
 
 @patch("gitlab_copilot_agent.coding_pipeline.git_clone")

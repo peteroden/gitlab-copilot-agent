@@ -7,27 +7,30 @@ prepare (clone + fetch) → execute (LLM review) → process (post comments)
 
 from __future__ import annotations
 
+import asyncio
+import shutil
 import time
 from typing import TYPE_CHECKING
 
-import gitlab
 import structlog
 from pydantic import Field
 
 from gitlab_copilot_agent.comment_parser import ParsedReview, parse_review
 from gitlab_copilot_agent.comment_poster import post_review
 from gitlab_copilot_agent.discussion_models import DiscussionHistory
-from gitlab_copilot_agent.error_messages import user_error_message
 from gitlab_copilot_agent.git_operations import validate_clone_url_host
 from gitlab_copilot_agent.gitlab_client import (
     GitLabClient,  # noqa: TC001 — used in constructor + method bodies
+    MRChange,  # noqa: TC001 — used in format_diff_text
     MRDetails,  # noqa: TC001 — Pydantic runtime field type
 )
 from gitlab_copilot_agent.incremental import extract_last_reviewed_sha
 from gitlab_copilot_agent.metrics import reviews_duration, reviews_total
-from gitlab_copilot_agent.pipeline import BasePipelineContext
+from gitlab_copilot_agent.pipeline import BasePipelineContext, post_pipeline_error, stage_requires
 from gitlab_copilot_agent.review_engine import ReviewRequest, run_review
-from gitlab_copilot_agent.task_executor import TaskExecutionError, TaskResult
+from gitlab_copilot_agent.task_executor import (
+    TaskResult,  # noqa: TC001 — Pydantic runtime field type
+)
 
 if TYPE_CHECKING:
     from gitlab_copilot_agent.config import Settings
@@ -36,6 +39,11 @@ if TYPE_CHECKING:
     from gitlab_copilot_agent.task_executor import TaskExecutor
 
 log = structlog.get_logger()
+
+
+def format_diff_text(changes: list[MRChange]) -> str:
+    """Format MR changes into a unified diff string."""
+    return "\n".join(f"--- a/{c.old_path}\n+++ b/{c.new_path}\n{c.diff}" for c in changes)
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +118,7 @@ class ReviewPipeline:
         head_sha: str = event.head_sha  # type: ignore[assignment]
         pipeline_context.start_time = time.monotonic()
 
-        self._log.info("review_started")
+        await self._log.ainfo("review_started")
 
         validate_clone_url_host(event.clone_url, settings.gitlab_url)
         pipeline_context.repo_path = await self._gl.clone_repo(
@@ -126,9 +134,9 @@ class ReviewPipeline:
         try:
             commits = await self._gl.get_mr_commits(event.project_id, mr_iid)
             pipeline_context.commit_messages = [c.message for c in commits]
-            self._log.info("commits_loaded", commit_count=len(commits))
+            await self._log.ainfo("commits_loaded", commit_count=len(commits))
         except Exception:
-            self._log.warning("commit_fetch_failed", exc_info=True)
+            await self._log.awarning("commit_fetch_failed", exc_info=True)
 
         # Fetch discussion history (requires credential_registry)
         if self._creds is not None:
@@ -140,15 +148,15 @@ class ReviewPipeline:
                 pipeline_context.discussion_history = DiscussionHistory(
                     discussions=discussions, agent=agent_identity
                 )
-                self._log.info(
+                await self._log.ainfo(
                     "discussion_history_loaded",
                     discussion_count=len(discussions),
                     agent_user_id=agent_identity.user_id,
                 )
             except Exception:
-                self._log.warning("discussion_history_failed", exc_info=True)
+                await self._log.awarning("discussion_history_failed", exc_info=True)
         else:
-            self._log.debug("discussion_history_skipped", reason="no_credential_registry")
+            await self._log.adebug("discussion_history_skipped", reason="no_credential_registry")
 
         # Build diff text — incremental when a prior review marker exists
         last_reviewed_sha = extract_last_reviewed_sha(pipeline_context.discussion_history)
@@ -159,34 +167,27 @@ class ReviewPipeline:
                     event.project_id, last_reviewed_sha, head_sha
                 )
                 if incremental_changes:
-                    pipeline_context.diff_text = "\n".join(
-                        f"--- a/{c.old_path}\n+++ b/{c.new_path}\n{c.diff}"
-                        for c in incremental_changes
-                    )
+                    pipeline_context.diff_text = format_diff_text(incremental_changes)
                     pipeline_context.is_incremental = True
-                    self._log.info(
+                    await self._log.ainfo(
                         "incremental_review",
                         from_sha=last_reviewed_sha[:12],
                         to_sha=head_sha[:12],
                         files_changed=len(incremental_changes),
                     )
             except Exception:
-                self._log.warning("incremental_diff_failed", exc_info=True)
+                await self._log.awarning("incremental_diff_failed", exc_info=True)
 
         if not pipeline_context.is_incremental:
-            assert pipeline_context.mr_details is not None
-            pipeline_context.diff_text = "\n".join(
-                f"--- a/{c.old_path}\n+++ b/{c.new_path}\n{c.diff}"
-                for c in pipeline_context.mr_details.changes
-            )
+            mr_details = stage_requires(pipeline_context.mr_details, "mr_details")
+            pipeline_context.diff_text = format_diff_text(mr_details.changes)
 
     # -- execute -----------------------------------------------------------
 
     async def execute(self, pipeline_context: ReviewContext) -> None:
         """Build review prompt and run Copilot session."""
         event = self._event
-        mr_details = pipeline_context.mr_details
-        assert mr_details is not None  # set by prepare
+        mr_details = stage_requires(pipeline_context.mr_details, "mr_details")
         head_sha = event.head_sha or ""
 
         review_req = ReviewRequest(
@@ -197,7 +198,7 @@ class ReviewPipeline:
             commit_messages=pipeline_context.commit_messages,
         )
 
-        pipeline_context.raw_result = await run_review(
+        raw_result = await run_review(
             self._executor,
             self._settings,
             str(pipeline_context.repo_path),
@@ -208,14 +209,16 @@ class ReviewPipeline:
             head_sha=head_sha,
             is_incremental=pipeline_context.is_incremental,
         )
+        pipeline_context.raw_result = raw_result
 
-        pipeline_context.parsed = parse_review(pipeline_context.raw_result.summary)
+        parsed = parse_review(raw_result.summary)
+        pipeline_context.parsed = parsed
 
-        self._log.info(
+        await self._log.ainfo(
             "review_complete",
-            inline_comments=len(pipeline_context.parsed.comments),
-            resolutions=len(pipeline_context.parsed.resolutions),
-            response_length=len(pipeline_context.raw_result.summary),
+            inline_comments=len(parsed.comments),
+            resolutions=len(parsed.resolutions),
+            response_length=len(raw_result.summary),
         )
 
     # -- process -----------------------------------------------------------
@@ -223,12 +226,8 @@ class ReviewPipeline:
     async def process(self, pipeline_context: ReviewContext) -> None:
         """Post review comments, resolutions, and summary to GitLab."""
         event = self._event
-        token = event.token
-        mr_details = pipeline_context.mr_details
-        assert mr_details is not None  # set by prepare
-        assert pipeline_context.parsed is not None  # set by execute
-
-        gl = gitlab.Gitlab(self._settings.gitlab_url, private_token=token)
+        mr_details = stage_requires(pipeline_context.mr_details, "mr_details")
+        parsed = stage_requires(pipeline_context.parsed, "parsed")
 
         # Build allowlist of discussion IDs from agent's prior unresolved feedback
         allowed_ids: set[str] = set()
@@ -242,24 +241,24 @@ class ReviewPipeline:
                     allowed_ids.add(disc.discussion_id)
 
         await post_review(
-            gl,
+            self._gl,
             event.project_id,
             event.mr_iid,  # type: ignore[arg-type]  # validated non-None by TaskEvent
             mr_details.diff_refs,
-            pipeline_context.parsed,
+            parsed,
             mr_details.changes,
             resolution_behavior=event.resolution_behavior,
             allowed_discussion_ids=frozenset(allowed_ids),
             head_sha=event.head_sha or "",
         )
-        self._log.info("comments_posted")
+        await self._log.ainfo("comments_posted")
 
     # -- cleanup -----------------------------------------------------------
 
     async def cleanup(self, pipeline_context: ReviewContext) -> None:
         """Remove cloned repo and record metrics."""
         if pipeline_context.repo_path:
-            await self._gl.cleanup(pipeline_context.repo_path)
+            await asyncio.to_thread(shutil.rmtree, pipeline_context.repo_path, True)
         reviews_total.add(1, {"outcome": pipeline_context.outcome})
         reviews_duration.record(
             time.monotonic() - pipeline_context.start_time, {"outcome": pipeline_context.outcome}
@@ -270,34 +269,10 @@ class ReviewPipeline:
     async def handle_error(self, pipeline_context: ReviewContext, exc: Exception) -> None:
         """Post failure comment to MR."""
         event = self._event
-        mr_iid = event.mr_iid
-        if mr_iid is None:
+        if event.mr_iid is None:
             return
 
-        if isinstance(exc, TaskExecutionError):
-            error_str = str(exc)
-            self._log.error("review_task_failed", error=error_str)
-            try:
-                await self._gl.post_mr_comment(
-                    event.project_id,
-                    mr_iid,
-                    f"⚠️ Automated review failed.\n\n{user_error_message(error_str)}",
-                )
-            except Exception:
-                self._log.warning("failure_comment_post_failed", exc_info=True)
-        else:
-            self._log.error(
-                "review_failed",
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-            try:
-                await self._gl.post_mr_comment(
-                    event.project_id,
-                    mr_iid,
-                    "⚠️ Automated review failed. "
-                    "The service encountered an unexpected error. "
-                    "Please try again or contact the project administrator.",
-                )
-            except Exception:
-                self._log.warning("failure_comment_post_failed", exc_info=True)
+        async def _post(msg: str) -> None:
+            await self._gl.post_mr_comment(event.project_id, event.mr_iid, msg)  # type: ignore[arg-type]
+
+        await post_pipeline_error(self._log, exc, _post)

@@ -87,9 +87,7 @@ def _mr_payload(project_id: int, repo: str, mr_iid: int = 1) -> dict[str, object
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_multi_project_webhooks_use_distinct_tokens(
-    _mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     _mock_post_review: AsyncMock,
@@ -161,9 +159,7 @@ async def test_multi_project_webhooks_use_distinct_tokens(
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_note_webhook_multi_project_token_isolation(
-    _mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     _mock_post_review: AsyncMock,

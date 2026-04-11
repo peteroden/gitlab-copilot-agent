@@ -54,9 +54,7 @@ def _setup_mocks(
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_full_pipeline(
-    mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
@@ -86,29 +84,27 @@ async def test_full_pipeline(
     assert post_args[1] == PROJECT_ID
     assert post_args[2] == MR_IID
 
-    mock_gl_instance.cleanup.assert_awaited_once()
 
-
+@patch("gitlab_copilot_agent.review_pipeline.shutil.rmtree")
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_orchestrator_cleans_up_on_error(
-    mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
+    mock_rmtree: MagicMock,
 ) -> None:
     """Verify cleanup runs even when review raises."""
     mock_gl_instance = mock_client_class.return_value
     mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
     mock_gl_instance.get_mr_details = AsyncMock(side_effect=RuntimeError("SDK crashed"))
-    mock_gl_instance.cleanup = AsyncMock()
+    mock_gl_instance.post_mr_comment = AsyncMock()
 
     with pytest.raises(RuntimeError, match="SDK crashed"):
         await handle_review(make_settings(), make_task_event(), AsyncMock())
 
-    mock_gl_instance.cleanup.assert_awaited_once()
+    mock_rmtree.assert_called_once()
 
 
 # -- Shared test data for credential_registry tests --
@@ -156,9 +152,7 @@ _SAMPLE_DISCUSSIONS = [
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_discussion_history_passed_with_credential_registry(
-    mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
@@ -186,9 +180,7 @@ async def test_discussion_history_passed_with_credential_registry(
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_discussion_history_none_without_credential_registry(
-    mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
@@ -205,9 +197,7 @@ async def test_discussion_history_none_without_credential_registry(
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_discussion_history_failure_is_non_fatal(
-    mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
@@ -230,9 +220,7 @@ async def test_discussion_history_failure_is_non_fatal(
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_discussion_threads_flow_through_pipeline(
-    mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
@@ -280,9 +268,7 @@ async def test_discussion_threads_flow_through_pipeline(
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_resolution_behavior_flows_to_post_review(
-    mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
@@ -303,9 +289,7 @@ async def test_resolution_behavior_flows_to_post_review(
 
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_prior_feedback_rendered_in_prompt(
-    mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_post_review: AsyncMock,
 ) -> None:
@@ -387,9 +371,7 @@ def _make_marker_discussion(sha: str) -> Discussion:
 
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_incremental_review_with_marker(
-    mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_post_review: AsyncMock,
 ) -> None:
@@ -450,9 +432,7 @@ async def test_incremental_review_with_marker(
 
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_incremental_review_compare_fails_fallback(
-    mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_post_review: AsyncMock,
 ) -> None:
@@ -562,9 +542,7 @@ _DISMISSED_DISCUSSION = Discussion(
 
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_suppressed_feedback_rendered_in_prompt(
-    mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_post_review: AsyncMock,
 ) -> None:
@@ -623,9 +601,7 @@ _SAMPLE_COMMITS = [
 
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_commit_messages_in_review_prompt(
-    mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_post_review: AsyncMock,
 ) -> None:
@@ -663,9 +639,7 @@ async def test_commit_messages_in_review_prompt(
 
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_commit_fetch_failure_graceful_degradation(
-    mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_post_review: AsyncMock,
 ) -> None:

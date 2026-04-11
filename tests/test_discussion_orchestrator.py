@@ -98,28 +98,9 @@ def _make_discussion(
     )
 
 
-def _gl_thread_mock() -> MagicMock:
-    """Build a mock GitLab discussion object with notes.create()."""
-    disc_obj = MagicMock()
-    disc_obj.notes.create = MagicMock()
-    return disc_obj
-
-
-def _wire_gitlab_sdk(mock_gitlab_cls: MagicMock, disc_obj: MagicMock) -> None:
-    """Wire mock gitlab.Gitlab → project → MR → discussions.get → disc_obj."""
-    gl_instance = MagicMock()
-    mock_gitlab_cls.return_value = gl_instance
-    gl_project = MagicMock()
-    gl_instance.projects.get.return_value = gl_project
-    gl_mr = MagicMock()
-    gl_project.mergerequests.get.return_value = gl_mr
-    gl_mr.discussions.get.return_value = disc_obj
-
-
 # -- Tests --
 
 
-@patch(f"{_MOD}.gitlab.Gitlab")
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
@@ -129,7 +110,6 @@ async def test_qa_reply_no_code_changes(
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
-    mock_gl_cls: MagicMock,
     tmp_path: Path,
 ) -> None:
     """Happy path: Q&A reply with no code changes — reply posted, no push."""
@@ -147,10 +127,6 @@ async def test_qa_reply_no_code_changes(
     mock_build.return_value = "prompt"
     mock_parse.return_value = DiscussionResponse(reply=REPLY_TEXT)
 
-    # Wire gitlab SDK for thread reply
-    disc_obj = _gl_thread_mock()
-    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
-
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
@@ -160,8 +136,8 @@ async def test_qa_reply_no_code_changes(
     )
 
     # Reply posted to correct thread
-    disc_obj.notes.create.assert_called_once()
-    posted_body = disc_obj.notes.create.call_args[0][0]["body"]
+    gl_client.reply_to_discussion.assert_awaited_once()
+    posted_body = gl_client.reply_to_discussion.call_args[0][3]
     assert REPLY_TEXT in posted_body
 
     # No git push attempted (ReviewResult has no patch)
@@ -171,7 +147,6 @@ async def test_qa_reply_no_code_changes(
 @patch(f"{_MOD}.git_push")
 @patch(f"{_MOD}.git_commit")
 @patch(f"{_MOD}.apply_coding_result")
-@patch(f"{_MOD}.gitlab.Gitlab")
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
@@ -181,7 +156,6 @@ async def test_coding_reply_with_changes(
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
-    mock_gl_cls: MagicMock,
     mock_apply: AsyncMock,
     mock_commit: AsyncMock,
     mock_push: AsyncMock,
@@ -201,9 +175,6 @@ async def test_coding_reply_with_changes(
     mock_parse.return_value = DiscussionResponse(reply=REPLY_TEXT)
     mock_commit.return_value = True
 
-    disc_obj = _gl_thread_mock()
-    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
-
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
@@ -216,14 +187,13 @@ async def test_coding_reply_with_changes(
     mock_commit.assert_awaited_once()
     mock_push.assert_awaited_once()
 
-    posted_body = disc_obj.notes.create.call_args[0][0]["body"]
+    posted_body = gl_client.reply_to_discussion.call_args[0][3]
     assert CHANGES_PUSHED_MARKER in posted_body
 
 
 @patch(f"{_MOD}.git_push")
 @patch(f"{_MOD}.git_commit")
 @patch(f"{_MOD}.apply_coding_result")
-@patch(f"{_MOD}.gitlab.Gitlab")
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
@@ -233,7 +203,6 @@ async def test_coding_reply_empty_patch(
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
-    mock_gl_cls: MagicMock,
     mock_apply: AsyncMock,
     mock_commit: AsyncMock,
     mock_push: AsyncMock,
@@ -252,9 +221,6 @@ async def test_coding_reply_empty_patch(
     mock_build.return_value = "prompt"
     mock_parse.return_value = DiscussionResponse(reply=REPLY_TEXT)
 
-    disc_obj = _gl_thread_mock()
-    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
-
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
@@ -266,7 +232,7 @@ async def test_coding_reply_empty_patch(
     mock_apply.assert_not_awaited()
     mock_push.assert_not_awaited()
 
-    posted_body = disc_obj.notes.create.call_args[0][0]["body"]
+    posted_body = gl_client.reply_to_discussion.call_args[0][3]
     assert CHANGES_PUSHED_MARKER not in posted_body
 
 
@@ -389,7 +355,6 @@ async def test_cleanup_runs_on_failure(
     mock_rmtree.assert_called_once_with(tmp_path, True)
 
 
-@patch(f"{_MOD}.gitlab.Gitlab")
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
@@ -399,7 +364,6 @@ async def test_repo_lock_used_when_provided(
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
-    mock_gl_cls: MagicMock,
     tmp_path: Path,
 ) -> None:
     """When repo_locks is provided, _execute runs inside the lock."""
@@ -414,9 +378,6 @@ async def test_repo_lock_used_when_provided(
     mock_run.return_value = ReviewResult(summary=REPLY_TEXT)
     mock_build.return_value = "prompt"
     mock_parse.return_value = DiscussionResponse(reply=REPLY_TEXT)
-
-    disc_obj = _gl_thread_mock()
-    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
 
     # Build a mock DistributedLock with async context manager
     lock_cm = AsyncMock()
@@ -440,10 +401,9 @@ async def test_repo_lock_used_when_provided(
     lock_cm.__aexit__.assert_awaited_once()
 
     # Verify the handler still completed (reply posted)
-    disc_obj.notes.create.assert_called_once()
+    gl_client.reply_to_discussion.assert_awaited_once()
 
 
-@patch(f"{_MOD}.gitlab.Gitlab")
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
@@ -453,7 +413,6 @@ async def test_deleted_branch_replies_with_warning(
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
-    mock_gl_cls: MagicMock,
     tmp_path: Path,
 ) -> None:
     """When the source branch is deleted, reply with a helpful warning."""
@@ -468,11 +427,6 @@ async def test_deleted_branch_replies_with_warning(
     )
     gl_client.list_mr_discussions.return_value = [_make_discussion()]
 
-    disc_obj = MagicMock()
-    disc_obj.notes.create = MagicMock()
-    gl_mr_mock = mock_gl_cls.return_value.projects.get.return_value.mergerequests.get.return_value
-    gl_mr_mock.discussions.get.return_value = disc_obj
-
     await handle_discussion_interaction(
         make_settings(),
         _make_event(),
@@ -484,8 +438,8 @@ async def test_deleted_branch_replies_with_warning(
     mock_run.assert_not_awaited()
 
     # Warning reply posted to thread
-    disc_obj.notes.create.assert_called_once()
-    reply = disc_obj.notes.create.call_args[0][0]["body"]
+    gl_client.reply_to_discussion.assert_awaited_once()
+    reply = gl_client.reply_to_discussion.call_args[0][3]
     assert "deleted" in reply or "inaccessible" in reply
     assert SOURCE_BRANCH in reply
 
@@ -504,7 +458,6 @@ def _make_resolution(
     return Resolution(discussion_id=discussion_id, status=status, message=message)
 
 
-@patch(f"{_MOD}.gitlab.Gitlab")
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
@@ -514,7 +467,6 @@ async def test_discussion_interaction_auto_resolve(
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
-    mock_gl_cls: MagicMock,
     tmp_path: Path,
 ) -> None:
     """resolution_behavior='auto-resolve' + resolved → thread resolved via API."""
@@ -539,9 +491,6 @@ async def test_discussion_interaction_auto_resolve(
         resolution=_make_resolution(status="resolved"),
     )
 
-    disc_obj = _gl_thread_mock()
-    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
-
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
@@ -551,13 +500,11 @@ async def test_discussion_interaction_auto_resolve(
     )
 
     # Reply posted
-    disc_obj.notes.create.assert_called_once()
+    gl_client.reply_to_discussion.assert_awaited_once()
     # Thread resolved
-    assert disc_obj.resolved is True
-    disc_obj.save.assert_called_once()
+    gl_client.resolve_discussion.assert_awaited_once()
 
 
-@patch(f"{_MOD}.gitlab.Gitlab")
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
@@ -567,7 +514,6 @@ async def test_discussion_interaction_suggest_no_resolve(
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
-    mock_gl_cls: MagicMock,
     tmp_path: Path,
 ) -> None:
     """resolution_behavior='suggest' + resolved → reply posted, thread NOT resolved."""
@@ -586,9 +532,6 @@ async def test_discussion_interaction_suggest_no_resolve(
         resolution=_make_resolution(status="resolved"),
     )
 
-    disc_obj = _gl_thread_mock()
-    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
-
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
@@ -598,12 +541,11 @@ async def test_discussion_interaction_suggest_no_resolve(
     )
 
     # Reply posted
-    disc_obj.notes.create.assert_called_once()
+    gl_client.reply_to_discussion.assert_awaited_once()
     # Thread NOT resolved (suggest mode only posts reply)
-    disc_obj.save.assert_not_called()
+    gl_client.resolve_discussion.assert_not_awaited()
 
 
-@patch(f"{_MOD}.gitlab.Gitlab")
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
@@ -613,7 +555,6 @@ async def test_discussion_interaction_off_no_action(
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
-    mock_gl_cls: MagicMock,
     tmp_path: Path,
 ) -> None:
     """resolution_behavior='off' → no resolution action at all."""
@@ -632,9 +573,6 @@ async def test_discussion_interaction_off_no_action(
         resolution=_make_resolution(status="resolved"),
     )
 
-    disc_obj = _gl_thread_mock()
-    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
-
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
@@ -644,12 +582,11 @@ async def test_discussion_interaction_off_no_action(
     )
 
     # Reply still posted
-    disc_obj.notes.create.assert_called_once()
+    gl_client.reply_to_discussion.assert_awaited_once()
     # No resolution action
-    disc_obj.save.assert_not_called()
+    gl_client.resolve_discussion.assert_not_awaited()
 
 
-@patch(f"{_MOD}.gitlab.Gitlab")
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
@@ -659,7 +596,6 @@ async def test_discussion_interaction_partial_never_resolved(
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
-    mock_gl_cls: MagicMock,
     tmp_path: Path,
 ) -> None:
     """Partial resolution → never auto-resolved regardless of behavior."""
@@ -678,9 +614,6 @@ async def test_discussion_interaction_partial_never_resolved(
         resolution=_make_resolution(status="partial"),
     )
 
-    disc_obj = _gl_thread_mock()
-    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
-
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
@@ -690,12 +623,11 @@ async def test_discussion_interaction_partial_never_resolved(
     )
 
     # Reply posted
-    disc_obj.notes.create.assert_called_once()
+    gl_client.reply_to_discussion.assert_awaited_once()
     # Partial → never resolved
-    disc_obj.save.assert_not_called()
+    gl_client.resolve_discussion.assert_not_awaited()
 
 
-@patch(f"{_MOD}.gitlab.Gitlab")
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
@@ -705,7 +637,6 @@ async def test_discussion_interaction_resolution_error_logged(
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
-    mock_gl_cls: MagicMock,
     tmp_path: Path,
 ) -> None:
     """Exception during resolution → logged, not raised."""
@@ -729,10 +660,8 @@ async def test_discussion_interaction_resolution_error_logged(
         resolution=_make_resolution(status="resolved"),
     )
 
-    disc_obj = _gl_thread_mock()
-    # Make save() raise to simulate resolution failure
-    disc_obj.save.side_effect = RuntimeError("GitLab API error")
-    _wire_gitlab_sdk(mock_gl_cls, disc_obj)
+    # Make resolve_discussion raise to simulate resolution failure
+    gl_client.resolve_discussion.side_effect = RuntimeError("resolve boom")
 
     executor = AsyncMock()
     # Should NOT raise — resolution errors are swallowed and logged
@@ -744,6 +673,6 @@ async def test_discussion_interaction_resolution_error_logged(
     )
 
     # Reply still posted successfully
-    disc_obj.notes.create.assert_called_once()
-    # save() was attempted
-    disc_obj.save.assert_called_once()
+    gl_client.reply_to_discussion.assert_awaited_once()
+    # resolve_discussion was attempted
+    gl_client.resolve_discussion.assert_awaited_once()

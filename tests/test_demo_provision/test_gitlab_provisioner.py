@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
-import gitlab.exceptions
+import httpx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
@@ -22,86 +21,139 @@ from demo_provision.gitlab_provisioner import (
 
 from .conftest import (
     GITLAB_GROUP,
+    GITLAB_PROJECT_ID,
     GITLAB_PROJECT_NAME,
     GITLAB_PROJECT_PATH,
+    GITLAB_TOKEN,
+    GITLAB_URL,
+    GROUP_RESPONSE,
+    HOOK_RESPONSE,
+    PROJECT_RESPONSE,
     TEMPLATE_DIR,
+    json_response,
 )
 
 
-class TestGetProject:
-    def test_returns_project_when_exists(self, mock_gl: MagicMock) -> None:
-        mock_project = MagicMock()
-        mock_project.id = 42
-        mock_gl.projects.get.return_value = mock_project
+def _make_client(handler: httpx.MockTransport | None = None) -> httpx.Client:
+    """Build a test client with a mock transport."""
+    transport = handler or httpx.MockTransport(lambda _: httpx.Response(500))
+    return httpx.Client(
+        base_url=f"{GITLAB_URL}/api/v4",
+        headers={"PRIVATE-TOKEN": GITLAB_TOKEN},
+        transport=transport,
+    )
 
-        result = get_project(mock_gl, GITLAB_PROJECT_PATH)
+
+class TestGetProject:
+    def test_returns_project_when_exists(self) -> None:
+        transport = httpx.MockTransport(lambda _: json_response(PROJECT_RESPONSE))
+        client = _make_client(transport)
+
+        result = get_project(client, GITLAB_PROJECT_PATH)
 
         assert result is not None
-        assert result.id == 42
-        mock_gl.projects.get.assert_called_once_with(GITLAB_PROJECT_PATH)
+        assert result["id"] == GITLAB_PROJECT_ID
 
-    def test_returns_none_when_not_found(self, mock_gl: MagicMock) -> None:
-        mock_gl.projects.get.side_effect = gitlab.exceptions.GitlabGetError
+    def test_returns_none_when_not_found(self) -> None:
+        transport = httpx.MockTransport(lambda _: httpx.Response(404))
+        client = _make_client(transport)
 
-        result = get_project(mock_gl, GITLAB_PROJECT_PATH)
+        result = get_project(client, GITLAB_PROJECT_PATH)
 
         assert result is None
 
 
 class TestCreateProject:
-    def test_creates_project_with_correct_params(self, mock_gl: MagicMock) -> None:
-        mock_project = MagicMock()
-        mock_project.id = 99
-        mock_project.path_with_namespace = GITLAB_PROJECT_PATH
-        mock_gl.projects.create.return_value = mock_project
+    def test_creates_project_with_correct_params(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.method == "POST"
+            body = request.read()
+            import json
 
-        result = create_project(mock_gl, GITLAB_PROJECT_NAME, 10)
+            data = json.loads(body)
+            assert data["name"] == GITLAB_PROJECT_NAME
+            assert data["namespace_id"] == 10
+            assert data["visibility"] == "private"
+            assert data["initialize_with_readme"] is True
+            return json_response({**PROJECT_RESPONSE, "id": 99})
 
-        mock_gl.projects.create.assert_called_once_with(
-            {
-                "name": GITLAB_PROJECT_NAME,
-                "namespace_id": 10,
-                "visibility": "private",
-                "description": "",
-                "initialize_with_readme": True,
-            }
-        )
-        assert result.id == 99
+        client = _make_client(httpx.MockTransport(handler))
+        result = create_project(client, GITLAB_PROJECT_NAME, 10)
 
-    def test_creates_project_with_custom_visibility(self, mock_gl: MagicMock) -> None:
-        mock_gl.projects.create.return_value = MagicMock()
+        assert result["id"] == 99
 
-        create_project(mock_gl, GITLAB_PROJECT_NAME, 10, visibility="public")
+    def test_creates_project_with_custom_visibility(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            import json
 
-        create_call = mock_gl.projects.create.call_args[0][0]
-        assert create_call["visibility"] == "public"
+            data = json.loads(request.read())
+            assert data["visibility"] == "public"
+            return json_response(PROJECT_RESPONSE)
+
+        client = _make_client(httpx.MockTransport(handler))
+        create_project(client, GITLAB_PROJECT_NAME, 10, visibility="public")
 
 
 class TestGetNamespace:
-    def test_returns_group(self, mock_gl: MagicMock) -> None:
-        mock_group = MagicMock()
-        mock_group.id = 5
-        mock_gl.groups.get.return_value = mock_group
+    def test_returns_group(self) -> None:
+        transport = httpx.MockTransport(lambda _: json_response(GROUP_RESPONSE))
+        client = _make_client(transport)
 
-        result = get_namespace(mock_gl, GITLAB_GROUP)
+        result = get_namespace(client, GITLAB_GROUP)
 
-        assert result.id == 5
+        assert result["id"] == 5
 
-    def test_exits_when_group_not_found(self, mock_gl: MagicMock) -> None:
-        mock_gl.groups.get.side_effect = gitlab.exceptions.GitlabGetError
+    def test_falls_back_to_namespace_search(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path.removeprefix("/api/v4")
+            if path.startswith("/groups/"):
+                return httpx.Response(404)
+            if path == "/namespaces":
+                return json_response([{"full_path": GITLAB_GROUP, "id": 7}])
+            return httpx.Response(500)
+
+        client = _make_client(httpx.MockTransport(handler))
+        result = get_namespace(client, GITLAB_GROUP)
+
+        assert result["id"] == 7
+
+    def test_exits_when_group_not_found(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path.removeprefix("/api/v4")
+            if path.startswith("/groups/"):
+                return httpx.Response(404)
+            if path == "/namespaces":
+                return json_response([])
+            return httpx.Response(500)
+
+        client = _make_client(httpx.MockTransport(handler))
 
         with pytest.raises(SystemExit):
-            get_namespace(mock_gl, "nonexistent-group")
+            get_namespace(client, "nonexistent-group")
 
 
 class TestPushFiles:
-    def test_pushes_files_as_create_actions(self, mock_project: MagicMock) -> None:
+    def test_pushes_files_as_create_actions(self) -> None:
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path.removeprefix("/api/v4")
+            if "/repository/tree" in path:
+                return json_response([])
+            if "/repository/commits" in path:
+                calls.append(request)
+                return json_response({"id": "abc123"})
+            return httpx.Response(500)
+
+        client = _make_client(httpx.MockTransport(handler))
         files = {"main.py": "print('hello')", "README.md": "# Demo"}
 
-        push_files(mock_project, "main", files, "Initial commit")
+        push_files(client, GITLAB_PROJECT_ID, "main", files, "Initial commit")
 
-        mock_project.commits.create.assert_called_once()
-        commit_data = mock_project.commits.create.call_args[0][0]
+        assert len(calls) == 1
+        import json
+
+        commit_data = json.loads(calls[0].read())
         assert commit_data["branch"] == "main"
         assert commit_data["commit_message"] == "Initial commit"
         assert len(commit_data["actions"]) == 2
@@ -109,19 +161,28 @@ class TestPushFiles:
 
 
 class TestCreateWebhook:
-    def test_creates_webhook_with_correct_params(self, mock_project: MagicMock) -> None:
-        create_webhook(mock_project, "https://example.com/webhook", "secret123")
+    def test_creates_webhook_with_correct_params(self) -> None:
+        calls: list[httpx.Request] = []
 
-        mock_project.hooks.create.assert_called_once_with(
-            {
-                "url": "https://example.com/webhook",
-                "token": "secret123",
-                "merge_requests_events": True,
-                "note_events": True,
-                "push_events": False,
-                "enable_ssl_verification": True,
-            }
-        )
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return json_response(HOOK_RESPONSE)
+
+        client = _make_client(httpx.MockTransport(handler))
+        create_webhook(client, GITLAB_PROJECT_ID, "https://example.com/webhook", "secret123")
+
+        assert len(calls) == 1
+        import json
+
+        data = json.loads(calls[0].read())
+        assert data == {
+            "url": "https://example.com/webhook",
+            "token": "secret123",
+            "merge_requests_events": True,
+            "note_events": True,
+            "push_events": False,
+            "enable_ssl_verification": True,
+        }
 
 
 class TestLoadTemplate:
