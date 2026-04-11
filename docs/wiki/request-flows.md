@@ -31,7 +31,7 @@ sequenceDiagram
     WH->>WH: Check project allowlist
     WH->>WH: Check action in HANDLED_ACTIONS
     WH->>WH: Check oldrev (skip if None)
-    WH->>WH: Check ReviewedMRTracker (skip if seen)
+    WH->>WH: Check DeduplicationService (skip if seen)
     
     WH->>WH: Add _process_review to background_tasks
     WH-->>GL: 200 {"status": "queued"}
@@ -138,7 +138,7 @@ sequenceDiagram
     participant DE as discussion_engine.py
     participant GLCL as gitlab_client.py
     participant EXEC as TaskExecutor
-    participant GIT as git_operations.py
+    participant GIT as git/
 
     GL->>WH: POST /webhook (note event)
     WH->>WH: _validate_webhook_token()
@@ -316,7 +316,7 @@ sequenceDiagram
     participant POLL as jira_poller.py
     participant JCL as jira_client.py
     participant CODING as coding_orchestrator.py
-    participant GIT as git_operations.py
+    participant GIT as git/
     participant EXEC as TaskExecutor
     participant COP as copilot_session.py
     participant GLCL as gitlab_client.py

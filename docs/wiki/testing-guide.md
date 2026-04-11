@@ -128,7 +128,7 @@ def test_settings(env_vars):
 - `app.state.executor` → `LocalTaskExecutor()`
 - `app.state.repo_locks` → `RepoLockManager()`
 - `app.state.dedup_store` → `MemoryDedup()`
-- `app.state.review_tracker` → `ReviewedMRTracker()`
+- `app.state.dedup` → `DeduplicationService(dedup_store)`
 - `app.state.allowed_project_ids` → `None`
 
 **Example**:

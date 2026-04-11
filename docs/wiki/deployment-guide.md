@@ -504,12 +504,12 @@ helm upgrade copilot-agent helm/gitlab-copilot-agent \
 
 **JiraPoller**:
 - Same as GitLabPoller
-- ProcessedIssueTracker in-memory (each pod tracks independently)
+- DeduplicationService backed by in-memory store (each pod tracks independently)
 - Recommendation: Use single replica or implement leader election
 
 **Webhook Handler**:
 - Fully stateless (scales horizontally)
-- ReviewedMRTracker per-pod (duplicates possible in multi-pod without shared state)
+- DeduplicationService per-pod (duplicates possible in multi-pod without shared dedup store)
 - Recommendation: Use single replica or implement leader election for multi-pod
 
 ---

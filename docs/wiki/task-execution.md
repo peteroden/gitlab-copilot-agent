@@ -125,7 +125,7 @@ class LocalTaskExecutor:
    - Skip files that don't exist on disk (logged as warnings)
    - `git rev-parse HEAD` (capture base_sha)
    - `git diff --cached --binary --no-pager` (capture unified diff, preserving trailing whitespace)
-   - Validate patch size ≤ `MAX_PATCH_SIZE` (10 MB, from `git_operations.py`)
+   - Validate patch size ≤ `MAX_PATCH_SIZE` (10 MB, from `git/validation.py`)
    - Validate patch for path traversal (`../`)
    - Build `CodingResult(summary, patch, base_sha)`
 10. **For review tasks**: Build `ReviewResult(summary)`
@@ -502,9 +502,9 @@ _PYTHON_GITIGNORE_PATTERNS = [
 **Helper Function**: `apply_coding_result(result: TaskResult, repo_path: Path)` in `coding_workflow.py`
 - Called by `CodingOrchestrator` and `MRCommentHandler` after execution
 - No-op if `result.patch` is empty (LocalTaskExecutor)
-- Applies patch via `git_apply_patch()` from `git_operations.py`
+- Applies patch via `git_apply_patch()` from `git/patches.py`
 
-**New Git Operations** (in `git_operations.py`):
+**New Git Operations** (in `git/` package):
 - `git_apply_patch(repo_path, patch)`: Apply patch with `git apply --3way --binary`
 - `git_head_sha(repo_path)`: Get current HEAD SHA
 - `git_diff_staged(repo_path)`: Capture staged diff

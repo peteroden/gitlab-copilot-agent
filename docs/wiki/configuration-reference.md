@@ -3,7 +3,7 @@
 The service uses two configuration sources:
 
 1. **YAML config file** (`config_v2.py` models) — non-secret service configuration: project definitions, integrations, dispatch backend, prompts, polling settings
-2. **Environment variables** (`config.py` / `Settings`) — secrets and runtime overrides: tokens, connection strings, auth credentials
+2. **Environment variables** (`config/` package / `Settings`) — secrets and runtime overrides: tokens, connection strings, auth credentials
 
 Secrets **never** go in the YAML file. The YAML file path is set via the `CONFIG_FILE` env var (default: `config.yaml`).
 
@@ -92,7 +92,7 @@ integrations:                 # Named integration configurations
 
 ## Environment Variables (v1)
 
-Every environment variable in `config.py`, grouped by category.
+Every environment variable in the `config/` package, grouped by category.
 
 ---
 

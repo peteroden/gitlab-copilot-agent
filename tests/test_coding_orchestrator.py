@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
-from gitlab_copilot_agent.git_operations import TransientCloneError
+from gitlab_copilot_agent.git import TransientCloneError
 from gitlab_copilot_agent.jira_models import JiraIssue, JiraIssueFields, JiraStatus
 from gitlab_copilot_agent.project_registry import ResolvedProject
 from gitlab_copilot_agent.task_executor import CodingResult, TaskExecutionError

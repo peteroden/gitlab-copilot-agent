@@ -94,10 +94,14 @@ graph TB
 - **`jira_poller.py`**: Background poller for issues in "AI Ready" status
 
 ### 2. Processing Layer
-- **`orchestrator.py`**: MR review orchestration (clone → review → parse → post)
-- **`discussion_orchestrator.py`**: Unified @mention/thread interaction handler (clone → fetch context → LLM → reply ± commit/push ± resolve feedback)
-- **`discussion_engine.py`**: Discussion prompt construction, structured response parsing (reply + optional code changes + optional resolution)
-- **`coding_orchestrator.py`**: Jira issue implementation (clone → code → apply result → branch → MR)
+- **`events.py`**: `TaskEvent` Pydantic model — unified internal event replacing direct webhook payload passing
+- **`pipeline.py`**: `Pipeline` protocol (prepare → execute → process → cleanup) + `run_pipeline()` runner + `BasePipelineContext`
+- **`orchestrator.py`**: MR review orchestration (constructs `ReviewPipeline`, calls `run_pipeline()`)
+- **`review_pipeline.py`**: `ReviewPipeline` + `ReviewContext` — clone → review → parse → post
+- **`discussion_orchestrator.py`**: Unified @mention/thread interaction handler (constructs `DiscussionPipeline`, calls `run_pipeline()`)
+- **`discussion_pipeline.py`**: `DiscussionPipeline` + `DiscussionContext` — clone → fetch context → LLM → reply ± commit/push ± resolve
+- **`coding_orchestrator.py`**: Jira issue implementation (constructs `CodingPipeline`, calls `run_pipeline()`)
+- **`coding_pipeline.py`**: `CodingPipeline` + `CodingContext` — clone → code → apply result → branch → MR
 - **`coding_workflow.py`**: Shared helper for applying coding results (diff passback from k8s pods)
 - **`review_engine.py`**: Review prompt construction and execution
 - **`coding_engine.py`**: Coding task prompt construction and .gitignore hygiene
@@ -114,26 +118,27 @@ graph TB
 - **`jira_client.py`**: Jira REST API v3 (search, transitions, comments)
 
 ### 5. Configuration & DI
-- **`config.py`**: `Settings` and `TaskRunnerSettings` loaded from environment variables (v1 config)
+- **`config/`**: `Settings` and `TaskRunnerSettings` loaded from environment variables (split into settings, runner_settings, base mixins, validators)
 - **`config_v2.py`**: GitLab-centric YAML config models (`ConfigFile`, `ProjectConfig`, `IntegrationConfig`), `load_config_file()`, audit logging for marketplace URLs
 - **`app_context.py`**: Frozen `AppContext` dataclass replacing `app.state` service locator. `get_app_context()` FastAPI dependency for typed access. Mutable state (project_registry, pollers) stays on `app.state` for hot-reload.
 - **`mapping_models.py`**: YAML mapping models for Jira→GitLab bindings (v1 config)
 - **`mapping_cli.py`**: CLI for `validate`, `show`, `render-json` (v1) and `schema`, `validate-v2` (v2)
 
 ### 6. Shared Utilities
-- **`git_operations.py`**: Git CLI wrappers (clone, branch, commit, push)
+- **`git/`**: Git CLI wrappers (clone, branch, commit, push, patch, archive, validation)
 - **`comment_parser.py`**: Extract structured review (comments + resolutions) from agent output
 - **`comment_poster.py`**: Post inline discussions to GitLab MR, handle resolution actions for prior feedback
 - **`repo_config.py`**: Discover repo-level skills, agents, instructions
 
 ### 7. State & Concurrency
-- **`concurrency.py`**: MemoryLock, MemoryDedup, ReviewedMRTracker, ProcessedIssueTracker, TaskQueue protocol, QueueMessage
+- **`concurrency/`**: MemoryLock, MemoryDedup, DistributedLock/DeduplicationStore protocols, TaskQueue, QueueMessage
+- **`dedup.py`**: Unified `DeduplicationService` with typed helpers for reviews, notes, and issues
 - **`credential_registry.py`**: Maps credential aliases to tokens, TTL-cached identity resolution (1hr default)
 - **`project_registry.py`**: Resolves project context at startup. Supports both v1 (`from_rendered_map`) and v2 (`from_config`) config sources. Optional `jira_project` enables review-only projects.
 - **`azure_storage.py`**: AzureStorageTaskQueue (Claim Check dispatch via Azure Storage Queue + Blob), BlobResultStore (result read/write to Blob Storage)
 
 ### 8. Telemetry
-- **`telemetry.py`**: OTEL tracing, metrics, log export
+- **`telemetry/`**: OTEL tracing, metrics, log export (split into tracing, logging, exporters)
 - **`metrics.py`**: All 7 metrics instruments
 
 ## External Dependencies (pyproject.toml)
