@@ -15,20 +15,12 @@ from gitlab_copilot_agent.discussion_models import (
     Discussion,
     DiscussionNote,
 )
-from gitlab_copilot_agent.models import (
-    NoteMergeRequest,
-    NoteObjectAttributes,
-    NoteWebhookPayload,
-    WebhookProject,
-    WebhookUser,
-)
+from gitlab_copilot_agent.events import TaskEvent
 from gitlab_copilot_agent.task_executor import CodingResult, ReviewResult, TaskExecutionError
-from tests.conftest import make_settings
+from tests.conftest import GITLAB_TOKEN, MR_IID, PROJECT_ID, make_settings
 
-# -- Test constants --
+# -- Test constants (discussion-specific) --
 
-PROJECT_ID = 42
-MR_IID = 7
 NOTE_ID = 501
 DISCUSSION_ID = "disc-001"
 AGENT_USER_ID = 99
@@ -38,7 +30,6 @@ TARGET_BRANCH = "main"
 CLONE_URL = "https://gitlab.example.com/group/project.git"
 PROJECT_PATH = "group/project"
 NOTE_TEXT = "@review-bot please explain this"
-MR_TITLE = "Test MR"
 REPLY_TEXT = "Here is my explanation."
 CHANGES_PUSHED_MARKER = "✅ Changes pushed."
 GENERIC_ERROR_SNIPPET = "❌ Unable to process your request"
@@ -50,29 +41,22 @@ _MOD = "gitlab_copilot_agent.discussion_orchestrator"
 # -- Factories --
 
 
-def _make_payload(**overrides: Any) -> NoteWebhookPayload:
+def _make_event(**overrides: Any) -> TaskEvent:
     defaults: dict[str, Any] = {
-        "object_kind": "note",
-        "user": WebhookUser(id=1, username="developer"),
-        "project": WebhookProject(
-            id=PROJECT_ID,
-            path_with_namespace=PROJECT_PATH,
-            git_http_url=CLONE_URL,
-        ),
-        "object_attributes": NoteObjectAttributes(
-            id=NOTE_ID,
-            note=NOTE_TEXT,
-            noteable_type="MergeRequest",
-            discussion_id=DISCUSSION_ID,
-        ),
-        "merge_request": NoteMergeRequest(
-            iid=MR_IID,
-            title=MR_TITLE,
-            source_branch=SOURCE_BRANCH,
-            target_branch=TARGET_BRANCH,
-        ),
+        "task_type": "discussion",
+        "project_id": PROJECT_ID,
+        "repo": PROJECT_PATH,
+        "clone_url": CLONE_URL,
+        "branch": SOURCE_BRANCH,
+        "target_branch": TARGET_BRANCH,
+        "mr_iid": MR_IID,
+        "trigger_source": "webhook",
+        "token": GITLAB_TOKEN,
+        "note_id": NOTE_ID,
+        "discussion_id": DISCUSSION_ID,
+        "note_body": NOTE_TEXT,
     }
-    return NoteWebhookPayload(**(defaults | overrides))
+    return TaskEvent(**(defaults | overrides))
 
 
 def _make_agent() -> AgentIdentity:
@@ -167,7 +151,7 @@ async def test_qa_reply_no_code_changes(
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
-        _make_payload(),
+        _make_event(),
         executor,
         _make_agent(),
     )
@@ -220,7 +204,7 @@ async def test_coding_reply_with_changes(
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
-        _make_payload(),
+        _make_event(),
         executor,
         _make_agent(),
     )
@@ -271,7 +255,7 @@ async def test_coding_reply_empty_patch(
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
-        _make_payload(),
+        _make_event(),
         executor,
         _make_agent(),
     )
@@ -303,7 +287,7 @@ async def test_triggering_discussion_not_found(
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
-        _make_payload(),
+        _make_event(),
         executor,
         _make_agent(),
     )
@@ -337,7 +321,7 @@ async def test_task_execution_error_posts_user_error(
     with pytest.raises(TaskExecutionError):
         await handle_discussion_interaction(
             make_settings(),
-            _make_payload(),
+            _make_event(),
             executor,
             _make_agent(),
         )
@@ -364,7 +348,7 @@ async def test_general_exception_posts_generic_error(
     with pytest.raises(RuntimeError, match="unexpected"):
         await handle_discussion_interaction(
             make_settings(),
-            _make_payload(),
+            _make_event(),
             executor,
             _make_agent(),
         )
@@ -393,7 +377,7 @@ async def test_cleanup_runs_on_failure(
     with pytest.raises(RuntimeError):
         await handle_discussion_interaction(
             make_settings(),
-            _make_payload(),
+            _make_event(),
             executor,
             _make_agent(),
         )
@@ -442,7 +426,7 @@ async def test_repo_lock_used_when_provided(
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
-        _make_payload(),
+        _make_event(),
         executor,
         _make_agent(),
         repo_locks=repo_locks,
@@ -488,7 +472,7 @@ async def test_deleted_branch_replies_with_warning(
 
     await handle_discussion_interaction(
         make_settings(),
-        _make_payload(),
+        _make_event(),
         AsyncMock(),
         _make_agent(),
     )
@@ -558,10 +542,9 @@ async def test_discussion_interaction_auto_resolve(
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
-        _make_payload(),
+        _make_event(resolution_behavior="auto-resolve"),
         executor,
         _make_agent(),
-        resolution_behavior="auto-resolve",
     )
 
     # Reply posted
@@ -606,10 +589,9 @@ async def test_discussion_interaction_suggest_no_resolve(
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
-        _make_payload(),
+        _make_event(resolution_behavior="suggest"),
         executor,
         _make_agent(),
-        resolution_behavior="suggest",
     )
 
     # Reply posted
@@ -653,10 +635,9 @@ async def test_discussion_interaction_off_no_action(
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
-        _make_payload(),
+        _make_event(resolution_behavior="off"),
         executor,
         _make_agent(),
-        resolution_behavior="off",
     )
 
     # Reply still posted
@@ -700,10 +681,9 @@ async def test_discussion_interaction_partial_never_resolved(
     executor = AsyncMock()
     await handle_discussion_interaction(
         make_settings(),
-        _make_payload(),
+        _make_event(resolution_behavior="auto-resolve"),
         executor,
         _make_agent(),
-        resolution_behavior="auto-resolve",
     )
 
     # Reply posted
@@ -755,10 +735,9 @@ async def test_discussion_interaction_resolution_error_logged(
     # Should NOT raise — resolution errors are swallowed and logged
     await handle_discussion_interaction(
         make_settings(),
-        _make_payload(),
+        _make_event(resolution_behavior="auto-resolve"),
         executor,
         _make_agent(),
-        resolution_behavior="auto-resolve",
     )
 
     # Reply still posted successfully

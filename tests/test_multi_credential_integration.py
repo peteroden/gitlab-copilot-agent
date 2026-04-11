@@ -220,7 +220,7 @@ async def test_note_webhook_multi_project_token_isolation(
             await asyncio.sleep(0.1)
 
             mock_handle.assert_awaited_once()
-            _, kwargs = mock_handle.call_args
-            assert kwargs["project_token"] == PROJECT_BETA_TOKEN
+            event = mock_handle.call_args[0][1]
+            assert event.token == PROJECT_BETA_TOKEN
     finally:
         app.state.project_registry = None

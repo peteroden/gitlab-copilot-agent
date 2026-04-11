@@ -258,8 +258,8 @@ async def test_webhook_review_uses_per_project_token(client: AsyncClient) -> Non
             await asyncio.sleep(0.1)
 
         mock_handle.assert_awaited_once()
-        _, kwargs = mock_handle.call_args
-        assert kwargs["project_token"] == PER_PROJECT_TOKEN
+        event = mock_handle.call_args[0][1]
+        assert event.token == PER_PROJECT_TOKEN
     finally:
         app.state.project_registry = None
 
@@ -275,8 +275,8 @@ async def test_webhook_review_falls_back_to_global_token(client: AsyncClient) ->
             await asyncio.sleep(0.1)
 
         mock_handle.assert_awaited_once()
-        _, kwargs = mock_handle.call_args
-        assert kwargs["project_token"] == GITLAB_TOKEN
+        event = mock_handle.call_args[0][1]
+        assert event.token == GITLAB_TOKEN
     finally:
         app.state.project_registry = None
 
@@ -295,8 +295,8 @@ async def test_webhook_discussion_uses_per_project_token(client: AsyncClient) ->
             await asyncio.sleep(0.1)
 
         mock_handle.assert_awaited_once()
-        _, kwargs = mock_handle.call_args
-        assert kwargs["project_token"] == PER_PROJECT_TOKEN
+        event = mock_handle.call_args[0][1]
+        assert event.token == PER_PROJECT_TOKEN
     finally:
         app.state.project_registry = None
 
@@ -311,8 +311,8 @@ async def test_webhook_review_works_without_registry(client: AsyncClient) -> Non
         await asyncio.sleep(0.1)
 
     mock_handle.assert_awaited_once()
-    _, kwargs = mock_handle.call_args
-    assert kwargs["project_token"] == GITLAB_TOKEN
+    event = mock_handle.call_args[0][1]
+    assert event.token == GITLAB_TOKEN
 
 
 async def test_webhook_review_passes_credential_registry(client: AsyncClient) -> None:

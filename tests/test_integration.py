@@ -25,7 +25,7 @@ from tests.conftest import (
     PROJECT_ID,
     make_mr_changes,
     make_settings,
-    make_webhook_payload,
+    make_task_event,
 )
 
 
@@ -106,7 +106,7 @@ async def test_orchestrator_cleans_up_on_error(
     mock_gl_instance.cleanup = AsyncMock()
 
     with pytest.raises(RuntimeError, match="SDK crashed"):
-        await handle_review(make_settings(), make_webhook_payload(), AsyncMock())
+        await handle_review(make_settings(), make_task_event(), AsyncMock())
 
     mock_gl_instance.cleanup.assert_awaited_once()
 
@@ -170,10 +170,7 @@ async def test_discussion_history_passed_with_credential_registry(
     mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
 
     await handle_review(
-        make_settings(),
-        make_webhook_payload(),
-        AsyncMock(),
-        credential_registry=mock_registry,
+        make_settings(), make_task_event(), AsyncMock(), credential_registry=mock_registry
     )
 
     mock_gl_instance.list_mr_discussions.assert_awaited_once_with(PROJECT_ID, MR_IID)
@@ -199,7 +196,7 @@ async def test_discussion_history_none_without_credential_registry(
     """Without credential_registry, discussion_history is None."""
     _setup_mocks(mock_client_class, mock_run_review)
 
-    await handle_review(make_settings(), make_webhook_payload(), AsyncMock())
+    await handle_review(make_settings(), make_task_event(), AsyncMock())
 
     review_kwargs = mock_run_review.call_args[1]
     assert review_kwargs["discussion_history"] is None
@@ -222,10 +219,7 @@ async def test_discussion_history_failure_is_non_fatal(
     mock_registry.resolve_identity = AsyncMock(side_effect=RuntimeError("API down"))
 
     await handle_review(
-        make_settings(),
-        make_webhook_payload(),
-        AsyncMock(),
-        credential_registry=mock_registry,
+        make_settings(), make_task_event(), AsyncMock(), credential_registry=mock_registry
     )
 
     # Review still ran, but without discussion_history
@@ -252,10 +246,7 @@ async def test_discussion_threads_flow_through_pipeline(
     mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
 
     await handle_review(
-        make_settings(),
-        make_webhook_payload(),
-        AsyncMock(),
-        credential_registry=mock_registry,
+        make_settings(), make_task_event(), AsyncMock(), credential_registry=mock_registry
     )
 
     review_kwargs = mock_run_review.call_args[1]
@@ -301,9 +292,8 @@ async def test_resolution_behavior_flows_to_post_review(
 
     await handle_review(
         make_settings(),
-        make_webhook_payload(),
+        make_task_event(resolution_behavior="auto-resolve"),
         AsyncMock(),
-        resolution_behavior="auto-resolve",
     )
 
     mock_post_review.assert_awaited_once()
@@ -348,7 +338,7 @@ async def test_prior_feedback_rendered_in_prompt(
 
     await handle_review(
         make_settings(),
-        make_webhook_payload(),
+        make_task_event(),
         mock_executor,
         credential_registry=mock_registry,
     )
@@ -443,7 +433,7 @@ async def test_incremental_review_with_marker(
 
     await handle_review(
         make_settings(),
-        make_webhook_payload(),
+        make_task_event(),
         mock_executor,
         credential_registry=mock_registry,
     )
@@ -492,7 +482,7 @@ async def test_incremental_review_compare_fails_fallback(
 
     await handle_review(
         make_settings(),
-        make_webhook_payload(),
+        make_task_event(),
         mock_executor,
         credential_registry=mock_registry,
     )
@@ -607,7 +597,7 @@ async def test_suppressed_feedback_rendered_in_prompt(
 
     await handle_review(
         make_settings(),
-        make_webhook_payload(),
+        make_task_event(),
         mock_executor,
         credential_registry=mock_registry,
     )
@@ -659,7 +649,7 @@ async def test_commit_messages_in_review_prompt(
 
     await handle_review(
         make_settings(),
-        make_webhook_payload(),
+        make_task_event(),
         mock_executor,
     )
 
@@ -699,7 +689,7 @@ async def test_commit_fetch_failure_graceful_degradation(
 
     await handle_review(
         make_settings(),
-        make_webhook_payload(),
+        make_task_event(),
         mock_executor,
     )
 

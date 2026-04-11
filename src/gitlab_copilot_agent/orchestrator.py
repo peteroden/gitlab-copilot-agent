@@ -27,8 +27,7 @@ from gitlab_copilot_agent.telemetry import get_tracer
 if TYPE_CHECKING:
     from gitlab_copilot_agent.config import Settings
     from gitlab_copilot_agent.credential_registry import CredentialRegistry
-    from gitlab_copilot_agent.mapping_models import ResolutionBehavior
-    from gitlab_copilot_agent.models import MergeRequestWebhookPayload
+    from gitlab_copilot_agent.events import TaskEvent
     from gitlab_copilot_agent.task_executor import TaskExecutor
 
 log = structlog.get_logger()
@@ -37,44 +36,50 @@ _tracer = get_tracer(__name__)
 
 async def handle_review(
     settings: Settings,
-    payload: MergeRequestWebhookPayload,
+    event: TaskEvent,
     executor: TaskExecutor,
-    project_token: str | None = None,
     credential_registry: CredentialRegistry | None = None,
-    resolution_behavior: ResolutionBehavior = "suggest",
-    credential_ref: str = "default",
 ) -> None:
     """Full review pipeline: clone → review → parse → post comments."""
-    mr = payload.object_attributes
-    project = payload.project
+    project_id = event.project_id
+    mr_iid = event.mr_iid
+    if mr_iid is None:
+        msg = "review events require mr_iid"
+        raise ValueError(msg)
+    head_sha = event.head_sha
+    if head_sha is None:
+        msg = "review events require head_sha"
+        raise ValueError(msg)
+    token = event.token
+    clone_url = event.clone_url
+
     start = time.monotonic()
     outcome = "error"
     with _tracer.start_as_current_span(
-        "mr.review", attributes={"project_id": project.id, "mr_iid": mr.iid}
+        "mr.review", attributes={"project_id": project_id, "mr_iid": mr_iid}
     ):
-        bound_log = log.bind(project_id=project.id, mr_iid=mr.iid)
+        bound_log = log.bind(project_id=project_id, mr_iid=mr_iid)
 
         bound_log.info("review_started")
 
-        token = project_token or settings.gitlab_token
         gl_client = GitLabClient(settings.gitlab_url, token)
         repo_path: Path | None = None
 
         try:
-            validate_clone_url_host(project.git_http_url, settings.gitlab_url)
+            validate_clone_url_host(clone_url, settings.gitlab_url)
             repo_path = await gl_client.clone_repo(
-                project.git_http_url,
-                mr.source_branch,
+                clone_url,
+                event.branch,
                 token,
                 clone_dir=settings.clone_dir,
             )
 
-            mr_details = await gl_client.get_mr_details(project.id, mr.iid)
+            mr_details = await gl_client.get_mr_details(project_id, mr_iid)
 
             # Fetch commit messages for developer intent context (graceful degradation)
             commit_messages: list[str] = []
             try:
-                commits = await gl_client.get_mr_commits(project.id, mr.iid)
+                commits = await gl_client.get_mr_commits(project_id, mr_iid)
                 commit_messages = [c.message for c in commits]
                 bound_log.info("commits_loaded", commit_count=len(commits))
             except Exception:
@@ -85,9 +90,9 @@ async def handle_review(
             discussion_history: DiscussionHistory | None = None
             if credential_registry is not None:
                 try:
-                    discussions = await gl_client.list_mr_discussions(project.id, mr.iid)
+                    discussions = await gl_client.list_mr_discussions(project_id, mr_iid)
                     agent_identity = await credential_registry.resolve_identity(
-                        credential_ref, settings.gitlab_url
+                        event.credential_ref, settings.gitlab_url
                     )
                     discussion_history = DiscussionHistory(
                         discussions=discussions, agent=agent_identity
@@ -103,7 +108,6 @@ async def handle_review(
                 bound_log.debug("discussion_history_skipped", reason="no_credential_registry")
 
             # Build diff text — incremental when a prior review marker exists
-            head_sha = mr.last_commit.id
             is_incremental = False
             diff_text = ""
             last_reviewed_sha = extract_last_reviewed_sha(discussion_history)
@@ -111,7 +115,7 @@ async def handle_review(
             if last_reviewed_sha and last_reviewed_sha != head_sha:
                 try:
                     incremental_changes = await gl_client.compare_commits(
-                        project.id, last_reviewed_sha, head_sha
+                        project_id, last_reviewed_sha, head_sha
                     )
                     if incremental_changes:
                         diff_text = "\n".join(
@@ -134,10 +138,10 @@ async def handle_review(
                 )
 
             review_req = ReviewRequest(
-                title=mr.title,
-                description=mr.description,
-                source_branch=mr.source_branch,
-                target_branch=mr.target_branch,
+                title=mr_details.title,
+                description=mr_details.description,
+                source_branch=event.branch,
+                target_branch=event.target_branch,
                 commit_messages=commit_messages,
             )
 
@@ -145,7 +149,7 @@ async def handle_review(
                 executor,
                 settings,
                 str(repo_path),
-                project.git_http_url,
+                clone_url,
                 review_req,
                 diff_text=diff_text,
                 discussion_history=discussion_history,
@@ -178,12 +182,12 @@ async def handle_review(
 
             await post_review(
                 gl,
-                project.id,
-                mr.iid,
+                project_id,
+                mr_iid,
                 mr_details.diff_refs,
                 parsed,
                 mr_details.changes,
-                resolution_behavior=resolution_behavior,
+                resolution_behavior=event.resolution_behavior,
                 allowed_discussion_ids=allowed_discussion_ids,
                 head_sha=head_sha,
             )
@@ -194,8 +198,8 @@ async def handle_review(
             bound_log.error("review_task_failed", error=error_str)
             try:
                 await gl_client.post_mr_comment(
-                    project.id,
-                    mr.iid,
+                    project_id,
+                    mr_iid,
                     f"⚠️ Automated review failed.\n\n{user_error_message(error_str)}",
                 )
             except Exception:
@@ -209,8 +213,8 @@ async def handle_review(
             )
             try:
                 await gl_client.post_mr_comment(
-                    project.id,
-                    mr.iid,
+                    project_id,
+                    mr_iid,
                     "⚠️ Automated review failed. "
                     "The service encountered an unexpected error. "
                     "Please try again or contact the project administrator.",

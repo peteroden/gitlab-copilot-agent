@@ -14,22 +14,11 @@ from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
 from gitlab_copilot_agent.discussion_models import AgentIdentity
 from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
+from gitlab_copilot_agent.events import TaskEvent
 from gitlab_copilot_agent.gitlab_client import (
     GitLabClient,
     GitLabClientProtocol,
-    MRAuthor,
     MRListItem,
-    NoteListItem,
-)
-from gitlab_copilot_agent.models import (
-    MergeRequestWebhookPayload,
-    MRLastCommit,
-    MRObjectAttributes,
-    NoteMergeRequest,
-    NoteObjectAttributes,
-    NoteWebhookPayload,
-    WebhookProject,
-    WebhookUser,
 )
 from gitlab_copilot_agent.orchestrator import handle_review
 from gitlab_copilot_agent.project_registry import ProjectRegistry
@@ -194,29 +183,11 @@ class GitLabPoller:
             key = f"review:{project_id}:{mr.iid}"
         if await self._dedup.is_seen(key):
             return
-        # Extract path from web_url: https://gitlab.example.com/group/project/-/merge_requests/1
+        # Extract namespace from web_url: https://gitlab.example.com/group/project/-/merge_requests/1
         project_url = mr.web_url.split("/-/")[0]
         ns = project_url.removeprefix(self._settings.gitlab_url).strip("/")
-        payload = MergeRequestWebhookPayload(
-            object_kind="merge_request",
-            user=WebhookUser(id=mr.author.id, username=mr.author.username),
-            project=WebhookProject(
-                id=project_id,
-                path_with_namespace=ns,
-                git_http_url=f"{project_url}.git",
-            ),
-            object_attributes=MRObjectAttributes(
-                iid=mr.iid,
-                title=mr.title,
-                description=mr.description or "",
-                action="update",
-                source_branch=mr.source_branch,
-                target_branch=mr.target_branch,
-                last_commit=MRLastCommit(id=mr.sha, message=""),
-                url=mr.web_url,
-                oldrev=None,
-            ),
-        )
+        clone_url = f"{project_url}.git"
+
         credential_ref = "default"
         resolution_behavior = self._settings.resolution_behavior
         if self._project_registry is not None:
@@ -224,15 +195,28 @@ class GitLabPoller:
             if resolved is not None:
                 credential_ref = resolved.credential_ref
                 resolution_behavior = resolved.resolution_behavior
+
+        token = self._resolve_token(project_id) or self._settings.gitlab_token
+        event = TaskEvent(
+            task_type="review",
+            project_id=project_id,
+            repo=ns,
+            clone_url=clone_url,
+            branch=mr.source_branch,
+            target_branch=mr.target_branch,
+            mr_iid=mr.iid,
+            head_sha=mr.sha,
+            trigger_source="gitlab_poller",
+            token=token,
+            credential_ref=credential_ref,
+            resolution_behavior=resolution_behavior,
+        )
         try:
             await handle_review(
                 self._settings,
-                payload,
+                event,
                 self._executor,
-                project_token=self._resolve_token(project_id),
                 credential_registry=self._credential_registry,
-                resolution_behavior=resolution_behavior,
-                credential_ref=credential_ref,
             )
         except TaskExecutionError:
             await log.awarning("gitlab_review_task_failed", project_id=project_id, mr_iid=mr.iid)
@@ -270,6 +254,17 @@ class GitLabPoller:
         mention_pattern = re.compile(
             rf"(?<![.\w-])@{re.escape(agent_identity.username)}(?![.\w-])"
         )
+
+        # Resolve per-project settings once
+        credential_ref = "default"
+        resolution_behavior = self._settings.resolution_behavior
+        if self._project_registry is not None:
+            resolved = self._project_registry.get_by_project_id(project_id)
+            if resolved is not None:
+                credential_ref = resolved.credential_ref
+                resolution_behavior = resolved.resolution_behavior
+        token = self._resolve_token(project_id) or self._settings.gitlab_token
+
         for mr in mrs:
             if mr.sha is None:
                 continue
@@ -279,6 +274,11 @@ class GitLabPoller:
             except Exception:
                 await log.awarning("discussion_fetch_failed", project_id=project_id, mr_iid=mr.iid)
                 continue
+
+            # Extract namespace from web_url
+            project_url = mr.web_url.split("/-/")[0]
+            ns = project_url.removeprefix(self._settings.gitlab_url).strip("/")
+            clone_url = f"{project_url}.git"
 
             for disc in discussions:
                 if disc.is_resolved:
@@ -310,27 +310,29 @@ class GitLabPoller:
                 if await self._dedup.is_seen(note_key):
                     continue
 
-                # Build payload from the discussion note
-                note_as_list_item = NoteListItem(
-                    id=latest_note.note_id,
-                    body=latest_note.body,
-                    author=MRAuthor(
-                        id=latest_note.author_id, username=latest_note.author_username
-                    ),
-                    system=latest_note.is_system,
-                    created_at=latest_note.created_at,
+                event = TaskEvent(
+                    task_type="discussion",
+                    project_id=project_id,
+                    repo=ns,
+                    clone_url=clone_url,
+                    branch=mr.source_branch,
+                    target_branch=mr.target_branch,
+                    mr_iid=mr.iid,
+                    trigger_source="gitlab_poller",
+                    token=token,
+                    credential_ref=credential_ref,
+                    resolution_behavior=resolution_behavior,
+                    note_id=latest_note.note_id,
+                    discussion_id=disc.discussion_id,
+                    note_body=latest_note.body,
                 )
-                payload = _build_note_payload(note_as_list_item, mr, project_id, self._settings)
-                # Add discussion_id to the payload for the handler
-                payload.object_attributes.discussion_id = disc.discussion_id
 
                 try:
                     await handle_discussion_interaction(
                         self._settings,
-                        payload,
+                        event,
                         self._executor,
                         agent_identity,
-                        project_token=self._resolve_token(project_id),
                         repo_locks=self._repo_locks,
                     )
                 except TaskExecutionError:
@@ -343,34 +345,3 @@ class GitLabPoller:
                     await self._dedup.mark_seen(note_key, ttl_seconds=_DEDUP_TTL)
                     continue
                 await self._dedup.mark_seen(note_key, ttl_seconds=_DEDUP_TTL)
-
-
-def _build_note_payload(
-    note: NoteListItem,
-    mr: MRListItem,
-    project_id: int,
-    settings: Settings,
-) -> NoteWebhookPayload:
-    """Synthesize a NoteWebhookPayload from API models."""
-    project_url = mr.web_url.split("/-/")[0]
-    ns = project_url.removeprefix(settings.gitlab_url).strip("/")
-    return NoteWebhookPayload(
-        object_kind="note",
-        user=WebhookUser(id=note.author.id, username=note.author.username),
-        project=WebhookProject(
-            id=project_id,
-            path_with_namespace=ns,
-            git_http_url=f"{project_url}.git",
-        ),
-        object_attributes=NoteObjectAttributes(
-            id=note.id,
-            note=note.body,
-            noteable_type="MergeRequest",
-        ),
-        merge_request=NoteMergeRequest(
-            iid=mr.iid,
-            title=mr.title,
-            source_branch=mr.source_branch,
-            target_branch=mr.target_branch,
-        ),
-    )
