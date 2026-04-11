@@ -9,6 +9,7 @@ import pytest
 
 from gitlab_copilot_agent.concurrency import MemoryDedup
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
+from gitlab_copilot_agent.dedup import DeduplicationService
 from gitlab_copilot_agent.discussion_models import AgentIdentity, Discussion, DiscussionNote
 from gitlab_copilot_agent.gitlab_client import MRAuthor, MRListItem, NoteListItem
 from gitlab_copilot_agent.gitlab_poller import GitLabPoller
@@ -93,13 +94,13 @@ def _mock_credential_registry() -> AsyncMock:
 
 def _poller(
     client: AsyncMock | None = None,
-    dedup: MemoryDedup | None = None,
+    dedup: DeduplicationService | None = None,
     credential_registry: AsyncMock | None = None,
-) -> tuple[GitLabPoller, AsyncMock, MemoryDedup]:
+) -> tuple[GitLabPoller, AsyncMock, DeduplicationService]:
     cl = client or AsyncMock()
     # Default: no discussions unless overridden
     cl.list_mr_discussions.return_value = []
-    dd = dedup or MemoryDedup()
+    dd = dedup or DeduplicationService(MemoryDedup())
     creds = credential_registry or _mock_credential_registry()
     p = GitLabPoller(cl, make_settings(), {PROJECT_ID}, dd, AsyncMock(), credential_registry=creds)
     return p, cl, dd

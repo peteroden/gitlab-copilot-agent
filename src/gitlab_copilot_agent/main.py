@@ -18,12 +18,9 @@ from pydantic import ValidationError
 
 from gitlab_copilot_agent.app_context import AppContext
 from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
-from gitlab_copilot_agent.concurrency import (
-    ProcessedIssueTracker,
-    ReviewedMRTracker,
-)
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
+from gitlab_copilot_agent.dedup import DeduplicationService
 from gitlab_copilot_agent.git_operations import CLONE_DIR_PREFIX
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.gitlab_poller import GitLabPoller
@@ -143,11 +140,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Shared concurrency primitives
     repo_locks = create_lock()
-    dedup_store = create_dedup(
+    dedup_backend = create_dedup(
         azure_storage_account_url=settings.azure_storage_account_url,
         azure_storage_connection_string=settings.azure_storage_connection_string,
     )
-    review_tracker = ReviewedMRTracker()
+    dedup = DeduplicationService(
+        dedup_backend,
+        review_on_push=settings.gitlab_review_on_push,
+    )
     creds = CredentialRegistry.from_env()
 
     # Build typed AppContext (immutable services)
@@ -155,8 +155,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings=settings,
         executor=executor,
         repo_locks=repo_locks,
-        dedup_store=dedup_store,
-        review_tracker=review_tracker,
+        dedup=dedup,
         credential_registry=creds,
         allowed_project_ids=(
             frozenset(allowed_project_ids) if allowed_project_ids is not None else None
@@ -196,12 +195,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except (KeyError, ValueError) as exc:
             raise ValueError(f"Failed to build project registry: {exc}") from exc
         gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
-        tracker = ProcessedIssueTracker()
         handler = CodingOrchestrator(
-            settings, gl_client, jira_client, executor, repo_locks, tracker
+            settings, gl_client, jira_client, executor, repo_locks, dedup=dedup
         )
         poller = JiraPoller(
-            jira_client, settings.jira, project_registry, handler, allowed_project_ids
+            jira_client,
+            settings.jira,
+            project_registry,
+            handler,
+            allowed_project_ids,
+            dedup=dedup,
         )
         await poller.start()
         await log.ainfo("jira_poller_started", interval=settings.jira.poll_interval)
@@ -212,7 +215,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             gl_client=gl_client_poll,
             settings=settings,
             project_ids=allowed_project_ids,
-            dedup=dedup_store,
+            dedup=dedup,
             executor=executor,
             repo_locks=repo_locks,
             project_registry=project_registry,
@@ -243,7 +246,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         steps.append(("gitlab_poller_stop", gl_poller.stop()))
     if jira_client:
         steps.append(("jira_client_close", jira_client.close()))
-    steps.append(("dedup_store_close", dedup_store.aclose()))
+    steps.append(("dedup_close", dedup.aclose()))
     steps.append(("repo_locks_close", repo_locks.aclose()))
     steps.append(("telemetry_flush", asyncio.to_thread(shutdown_telemetry)))
 

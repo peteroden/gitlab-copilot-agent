@@ -230,4 +230,4 @@ async def test_transient_clone_failure_posts_detailed_comment(
     assert "retry on the next poll cycle" in comment
 
     # Issue should NOT be marked as processed — allow retry on next poll
-    assert not orch._tracker.is_processed("PROJ-42")
+    assert orch._dedup is None or not await orch._dedup.is_issue_seen("PROJ-42")

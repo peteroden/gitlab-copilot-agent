@@ -57,7 +57,6 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
     app_context = get_app_context(request)
     settings = app_context.settings
     executor = app_context.executor
-    review_tracker = app_context.review_tracker
     credential_registry = app_context.credential_registry
     registry: ProjectRegistry | None = request.app.state.project_registry
     mr = payload.object_attributes
@@ -96,10 +95,7 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
             executor,
             credential_registry=credential_registry,
         )
-        review_tracker.mark(project_id, mr.iid, head_sha)
-        # Also mark in shared dedup store so the poller won't re-review
-        review_key = f"review:{project_id}:{mr.iid}:{head_sha}"
-        await app_context.dedup_store.mark_seen(review_key, ttl_seconds=86400)
+        await app_context.dedup.mark_review(project_id, mr.iid, head_sha)
         bound.info("background_review_completed")
     except Exception:
         webhook_errors_total.add(1, {"handler": "review"})
@@ -152,7 +148,8 @@ async def _process_discussion(
     request: Request,
     payload: NoteWebhookPayload,
     agent_identity: AgentIdentity,
-    note_key: str = "",
+    note_id: int = 0,
+    mr_iid: int = 0,
 ) -> None:
     """Process a discussion interaction in the background."""
     app_context = get_app_context(request)
@@ -208,8 +205,8 @@ async def _process_discussion(
         webhook_errors_total.add(1, {"handler": "discussion"})
         bound.exception("background_discussion_failed")
     finally:
-        if note_key:
-            await app_context.dedup_store.mark_seen(note_key, ttl_seconds=86400)
+        if note_id:
+            await app_context.dedup.mark_note(payload.project.id, mr_iid, note_id)
 
 
 @router.post("/webhook", status_code=200)
@@ -249,9 +246,8 @@ async def webhook(
             return {"status": "ignored", "reason": "no new commits"}
 
         # Deduplicate by (project_id, mr_iid, head_sha)
-        review_tracker = app_context.review_tracker
         head_sha = mr.last_commit.id
-        if review_tracker.is_reviewed(payload.project.id, mr.iid, head_sha):
+        if await app_context.dedup.is_review_seen(payload.project.id, mr.iid, head_sha):
             await log.ainfo(
                 "review_skipped",
                 reason="duplicate_head_sha",
@@ -298,12 +294,11 @@ async def webhook(
         # Deduplicate — prevents reprocessing on duplicate webhook deliveries
         note_id = note_payload.object_attributes.id
         mr_iid = note_payload.merge_request.iid if note_payload.merge_request else 0
-        note_key = f"note:{note_payload.project.id}:{mr_iid}:{note_id}"
-        if await app_context.dedup_store.is_seen(note_key):
+        if await app_context.dedup.is_note_seen(note_payload.project.id, mr_iid, note_id):
             return {"status": "skipped", "reason": "already processed"}
 
         background_tasks.add_task(
-            _process_discussion, request, note_payload, agent_identity, note_key
+            _process_discussion, request, note_payload, agent_identity, note_id, mr_iid
         )
         return {"status": "queued"}
 

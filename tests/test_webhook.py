@@ -140,7 +140,7 @@ async def test_note_webhook_uses_shared_lock_manager(client: AsyncClient) -> Non
 async def test_webhook_skips_duplicate_head_sha(client: AsyncClient) -> None:
     """Second webhook with same project/MR/SHA is skipped."""
     # Pre-mark this SHA as reviewed
-    app.state.app_context.review_tracker.mark(PROJECT_ID, MR_IID, "abc123")
+    await app.state.app_context.dedup.mark_review(PROJECT_ID, MR_IID, "abc123")
 
     resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
     assert resp.status_code == 200
@@ -149,7 +149,7 @@ async def test_webhook_skips_duplicate_head_sha(client: AsyncClient) -> None:
 
 async def test_webhook_queues_new_head_sha(client: AsyncClient) -> None:
     """New SHA on same MR is NOT skipped."""
-    app.state.app_context.review_tracker.mark(PROJECT_ID, MR_IID, "old_sha")
+    await app.state.app_context.dedup.mark_review(PROJECT_ID, MR_IID, "old_sha")
 
     payload = make_mr_payload(last_commit={"id": "new_sha", "message": "new commit"})
     resp = await client.post("/webhook", json=payload, headers=HEADERS)
@@ -158,20 +158,20 @@ async def test_webhook_queues_new_head_sha(client: AsyncClient) -> None:
 
 async def test_webhook_marks_sha_after_successful_review(client: AsyncClient) -> None:
     """SHA is marked as reviewed only after handle_review succeeds."""
-    tracker = app.state.app_context.review_tracker
-    assert not tracker.is_reviewed(PROJECT_ID, MR_IID, "abc123")
+    dedup = app.state.app_context.dedup
+    assert not await dedup.is_review_seen(PROJECT_ID, MR_IID, "abc123")
 
     with patch("gitlab_copilot_agent.webhook.handle_review", new_callable=AsyncMock):
         resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
         assert resp.json() == {"status": "queued"}
         await asyncio.sleep(0.1)  # let background task complete
 
-    assert tracker.is_reviewed(PROJECT_ID, MR_IID, "abc123")
+    assert await dedup.is_review_seen(PROJECT_ID, MR_IID, "abc123")
 
 
 async def test_webhook_does_not_mark_sha_on_review_failure(client: AsyncClient) -> None:
     """SHA is NOT marked if handle_review raises."""
-    tracker = app.state.app_context.review_tracker
+    dedup = app.state.app_context.dedup
 
     with patch(
         "gitlab_copilot_agent.webhook.handle_review",
@@ -182,7 +182,7 @@ async def test_webhook_does_not_mark_sha_on_review_failure(client: AsyncClient) 
         assert resp.json() == {"status": "queued"}
         await asyncio.sleep(0.1)
 
-    assert not tracker.is_reviewed(PROJECT_ID, MR_IID, "abc123")
+    assert not await dedup.is_review_seen(PROJECT_ID, MR_IID, "abc123")
 
 
 async def test_webhook_ignores_title_only_update(client: AsyncClient) -> None:

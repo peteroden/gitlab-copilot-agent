@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import structlog
 from opentelemetry import trace
@@ -15,6 +15,9 @@ from gitlab_copilot_agent.jira_models import JiraIssue
 from gitlab_copilot_agent.project_registry import ProjectRegistry, ResolvedProject
 from gitlab_copilot_agent.task_executor import TaskExecutionError
 from gitlab_copilot_agent.telemetry import get_tracer
+
+if TYPE_CHECKING:
+    from gitlab_copilot_agent.dedup import DeduplicationService
 
 log = structlog.get_logger()
 _tracer = get_tracer(__name__)
@@ -36,14 +39,15 @@ class JiraPoller:
         project_map: ProjectRegistry,
         handler: CodingTaskHandler,
         allowed_project_ids: set[int] | None = None,
+        dedup: DeduplicationService | None = None,
     ) -> None:
         self._client = jira_client
         self._interval = settings.poll_interval
         self._project_map = project_map
         self._handler = handler
         self._allowed_project_ids = allowed_project_ids
+        self._dedup = dedup
         self._task: asyncio.Task[None] | None = None
-        self._processed_issues: set[str] = set()
         self._poll_lock = asyncio.Lock()
 
     async def reload_registry(self, registry: ProjectRegistry) -> None:
@@ -51,13 +55,11 @@ class JiraPoller:
         async with self._poll_lock:
             old_keys = self._project_map.jira_keys()
             self._project_map = registry
-            self._processed_issues.clear()
             new_keys = registry.jira_keys()
             await log.awarn(
                 "registry_reloaded",
                 added=sorted(new_keys - old_keys),
                 removed=sorted(old_keys - new_keys),
-                processed_issues_cleared=True,
             )
 
     async def start(self) -> None:
@@ -106,7 +108,7 @@ class JiraPoller:
                 span.set_attribute("issue_count", len(issues))
 
                 for issue in issues:
-                    if issue.key in self._processed_issues:
+                    if self._dedup is not None and await self._dedup.is_issue_seen(issue.key):
                         continue
 
                     mapping = self._project_map.get_by_jira(issue.project_key)
@@ -127,4 +129,5 @@ class JiraPoller:
                         except TaskExecutionError:
                             await log.awarning("jira_task_execution_failed", issue=issue.key)
                             continue
-                        self._processed_issues.add(issue.key)
+                        if self._dedup is not None:
+                            await self._dedup.mark_issue(issue.key)

@@ -6,7 +6,8 @@ import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
 
-from gitlab_copilot_agent.concurrency import DeduplicationStore, RepoLockManager
+from gitlab_copilot_agent.concurrency import RepoLockManager
+from gitlab_copilot_agent.dedup import DeduplicationService
 from gitlab_copilot_agent.main import _create_executor, lifespan
 from gitlab_copilot_agent.task_executor import LocalTaskExecutor, TaskExecutor
 from tests.conftest import (
@@ -77,7 +78,7 @@ async def test_lifespan_without_jira_starts_and_stops(env_vars: None) -> None:
         assert test_app.state.app_context.settings.jira is None
         assert test_app.state.app_context.repo_locks is not None
         assert isinstance(test_app.state.app_context.repo_locks, RepoLockManager)
-        assert isinstance(test_app.state.app_context.dedup_store, DeduplicationStore)
+        assert isinstance(test_app.state.app_context.dedup, DeduplicationService)
         assert isinstance(test_app.state.app_context.executor, LocalTaskExecutor)
         assert test_app.state.project_registry is None
 
@@ -133,7 +134,7 @@ async def test_lifespan_with_jira_creates_shared_lock_manager(
 EXPECTED_SHUTDOWN_ORDER = [
     "jira_poller_stop",
     "jira_client_close",
-    "dedup_store_close",
+    "dedup_close",
     "repo_locks_close",
     "telemetry_flush",
 ]
@@ -155,7 +156,7 @@ async def test_shutdown_call_ordering(
     mock_jira.close = AsyncMock(side_effect=lambda: call_order.append("jira_client_close"))
 
     mock_dedup = AsyncMock()
-    mock_dedup.aclose = AsyncMock(side_effect=lambda: call_order.append("dedup_store_close"))
+    mock_dedup.aclose = AsyncMock(side_effect=lambda: call_order.append("dedup_close"))
 
     mock_locks = AsyncMock()
     mock_locks.aclose = AsyncMock(side_effect=lambda: call_order.append("repo_locks_close"))

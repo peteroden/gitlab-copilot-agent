@@ -9,9 +9,10 @@ from datetime import UTC, datetime, timedelta
 
 import structlog
 
-from gitlab_copilot_agent.concurrency import DeduplicationStore, DistributedLock
+from gitlab_copilot_agent.concurrency import DistributedLock
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
+from gitlab_copilot_agent.dedup import DeduplicationService
 from gitlab_copilot_agent.discussion_models import AgentIdentity
 from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
 from gitlab_copilot_agent.events import TaskEvent
@@ -37,7 +38,7 @@ class GitLabPoller:
         gl_client: GitLabClientProtocol,
         settings: Settings,
         project_ids: set[int],
-        dedup: DeduplicationStore,
+        dedup: DeduplicationService,
         executor: TaskExecutor,
         repo_locks: DistributedLock | None = None,
         project_registry: ProjectRegistry | None = None,
@@ -177,11 +178,7 @@ class GitLabPoller:
     async def _process_mr(self, project_id: int, mr: MRListItem) -> None:
         if mr.sha is None:
             return  # MR has no commits (e.g. empty draft)
-        if self._settings.gitlab_review_on_push:
-            key = f"review:{project_id}:{mr.iid}:{mr.sha}"
-        else:
-            key = f"review:{project_id}:{mr.iid}"
-        if await self._dedup.is_seen(key):
+        if await self._dedup.is_review_seen(project_id, mr.iid, mr.sha):
             return
         # Extract namespace from web_url: https://gitlab.example.com/group/project/-/merge_requests/1
         project_url = mr.web_url.split("/-/")[0]
@@ -220,9 +217,9 @@ class GitLabPoller:
             )
         except TaskExecutionError:
             await log.awarning("gitlab_review_task_failed", project_id=project_id, mr_iid=mr.iid)
-            await self._dedup.mark_seen(key, ttl_seconds=_DEDUP_TTL)
+            await self._dedup.mark_review(project_id, mr.iid, mr.sha)
             return
-        await self._dedup.mark_seen(key, ttl_seconds=_DEDUP_TTL)
+        await self._dedup.mark_review(project_id, mr.iid, mr.sha)
 
     async def _resolve_agent_identity(self, project_id: int) -> AgentIdentity | None:
         """Resolve the agent identity for the credential used by this project.
@@ -306,8 +303,7 @@ class GitLabPoller:
                 if not is_mention and not agent_participated:
                     continue
 
-                note_key = f"note:{project_id}:{mr.iid}:{latest_note.note_id}"
-                if await self._dedup.is_seen(note_key):
+                if await self._dedup.is_note_seen(project_id, mr.iid, latest_note.note_id):
                     continue
 
                 event = TaskEvent(
@@ -342,6 +338,6 @@ class GitLabPoller:
                         project_id=project_id,
                         mr_iid=mr.iid,
                     )
-                    await self._dedup.mark_seen(note_key, ttl_seconds=_DEDUP_TTL)
+                    await self._dedup.mark_note(project_id, mr.iid, latest_note.note_id)
                     continue
-                await self._dedup.mark_seen(note_key, ttl_seconds=_DEDUP_TTL)
+                await self._dedup.mark_note(project_id, mr.iid, latest_note.note_id)
