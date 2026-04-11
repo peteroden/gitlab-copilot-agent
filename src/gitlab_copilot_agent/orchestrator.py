@@ -1,27 +1,18 @@
 """Orchestrator — wires webhook → clone → review → post.
 
-Fetches MR discussion history and agent identity for context-aware reviews.
+Thin delegation layer: validates inputs, constructs the ReviewPipeline,
+and calls ``run_pipeline()``.  All logic lives in ``review_pipeline.py``.
 """
 
 from __future__ import annotations
 
-import time
-from pathlib import Path
 from typing import TYPE_CHECKING
 
-import gitlab
 import structlog
 
-from gitlab_copilot_agent.comment_parser import parse_review
-from gitlab_copilot_agent.comment_poster import post_review
-from gitlab_copilot_agent.discussion_models import DiscussionHistory
-from gitlab_copilot_agent.error_messages import user_error_message
-from gitlab_copilot_agent.git_operations import validate_clone_url_host
 from gitlab_copilot_agent.gitlab_client import GitLabClient
-from gitlab_copilot_agent.incremental import extract_last_reviewed_sha
-from gitlab_copilot_agent.metrics import reviews_duration, reviews_total
-from gitlab_copilot_agent.review_engine import ReviewRequest, run_review
-from gitlab_copilot_agent.task_executor import TaskExecutionError
+from gitlab_copilot_agent.pipeline import run_pipeline
+from gitlab_copilot_agent.review_pipeline import ReviewContext, ReviewPipeline
 from gitlab_copilot_agent.telemetry import get_tracer
 
 if TYPE_CHECKING:
@@ -41,189 +32,16 @@ async def handle_review(
     credential_registry: CredentialRegistry | None = None,
 ) -> None:
     """Full review pipeline: clone → review → parse → post comments."""
-    project_id = event.project_id
-    mr_iid = event.mr_iid
-    if mr_iid is None:
-        msg = "review events require mr_iid"
-        raise ValueError(msg)
-    head_sha = event.head_sha
-    if head_sha is None:
-        msg = "review events require head_sha"
-        raise ValueError(msg)
-    token = event.token
-    clone_url = event.clone_url
-
-    start = time.monotonic()
-    outcome = "error"
     with _tracer.start_as_current_span(
-        "mr.review", attributes={"project_id": project_id, "mr_iid": mr_iid}
+        "mr.review",
+        attributes={"project_id": event.project_id, "mr_iid": event.mr_iid or 0},
     ):
-        bound_log = log.bind(project_id=project_id, mr_iid=mr_iid)
-
-        bound_log.info("review_started")
-
-        gl_client = GitLabClient(settings.gitlab_url, token)
-        repo_path: Path | None = None
-
-        try:
-            validate_clone_url_host(clone_url, settings.gitlab_url)
-            repo_path = await gl_client.clone_repo(
-                clone_url,
-                event.branch,
-                token,
-                clone_dir=settings.clone_dir,
-            )
-
-            mr_details = await gl_client.get_mr_details(project_id, mr_iid)
-
-            # Fetch commit messages for developer intent context (graceful degradation)
-            commit_messages: list[str] = []
-            try:
-                commits = await gl_client.get_mr_commits(project_id, mr_iid)
-                commit_messages = [c.message for c in commits]
-                bound_log.info("commits_loaded", commit_count=len(commits))
-            except Exception:
-                bound_log.warning("commit_fetch_failed", exc_info=True)
-
-            # Fetch discussion history for context (requires credential_registry
-            # to resolve agent identity — skip entirely without it)
-            discussion_history: DiscussionHistory | None = None
-            if credential_registry is not None:
-                try:
-                    discussions = await gl_client.list_mr_discussions(project_id, mr_iid)
-                    agent_identity = await credential_registry.resolve_identity(
-                        event.credential_ref, settings.gitlab_url
-                    )
-                    discussion_history = DiscussionHistory(
-                        discussions=discussions, agent=agent_identity
-                    )
-                    bound_log.info(
-                        "discussion_history_loaded",
-                        discussion_count=len(discussions),
-                        agent_user_id=agent_identity.user_id,
-                    )
-                except Exception:
-                    bound_log.warning("discussion_history_failed", exc_info=True)
-            else:
-                bound_log.debug("discussion_history_skipped", reason="no_credential_registry")
-
-            # Build diff text — incremental when a prior review marker exists
-            is_incremental = False
-            diff_text = ""
-            last_reviewed_sha = extract_last_reviewed_sha(discussion_history)
-
-            if last_reviewed_sha and last_reviewed_sha != head_sha:
-                try:
-                    incremental_changes = await gl_client.compare_commits(
-                        project_id, last_reviewed_sha, head_sha
-                    )
-                    if incremental_changes:
-                        diff_text = "\n".join(
-                            f"--- a/{c.old_path}\n+++ b/{c.new_path}\n{c.diff}"
-                            for c in incremental_changes
-                        )
-                        is_incremental = True
-                        bound_log.info(
-                            "incremental_review",
-                            from_sha=last_reviewed_sha[:12],
-                            to_sha=head_sha[:12],
-                            files_changed=len(incremental_changes),
-                        )
-                except Exception:
-                    bound_log.warning("incremental_diff_failed", exc_info=True)
-
-            if not is_incremental:
-                diff_text = "\n".join(
-                    f"--- a/{c.old_path}\n+++ b/{c.new_path}\n{c.diff}" for c in mr_details.changes
-                )
-
-            review_req = ReviewRequest(
-                title=mr_details.title,
-                description=mr_details.description,
-                source_branch=event.branch,
-                target_branch=event.target_branch,
-                commit_messages=commit_messages,
-            )
-
-            raw_result = await run_review(
-                executor,
-                settings,
-                str(repo_path),
-                clone_url,
-                review_req,
-                diff_text=diff_text,
-                discussion_history=discussion_history,
-                head_sha=head_sha,
-                is_incremental=is_incremental,
-            )
-            parsed = parse_review(raw_result.summary)
-
-            bound_log.info(
-                "review_complete",
-                inline_comments=len(parsed.comments),
-                resolutions=len(parsed.resolutions),
-                response_length=len(raw_result.summary),
-            )
-
-            gl = gitlab.Gitlab(settings.gitlab_url, private_token=token)
-
-            # Build allowlist of discussion IDs from agent's prior unresolved feedback.
-            # Fail closed: empty set when history unavailable (no resolutions attempted).
-            allowed_ids: set[str] = set()
-            if discussion_history:
-                for disc in discussion_history.discussions:
-                    if disc.is_resolved or not disc.is_inline:
-                        continue
-                    if not disc.notes:
-                        continue
-                    if disc.notes[0].author_id == discussion_history.agent.user_id:
-                        allowed_ids.add(disc.discussion_id)
-            allowed_discussion_ids = frozenset(allowed_ids)
-
-            await post_review(
-                gl,
-                project_id,
-                mr_iid,
-                mr_details.diff_refs,
-                parsed,
-                mr_details.changes,
-                resolution_behavior=event.resolution_behavior,
-                allowed_discussion_ids=allowed_discussion_ids,
-                head_sha=head_sha,
-            )
-            bound_log.info("comments_posted")
-            outcome = "success"
-        except TaskExecutionError as exc:
-            error_str = str(exc)
-            bound_log.error("review_task_failed", error=error_str)
-            try:
-                await gl_client.post_mr_comment(
-                    project_id,
-                    mr_iid,
-                    f"⚠️ Automated review failed.\n\n{user_error_message(error_str)}",
-                )
-            except Exception:
-                bound_log.warning("failure_comment_post_failed", exc_info=True)
-            raise
-        except Exception as exc:
-            bound_log.error(
-                "review_failed",
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-            try:
-                await gl_client.post_mr_comment(
-                    project_id,
-                    mr_iid,
-                    "⚠️ Automated review failed. "
-                    "The service encountered an unexpected error. "
-                    "Please try again or contact the project administrator.",
-                )
-            except Exception:
-                bound_log.warning("failure_comment_post_failed", exc_info=True)
-            raise
-        finally:
-            if repo_path:
-                await gl_client.cleanup(repo_path)
-            reviews_total.add(1, {"outcome": outcome})
-            reviews_duration.record(time.monotonic() - start, {"outcome": outcome})
+        gl_client = GitLabClient(settings.gitlab_url, event.token)
+        pipeline = ReviewPipeline(
+            settings=settings,
+            event=event,
+            executor=executor,
+            gl_client=gl_client,
+            credential_registry=credential_registry,
+        )
+        await run_pipeline(pipeline, ReviewContext())

@@ -106,10 +106,10 @@ def test_copilot_session_duration_records_task_type() -> None:
 # These patch the metric instruments at the call site to verify recording.
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_review_pipeline_records_success_metrics(
     _mock_gl: MagicMock,
     mock_client_class: MagicMock,
@@ -129,8 +129,8 @@ async def test_review_pipeline_records_success_metrics(
     mock_total = MagicMock()
     mock_duration = MagicMock()
     with (
-        patch("gitlab_copilot_agent.orchestrator.reviews_total", mock_total),
-        patch("gitlab_copilot_agent.orchestrator.reviews_duration", mock_duration),
+        patch("gitlab_copilot_agent.review_pipeline.reviews_total", mock_total),
+        patch("gitlab_copilot_agent.review_pipeline.reviews_duration", mock_duration),
     ):
         await handle_review(make_settings(), make_task_event(), AsyncMock())
 
@@ -141,9 +141,9 @@ async def test_review_pipeline_records_success_metrics(
     assert args[0][1] == {"outcome": "success"}
 
 
-@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_review_pipeline_records_error_metrics(
     _mock_gl: MagicMock,
     mock_client_class: MagicMock,
@@ -158,8 +158,8 @@ async def test_review_pipeline_records_error_metrics(
     mock_total = MagicMock()
     mock_duration = MagicMock()
     with (
-        patch("gitlab_copilot_agent.orchestrator.reviews_total", mock_total),
-        patch("gitlab_copilot_agent.orchestrator.reviews_duration", mock_duration),
+        patch("gitlab_copilot_agent.review_pipeline.reviews_total", mock_total),
+        patch("gitlab_copilot_agent.review_pipeline.reviews_duration", mock_duration),
         pytest.raises(RuntimeError),
     ):
         await handle_review(make_settings(), make_task_event(), AsyncMock())
@@ -169,9 +169,9 @@ async def test_review_pipeline_records_error_metrics(
     assert mock_duration.record.call_args[0][1] == {"outcome": "error"}
 
 
-@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.gitlab.Gitlab")
 async def test_review_task_execution_failure_posts_comment_without_raising(
     _mock_gl: MagicMock,
     mock_client_class: MagicMock,

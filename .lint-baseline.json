@@ -15,8 +15,8 @@
     "TC003": 1
   },
   "src/gitlab_copilot_agent/concurrency.py": {
-    "D102": 25,
-    "D105": 4,
+    "D102": 21,
+    "D105": 2,
     "TC003": 1
   },
   "src/gitlab_copilot_agent/discussion_orchestrator.py": {
@@ -44,9 +44,6 @@
   },
   "src/gitlab_copilot_agent/models.py": {
     "D101": 6
-  },
-  "src/gitlab_copilot_agent/orchestrator.py": {
-    "TC003": 1
   },
   "src/gitlab_copilot_agent/project_registry.py": {
     "D102": 4,
