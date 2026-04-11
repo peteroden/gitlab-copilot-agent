@@ -182,7 +182,7 @@ def test_jira_config(monkeypatch):
 @pytest.mark.asyncio
 async def test_git_clone(monkeypatch):
     mock_clone = AsyncMock(return_value=Path("/tmp/test-repo"))
-    monkeypatch.setattr("gitlab_copilot_agent.git_operations.git_clone", mock_clone)
+    monkeypatch.setattr("gitlab_copilot_agent.git.clone.git_clone", mock_clone)
     
     result = await some_function_that_clones()
     mock_clone.assert_called_once_with(
@@ -261,7 +261,7 @@ make e2e-down    # Teardown
 
 **Marker**: `@pytest.mark.k8s`
 
-**Purpose**: Test KubernetesTaskExecutor with real K8s cluster.
+**Purpose**: Test RemoteTaskExecutor with real K8s cluster.
 
 **Skipped By Default**: `pytest -m "not k8s"` (enforced in pytest.ini)
 

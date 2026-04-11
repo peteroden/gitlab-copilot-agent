@@ -383,7 +383,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
   - `_request(method, path, *, idempotent, **kwargs) -> Response`: HTTP request with retry on 429/5xx for idempotent (GET) requests; respects `Retry-After` header
   - `_paginate(path, params) -> list[dict]`: Fetch all pages of a paginated endpoint
   - `get_mr_details(project_id, mr_iid) -> MRDetails`: Fetch MR changes; retries on null diff_refs (GitLab race)
-  - `clone_repo(clone_url, branch, token, clone_dir) -> Path`: Clone repo via git_operations
+  - `clone_repo(clone_url, branch, token, clone_dir) -> Path`: Clone repo via `git/` package
   - `cleanup(repo_path) -> None`: Remove cloned repo
   - `create_merge_request(...) -> int`: Create MR, return iid
   - `post_mr_comment(project_id, mr_iid, body) -> None`: Post MR note
@@ -427,7 +427,7 @@ All modules in `src/gitlab_copilot_agent/`, organized by architectural layer.
 ## Shared Utilities
 
 ### `git/` package (formerly `git_operations.py`)
-**Purpose**: Git CLI wrappers (clone, branch, commit, push, patch, archive, validation). Split from `git_operations.py` into a package; the original module remains as a backward-compatible re-export shim.
+**Purpose**: Git CLI wrappers (clone, branch, commit, push, patch, archive, validation). Split from the former `git_operations.py` monolith into focused submodules.
 
 **Submodules**:
 - **`clone.py`**: Repository cloning (`git_clone`) with URL validation and credential embedding

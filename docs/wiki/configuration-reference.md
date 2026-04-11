@@ -482,7 +482,7 @@ All optional — service runs review-only without these.
 ## Telemetry
 
 ### `OTEL_EXPORTER_OTLP_ENDPOINT`
-- **Type**: `str` (not in Settings model, read directly by telemetry.py)
+- **Type**: `str` (not in Settings model, read directly by `telemetry/` package)
 - **Required**: ❌ No
 - **Default**: Unset (telemetry disabled)
 - **Description**: OTLP gRPC endpoint for traces, metrics, and logs

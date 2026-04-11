@@ -514,7 +514,7 @@ _PYTHON_GITIGNORE_PATTERNS = [
 
 ## Comparison: Local vs K8s
 
-| Feature | LocalTaskExecutor | KubernetesTaskExecutor |
+| Feature | LocalTaskExecutor | RemoteTaskExecutor |
 |---------|-------------------|------------------------|
 | **Deployment** | Single pod only | Multi-pod, horizontal scaling |
 ## Comparison: Local vs Remote (K8s / ACA)
