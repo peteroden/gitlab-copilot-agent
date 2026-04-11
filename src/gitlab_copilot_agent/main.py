@@ -21,7 +21,7 @@ from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
 from gitlab_copilot_agent.dedup import DeduplicationService
-from gitlab_copilot_agent.git_operations import CLONE_DIR_PREFIX
+from gitlab_copilot_agent.git import CLONE_DIR_PREFIX
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.gitlab_poller import GitLabPoller
 from gitlab_copilot_agent.jira_client import JiraClient

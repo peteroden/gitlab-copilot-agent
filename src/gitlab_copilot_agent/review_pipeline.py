@@ -18,7 +18,7 @@ from pydantic import Field
 from gitlab_copilot_agent.comment_parser import ParsedReview, parse_review
 from gitlab_copilot_agent.comment_poster import post_review
 from gitlab_copilot_agent.discussion_models import DiscussionHistory
-from gitlab_copilot_agent.git_operations import validate_clone_url_host
+from gitlab_copilot_agent.git import validate_clone_url_host
 from gitlab_copilot_agent.gitlab_client import (
     GitLabClient,  # noqa: TC001 — used in constructor + method bodies
     MRChange,  # noqa: TC001 — used in format_diff_text

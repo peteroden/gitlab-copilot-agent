@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from gitlab_copilot_agent.git_operations import tar_repo_to_bytes
+from gitlab_copilot_agent.git import tar_repo_to_bytes
 from gitlab_copilot_agent.task_executor import (
     CodingResult,
     ReviewResult,

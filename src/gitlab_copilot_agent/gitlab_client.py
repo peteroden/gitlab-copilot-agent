@@ -592,7 +592,7 @@ class GitLabClient:
         Returns:
             Path to the cloned repository.
         """
-        from gitlab_copilot_agent.git_operations import git_clone
+        from gitlab_copilot_agent.git import git_clone
 
         return await git_clone(clone_url, branch, token, clone_dir=clone_dir)
 
