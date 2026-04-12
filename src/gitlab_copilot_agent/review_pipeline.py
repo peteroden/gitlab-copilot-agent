@@ -1,6 +1,6 @@
 """ReviewPipeline — structured four-stage MR review.
 
-Extracts the monolithic ``handle_review()`` into the Pipeline protocol:
+Four-stage Pipeline protocol implementation:
 prepare (clone + fetch) → execute (LLM review) → process (post comments)
 → cleanup (remove repo + record metrics).
 """
@@ -80,8 +80,6 @@ class ReviewContext(BasePipelineContext):
 
 class ReviewPipeline:
     """Four-stage review pipeline.
-
-    Replaces the monolithic ``handle_review()`` function:
 
     - **prepare**: clone, fetch MR details + discussions, build diff
     - **execute**: build prompt, run Copilot review session

@@ -1,11 +1,11 @@
-"""Tests for the coding orchestrator."""
+"""Tests for the CodingTaskRunner and CodingPipeline."""
 
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
+from gitlab_copilot_agent.coding_pipeline import CodingTaskRunner
 from gitlab_copilot_agent.git import TransientCloneError
 from gitlab_copilot_agent.jira_models import JiraIssue, JiraIssueFields, JiraStatus
 from gitlab_copilot_agent.project_registry import ResolvedProject
@@ -66,7 +66,7 @@ async def test_handle_full_pipeline(
     mock_coding.return_value = CodingResult(summary="Changes made")
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
     mock_gitlab.create_merge_request.return_value = 1
-    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
     await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
     mock_clone.assert_awaited_once()
     mock_branch.assert_awaited_once_with(tmp_path, "agent/proj-42")
@@ -102,7 +102,7 @@ async def test_in_review_transition_failure_is_non_blocking(
     # First call (In Progress) succeeds, second call (In Review) fails
     mock_jira.transition_issue.side_effect = [None, ValueError("No transition")]
 
-    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
     await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
 
     assert mock_jira.transition_issue.await_count == 2
@@ -140,7 +140,7 @@ async def test_custom_in_review_status_used(
         token="test-token",
         in_review_status="QA Review",
     )
-    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
     await orch.handle(_TEST_ISSUE, custom_mapping)
 
     mock_jira.transition_issue.assert_any_await("PROJ-42", "QA Review")
@@ -153,7 +153,7 @@ async def test_coding_failure_posts_comment_to_jira(
     """Verify that coding task failures post a comment to Jira."""
     mock_clone.side_effect = Exception("Git clone failed")
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
-    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
 
     with pytest.raises(Exception, match="Git clone failed"):
         await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
@@ -172,7 +172,7 @@ async def test_coding_failure_comment_posting_failure_is_logged(
     mock_clone.side_effect = Exception("Git clone failed")
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
     mock_jira.add_comment.side_effect = Exception("Jira API error")
-    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
 
     with pytest.raises(Exception, match="Git clone failed"):
         await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
@@ -193,7 +193,7 @@ async def test_task_execution_failure_posts_error_details(
     mock_branch.return_value = "agent/proj-42"
     mock_coding.side_effect = TaskExecutionError("Task failed: missing files_changed")
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
-    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
 
     with pytest.raises(TaskExecutionError, match="missing files_changed"):
         await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
@@ -215,7 +215,7 @@ async def test_transient_clone_failure_posts_detailed_comment(
         attempts=3,
     )
     mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
-    orch = CodingOrchestrator(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
 
     # Should NOT re-raise — transient failures are handled gracefully
     await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
@@ -229,5 +229,5 @@ async def test_transient_clone_failure_posts_detailed_comment(
     assert "transient error" in comment
     assert "retry on the next poll cycle" in comment
 
-    # Issue should NOT be marked as processed — allow retry on next poll
-    assert orch._dedup is None or not await orch._dedup.is_issue_seen("PROJ-42")
+    # CodingTaskRunner has no dedup — JiraPoller owns that concern.
+    # The transient failure is handled gracefully without re-raising.

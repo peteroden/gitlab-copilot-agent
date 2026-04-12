@@ -8,7 +8,7 @@ Test structure, shared fixtures, mocking patterns, coverage requirements, how to
 
 **Location**: `tests/` directory mirrors `src/gitlab_copilot_agent/`
 
-**Naming**: Test files prefixed with `test_` (e.g., `test_webhook.py` for `webhook.py`)
+**Naming**: Test files prefixed with `test_` (e.g., `test_webhook.py` for `gitlab_webhook.py`)
 
 **Framework**: pytest with pytest-asyncio for async tests
 
@@ -214,7 +214,7 @@ async def test_git_clone(monkeypatch):
 
 **Pattern**: Mock only external services (GitLab API, Jira API, Copilot SDK).
 
-**Example**: `test_webhook.py` — tests webhook endpoint → orchestrator → (mocked) executor.
+**Example**: `test_webhook.py` — tests webhook endpoint → pipeline → (mocked) executor.
 
 **Coverage**: Medium (80-90%) — validates integration points.
 

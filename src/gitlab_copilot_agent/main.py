@@ -17,13 +17,14 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import ValidationError
 
 from gitlab_copilot_agent.app_context import AppContext
-from gitlab_copilot_agent.coding_orchestrator import CodingOrchestrator
+from gitlab_copilot_agent.coding_pipeline import CodingTaskRunner
 from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
 from gitlab_copilot_agent.dedup import DeduplicationService
 from gitlab_copilot_agent.git import CLONE_DIR_PREFIX
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.gitlab_poller import GitLabPoller
+from gitlab_copilot_agent.gitlab_webhook import router as webhook_router
 from gitlab_copilot_agent.jira_client import JiraClient
 from gitlab_copilot_agent.jira_poller import JiraPoller
 from gitlab_copilot_agent.mapping_models import RenderedMap
@@ -40,7 +41,6 @@ from gitlab_copilot_agent.telemetry import (
     init_telemetry,
     shutdown_telemetry,
 )
-from gitlab_copilot_agent.webhook import router as webhook_router
 
 configure_logging()
 
@@ -195,9 +195,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except (KeyError, ValueError) as exc:
             raise ValueError(f"Failed to build project registry: {exc}") from exc
         gl_client = GitLabClient(settings.gitlab_url, settings.gitlab_token)
-        handler = CodingOrchestrator(
-            settings, gl_client, jira_client, executor, repo_locks, dedup=dedup
-        )
+        handler = CodingTaskRunner(settings, gl_client, jira_client, executor, repo_locks)
         poller = JiraPoller(
             jira_client,
             settings.jira,
@@ -230,7 +228,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
 
     # Always set mutable state — even None — so direct attribute access
-    # works without getattr() fallbacks in webhook.py and config_reload.
+    # works without getattr() fallbacks in gitlab_webhook.py and config_reload.
     app.state.project_registry = project_registry
     app.state.jira_poller = poller
     app.state.gl_poller = gl_poller

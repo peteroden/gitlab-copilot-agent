@@ -36,10 +36,10 @@ This documentation provides comprehensive implementation details for developers 
 
 | Flow | Entry Point | Processing | External Service |
 |------|-------------|------------|------------------|
-| MR Review (webhook) | `webhook.py` | `orchestrator.py` → `review_engine.py` → `copilot_session.py` | GitLab API, Copilot SDK |
-| MR Review (poller) | `gitlab_poller.py` | → `orchestrator.py` | GitLab API |
-| @mention interaction | `webhook.py` | `discussion_orchestrator.py` → `copilot_session.py` | GitLab API, Copilot SDK |
-| Jira coding task | `jira_poller.py` | `coding_orchestrator.py` → `coding_engine.py` → `copilot_session.py` | Jira API, GitLab API, Copilot SDK |
+| MR Review (webhook) | `gitlab_webhook.py` | `review_pipeline.py` → `review_engine.py` → `copilot_session.py` | GitLab API, Copilot SDK |
+| MR Review (poller) | `gitlab_poller.py` | → `review_pipeline.py` | GitLab API |
+| @mention interaction | `gitlab_webhook.py` | `discussion_pipeline.py` → `copilot_session.py` | GitLab API, Copilot SDK |
+| Jira coding task | `jira_poller.py` | `coding_pipeline.py` → `coding_engine.py` → `copilot_session.py` | Jira API, GitLab API, Copilot SDK |
 
 ---
 

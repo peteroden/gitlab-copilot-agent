@@ -122,15 +122,15 @@ async def acquire(self, key: str, ttl_seconds: int = 300) -> AsyncIterator[None]
 **Lock Key**: `git_http_url` (e.g., `https://gitlab.com/group/project.git`)
 
 **Operations Locked**:
-1. **MR @mention interaction** (`discussion_orchestrator.py`):
+1. **MR @mention interaction** (`discussion_pipeline.py`):
    - Clone → code → commit → push
    - Prevents concurrent pushes to same branch
-2. **Jira coding task** (`coding_orchestrator.py`):
+2. **Jira coding task** (`coding_pipeline.py`):
    - Clone → branch → code → commit → push → create MR
    - Prevents concurrent branch creation
 
 **Not Locked**:
-- **MR review** (`orchestrator.py`): Read-only operation (clone, no push)
+- **MR review** (`review_pipeline.py`): Read-only operation (clone, no push)
 - **GitLab poller**: Uses dedup store instead (no write operations per se)
 
 **Rationale**: Git operations on same repo must be serialized to avoid:
@@ -271,7 +271,7 @@ await dedup.mark_seen(key, ttl_seconds=86400)
 
 **Mechanism**:
 1. After each review, the SHA marker is embedded in the summary note via `comment_poster.py`
-2. On subsequent reviews, `orchestrator.py` calls `extract_last_reviewed_sha()` to find the marker
+2. On subsequent reviews, `review_pipeline.py` calls `extract_last_reviewed_sha()` to find the marker
 3. If found, the Compare API computes the diff between the marker SHA and current head SHA
 4. If not found (first review, deploy, or failed post), falls back to full MR diff
 
@@ -297,7 +297,7 @@ See ADR-0009 for the design decision.
 5. `is_issue_seen(issue_key)`: Check if Jira issue already processed
 6. `mark_issue(issue_key)`: Mark Jira issue as processed
 
-**Usage**: `webhook.py` checks `dedup.is_review_seen()` before dispatching `_process_review()`, marks after success. `jira_poller.py` checks `dedup.is_issue_seen()` before dispatching coding tasks.
+**Usage**: `gitlab_webhook.py` checks `dedup.is_review_seen()` before dispatching `_process_review()`, marks after success. `jira_poller.py` checks `dedup.is_issue_seen()` before dispatching coding tasks.
 
 **Advantage Over Previous Design**: Single service backed by `DeduplicationStore`, enabling consistent behavior across memory and distributed backends. No separate per-pod trackers.
 
@@ -356,7 +356,7 @@ Pod A: acquire lock → clone → code → commit → push → release
 Pod B: wait for lock ────────────────────────────────┘→ clone → ...
 ```
 
-**Code**: `discussion_orchestrator.py`, `coding_orchestrator.py` both use `repo_locks.acquire()`.
+**Code**: `discussion_pipeline.py`, `coding_pipeline.py` both use `repo_locks.acquire()`.
 
 ---
 

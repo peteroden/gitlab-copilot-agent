@@ -11,8 +11,8 @@ Triggered when GitLab sends `merge_request` webhook with action `open`, `update`
 ```mermaid
 sequenceDiagram
     participant GL as GitLab
-    participant WH as webhook.py
-    participant ORCH as orchestrator.py
+    participant WH as gitlab_webhook.py
+    participant RPIPE as review_pipeline.py
     participant GLCL as gitlab_client.py
     participant CREG as credential_registry.py
     participant EXEC as TaskExecutor
@@ -38,31 +38,31 @@ sequenceDiagram
     
     Note over WH,POST: Background task starts
     
-    WH->>ORCH: handle_review(settings, payload, executor, resolution_behavior)
-    ORCH->>GLCL: clone_repo(git_http_url, source_branch, token)
+    WH->>RPIPE: run_pipeline(ReviewPipeline(...), ctx)
+    RPIPE->>GLCL: clone_repo(git_http_url, source_branch, token)
     GLCL->>GLCL: git.clone.git_clone()
-    GLCL-->>ORCH: repo_path: Path
+    GLCL-->>RPIPE: repo_path: Path
     
-    ORCH->>GLCL: list_mr_discussions(project_id, mr_iid)
-    GLCL-->>ORCH: list[Discussion]
+    RPIPE->>GLCL: list_mr_discussions(project_id, mr_iid)
+    GLCL-->>RPIPE: list[Discussion]
     
-    ORCH->>CREG: resolve_identity(credential_ref, gitlab_url)
+    RPIPE->>CREG: resolve_identity(credential_ref, gitlab_url)
     Note over CREG: GET /user (cached per credential)
-    CREG-->>ORCH: AgentIdentity (user_id, username)
+    CREG-->>RPIPE: AgentIdentity (user_id, username)
     
-    ORCH->>ORCH: Build DiscussionHistory(discussions, agent)
+    RPIPE->>RPIPE: Build DiscussionHistory(discussions, agent)
     
-    ORCH->>ORCH: extract_last_reviewed_sha(discussion_history)
+    RPIPE->>RPIPE: extract_last_reviewed_sha(discussion_history)
     alt SHA marker found
-        ORCH->>GLCL: compare_commits(project_id, last_reviewed_sha, head_sha)
-        GLCL-->>ORCH: incremental changes (diff since last review)
+        RPIPE->>GLCL: compare_commits(project_id, last_reviewed_sha, head_sha)
+        GLCL-->>RPIPE: incremental changes (diff since last review)
     else No marker (first review / post-deploy / failed post)
-        Note over ORCH: Use full MR diff
+        Note over RPIPE: Use full MR diff
     end
     
-    Note over ORCH: build_review_prompt() renders<br/>prior feedback + outdated annotations<br/>+ suppressed feedback (human-resolved/dismissed) into prompt
+    Note over RPIPE: build_review_prompt() renders<br/>prior feedback + outdated annotations<br/>+ suppressed feedback (human-resolved/dismissed) into prompt
     
-    ORCH->>EXEC: execute(TaskParams: review)
+    RPIPE->>EXEC: execute(TaskParams: review)
     alt LocalTaskExecutor
         EXEC->>COP: run_copilot_session(repo_path, prompts)
         COP->>SDK: CopilotClient.create_session()
@@ -75,15 +75,15 @@ sequenceDiagram
         EXEC->>EXEC: _wait_for_result (poll Redis)
         EXEC-->>EXEC: result from Redis
     end
-    EXEC-->>ORCH: raw_review: TaskResult
+    EXEC-->>RPIPE: raw_review: TaskResult
     
-    ORCH->>PARSE: parse_review(raw_review)
-    PARSE-->>ORCH: ParsedReview (comments, resolutions, summary)
+    RPIPE->>PARSE: parse_review(raw_review)
+    PARSE-->>RPIPE: ParsedReview (comments, resolutions, summary)
     
-    ORCH->>GLCL: get_mr_details(project_id, mr_iid)
-    GLCL-->>ORCH: MRDetails (diff_refs, changes)
+    RPIPE->>GLCL: get_mr_details(project_id, mr_iid)
+    GLCL-->>RPIPE: MRDetails (diff_refs, changes)
     
-    ORCH->>POST: post_review(gl, project_id, mr_iid, diff_refs, parsed, changes, resolution_behavior, head_sha)
+    RPIPE->>POST: post_review(gl, project_id, mr_iid, diff_refs, parsed, changes, resolution_behavior, head_sha)
     POST->>POST: _parse_hunk_lines() for all changes
     loop For each comment
         POST->>POST: _is_valid_position()
@@ -104,11 +104,11 @@ sequenceDiagram
         end
     end
     POST->>GL: mr.notes.create() (summary + SHA marker)
-    POST-->>ORCH: Done
+    POST-->>RPIPE: Done
     
-    ORCH->>GLCL: cleanup(repo_path)
-    ORCH->>ORCH: Mark (project_id, mr_iid, head_sha) as reviewed
-    ORCH->>ORCH: Emit metrics (reviews_total, reviews_duration)
+    RPIPE->>GLCL: cleanup(repo_path)
+    RPIPE->>RPIPE: Mark (project_id, mr_iid, head_sha) as reviewed
+    RPIPE->>RPIPE: Emit metrics (reviews_total, reviews_duration)
 ```
 
 **Error Handling**:
@@ -133,8 +133,8 @@ Triggered when GitLab sends a `note` webhook for an MR comment that @mentions th
 ```mermaid
 sequenceDiagram
     participant GL as GitLab
-    participant WH as webhook.py
-    participant DH as discussion_orchestrator.py
+    participant WH as gitlab_webhook.py
+    participant DPIPE as discussion_pipeline.py
     participant DE as discussion_engine.py
     participant GLCL as gitlab_client.py
     participant EXEC as TaskExecutor
@@ -155,44 +155,44 @@ sequenceDiagram
 
     Note over WH,GIT: Background task starts
 
-    WH->>DH: handle_discussion_interaction(settings, payload, executor, agent_identity, resolution_behavior)
+    WH->>DPIPE: run_pipeline(DiscussionPipeline(...), ctx)
     alt repo_locks provided
-        DH->>DH: async with repo_locks.acquire(git_http_url)
+        DPIPE->>DPIPE: async with repo_locks.acquire(git_http_url)
     end
 
-    DH->>GLCL: clone_repo(git_http_url, source_branch, token)
-    GLCL-->>DH: repo_path: Path
+    DPIPE->>GLCL: clone_repo(git_http_url, source_branch, token)
+    GLCL-->>DPIPE: repo_path: Path
 
-    DH->>GLCL: get_mr_details(project_id, mr_iid)
-    GLCL-->>DH: MRDetails
-    DH->>GLCL: list_mr_discussions(project_id, mr_iid)
-    GLCL-->>DH: list[Discussion]
-    DH->>DH: Build DiscussionHistory + find triggering discussion
+    DPIPE->>GLCL: get_mr_details(project_id, mr_iid)
+    GLCL-->>DPIPE: MRDetails
+    DPIPE->>GLCL: list_mr_discussions(project_id, mr_iid)
+    GLCL-->>DPIPE: list[Discussion]
+    DPIPE->>DPIPE: Build DiscussionHistory + find triggering discussion
 
-    DH->>DE: build_discussion_prompt(mr_details, discussion_history, triggering)
-    DE-->>DH: user_prompt: str
-    DH->>DE: run_discussion(executor, settings, repo_path, ..., user_prompt)
+    DPIPE->>DE: build_discussion_prompt(mr_details, discussion_history, triggering)
+    DE-->>DPIPE: user_prompt: str
+    DPIPE->>DE: run_discussion(executor, settings, repo_path, ..., user_prompt)
     DE->>EXEC: execute(TaskParams: coding, prompt)
     EXEC-->>DE: result: TaskResult
-    DE-->>DH: result: TaskResult
-    DH->>DE: parse_discussion_response(result.summary)
-    DE-->>DH: DiscussionResponse (reply, has_code_changes, resolution)
+    DE-->>DPIPE: result: TaskResult
+    DPIPE->>DE: parse_discussion_response(result.summary)
+    DE-->>DPIPE: DiscussionResponse (reply, has_code_changes, resolution)
 
     alt has_code_changes
-        DH->>DH: apply_coding_result(result, repo_path)
-        DH->>GIT: git_commit(repo_path, message, author)
+        DPIPE->>DPIPE: apply_coding_result(result, repo_path)
+        DPIPE->>GIT: git_commit(repo_path, message, author)
         alt has_changes
-            DH->>GIT: git_push(repo_path, "origin", source_branch, token)
+            DPIPE->>GIT: git_push(repo_path, "origin", source_branch, token)
         end
     end
 
-    DH->>GL: discussion.notes.create({"body": reply})
+    DPIPE->>GL: discussion.notes.create({"body": reply})
     alt response.resolution & behavior != "off"
         alt auto-resolve & status=resolved
-            DH->>GL: disc.resolved = True; disc.save()
+            DPIPE->>GL: disc.resolved = True; disc.save()
         end
     end
-    DH->>DH: shutil.rmtree(repo_path)
+    DPIPE->>DPIPE: shutil.rmtree(repo_path)
 ```
 
 **Error Handling**:
@@ -210,7 +210,7 @@ sequenceDiagram
     participant POLL as gitlab_poller.py
     participant GLCL as gitlab_client.py
     participant DEDUP as DeduplicationStore
-    participant DH as discussion_orchestrator.py
+    participant DPIPE as discussion_pipeline.py
     
     loop For each project_id
         POLL->>GLCL: list_project_mrs(project_id, state="opened", updated_after=watermark)
@@ -236,9 +236,9 @@ sequenceDiagram
                 else New
                     DEDUP-->>POLL: False
                     POLL->>POLL: Synthesize NoteWebhookPayload
-                    POLL->>DH: handle_discussion_interaction(settings, payload, executor, agent_identity)
-                    Note over DH: Same flow as webhook discussion handler
-                    DH-->>POLL: Done
+                    POLL->>DPIPE: run_pipeline(DiscussionPipeline(...), ctx)
+                    Note over DPIPE: Same flow as webhook discussion handler
+                    DPIPE-->>POLL: Done
                     POLL->>DEDUP: mark_seen(key, ttl=86400)
                 end
             end
@@ -261,7 +261,7 @@ sequenceDiagram
     participant POLL as gitlab_poller.py
     participant GLCL as gitlab_client.py
     participant DEDUP as DeduplicationStore
-    participant ORCH as orchestrator.py
+    participant RPIPE as review_pipeline.py
     
     loop Every interval
         POLL->>POLL: _poll_once()
@@ -279,9 +279,9 @@ sequenceDiagram
                 else New
                     DEDUP-->>POLL: False
                     POLL->>POLL: Synthesize MergeRequestWebhookPayload
-                    POLL->>ORCH: handle_review(settings, payload, executor)
-                    Note over ORCH: Same flow as webhook review
-                    ORCH-->>POLL: Done
+                    POLL->>RPIPE: run_pipeline(ReviewPipeline(...), ctx)
+                    Note over RPIPE: Same flow as webhook review
+                    RPIPE-->>POLL: Done
                     POLL->>DEDUP: mark_seen(key, ttl=86400)
                 end
             end
@@ -315,7 +315,7 @@ Background poller discovers Jira issues in "AI Ready" status.
 sequenceDiagram
     participant POLL as jira_poller.py
     participant JCL as jira_client.py
-    participant CODING as coding_orchestrator.py
+    participant CPIPE as coding_pipeline.py
     participant GIT as git/
     participant EXEC as TaskExecutor
     participant COP as copilot_session.py
@@ -337,42 +337,40 @@ sequenceDiagram
                 Note over POLL: Skip
             end
             
-            POLL->>CODING: handle(issue, resolved_project)
+            POLL->>CPIPE: run_pipeline(CodingPipeline(...), ctx)
             
-            Note over CODING: Acquire lock on clone_url
+            Note over CPIPE: Acquire lock on clone_url
             
-            CODING->>JCL: transition_issue(issue.key, "In Progress")
-            CODING->>GIT: git_clone(clone_url, target_branch, token)
-            GIT-->>CODING: repo_path: Path
+            CPIPE->>JCL: transition_issue(issue.key, "In Progress")
+            CPIPE->>GIT: git_clone(clone_url, target_branch, token)
+            GIT-->>CPIPE: repo_path: Path
             
-            CODING->>GIT: git_unique_branch(repo_path, "agent/{issue-key}")
+            CPIPE->>GIT: git_unique_branch(repo_path, "agent/{issue-key}")
             Note over GIT: Checks remote refs via git ls-remote<br/>Appends -2, -3 on collision
             
-            CODING->>EXEC: execute(TaskParams: coding, Jira prompt)
+            CPIPE->>EXEC: execute(TaskParams: coding, Jira prompt)
             EXEC->>COP: run_copilot_session(repo_path, get_prompt(settings, "coding"), jira_prompt)
             COP-->>EXEC: result: TaskResult
-            EXEC-->>CODING: result: TaskResult
+            EXEC-->>CPIPE: result: TaskResult
             
-            CODING->>CODING: apply_coding_result(result, repo_path)
-            Note over CODING: If K8s: validate base_sha, git apply --3way<br/>If Local: no-op (files on disk)
+            CPIPE->>CPIPE: apply_coding_result(result, repo_path)
+            Note over CPIPE: If K8s: validate base_sha, git apply --3way<br/>If Local: no-op (files on disk)
             
-            CODING->>GIT: git_commit(repo_path, message, author)
+            CPIPE->>GIT: git_commit(repo_path, message, author)
             alt has_changes
-                CODING->>GIT: git_push(repo_path, "origin", branch, token)
-                CODING->>GLCL: create_merge_request(...)
-                GLCL-->>CODING: mr_iid: int
-                CODING->>JCL: add_comment(issue.key, "MR created: {url}")
-                CODING->>CODING: tracker.mark(issue.key)
-                CODING->>CODING: Emit metrics (coding_tasks_total: success)
+                CPIPE->>GIT: git_push(repo_path, "origin", branch, token)
+                CPIPE->>GLCL: create_merge_request(...)
+                GLCL-->>CPIPE: mr_iid: int
+                CPIPE->>JCL: add_comment(issue.key, "MR created: {url}")
+                CPIPE->>POLL: _processed_issues.add(issue.key)
+                CPIPE->>CPIPE: Emit metrics (coding_tasks_total: success)
             else no changes
-                CODING->>JCL: add_comment(issue.key, "Agent found no changes to make")
-                CODING->>CODING: Emit metrics (coding_tasks_total: no_changes)
+                CPIPE->>JCL: add_comment(issue.key, "Agent found no changes to make")
+                CPIPE->>CPIPE: Emit metrics (coding_tasks_total: no_changes)
             end
             
-            CODING->>CODING: shutil.rmtree(repo_path)
-            CODING-->>POLL: Done
-            
-            POLL->>POLL: _processed_issues.add(issue.key)
+            CPIPE->>CPIPE: shutil.rmtree(repo_path)
+            CPIPE-->>POLL: Done
         end
         
         POLL->>POLL: Sleep interval

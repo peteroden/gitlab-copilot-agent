@@ -10,15 +10,18 @@ from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
 from gitlab_copilot_agent.app_context import get_app_context
 from gitlab_copilot_agent.discussion_models import AgentIdentity
-from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
+from gitlab_copilot_agent.discussion_pipeline import DiscussionContext, DiscussionPipeline
 from gitlab_copilot_agent.events import TaskEvent
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.metrics import webhook_errors_total, webhook_received_total
 from gitlab_copilot_agent.models import MergeRequestWebhookPayload, NoteWebhookPayload
-from gitlab_copilot_agent.orchestrator import handle_review
+from gitlab_copilot_agent.pipeline import run_pipeline
 from gitlab_copilot_agent.project_registry import ProjectRegistry
+from gitlab_copilot_agent.review_pipeline import ReviewContext, ReviewPipeline
+from gitlab_copilot_agent.telemetry import get_tracer
 
 log = structlog.get_logger()
+_tracer = get_tracer(__name__)
 
 router = APIRouter()
 
@@ -89,12 +92,19 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
     bound = log.bind(**event.log_safe())
     bound.info("background_review_starting")
     try:
-        await handle_review(
-            settings,
-            event,
-            executor,
-            credential_registry=credential_registry,
-        )
+        with _tracer.start_as_current_span(
+            "mr.review",
+            attributes={"project_id": event.project_id, "mr_iid": event.mr_iid or 0},
+        ):
+            gl_client = GitLabClient(settings.gitlab_url, event.token)
+            pipeline = ReviewPipeline(
+                settings=settings,
+                event=event,
+                executor=executor,
+                gl_client=gl_client,
+                credential_registry=credential_registry,
+            )
+            await run_pipeline(pipeline, ReviewContext())
         await app_context.dedup.mark_review(project_id, mr.iid, head_sha)
         bound.info("background_review_completed")
     except Exception:
@@ -193,13 +203,27 @@ async def _process_discussion(
     )
     bound.info("background_discussion_starting")
     try:
-        await handle_discussion_interaction(
-            settings,
-            event,
-            executor,
-            agent_identity,
-            repo_locks=repo_locks,
-        )
+        with _tracer.start_as_current_span(
+            "mr.discussion_interaction",
+            attributes={"project_id": event.project_id, "mr_iid": event.mr_iid or 0},
+        ):
+            gl_client = GitLabClient(settings.gitlab_url, event.token)
+            pipeline = DiscussionPipeline(
+                settings=settings,
+                event=event,
+                executor=executor,
+                gl_client=gl_client,
+                agent_identity=agent_identity,
+            )
+
+            async def _execute() -> None:
+                await run_pipeline(pipeline, DiscussionContext())
+
+            if repo_locks:
+                async with repo_locks.acquire(event.clone_url):
+                    await _execute()
+            else:
+                await _execute()
         bound.info("background_discussion_completed")
     except Exception:
         webhook_errors_total.add(1, {"handler": "discussion"})
@@ -241,7 +265,7 @@ async def webhook(
 
         # Skip title/description-only updates (no new commits).
         # Note: "reopen" has no oldrev — it passes through to review.
-        # Diff scope is determined by SHA marker presence in orchestrator.py.
+        # Diff scope is determined by SHA marker presence in review pipeline.
         if action == "update" and mr.oldrev is None:
             return {"status": "ignored", "reason": "no new commits"}
 

@@ -93,7 +93,7 @@ This prevents duplicate logs: once OTLP is confirmed, structlog raises `DropEven
 **Labels**:
 - `outcome`: `"success"` or `"error"`
 
-**Emitted**: `orchestrator.py` → `handle_review()` (finally block)
+**Emitted**: `review_pipeline.py` → `ReviewPipeline.process()` (finally block)
 
 **Example**:
 ```python
@@ -113,7 +113,7 @@ reviews_total.add(1, {"outcome": "success"})
 **Labels**:
 - `outcome`: `"success"` or `"error"`
 
-**Emitted**: `orchestrator.py` → `handle_review()` (finally block)
+**Emitted**: `review_pipeline.py` → `ReviewPipeline.process()` (finally block)
 
 **Buckets**: Default OTEL histogram buckets
 
@@ -135,7 +135,7 @@ reviews_duration.record(elapsed, {"outcome": "success"})
 **Labels**:
 - `outcome`: `"success"`, `"no_changes"`, or `"error"`
 
-**Emitted**: `coding_orchestrator.py` → `CodingOrchestrator.handle()` (finally block)
+**Emitted**: `coding_pipeline.py` → `CodingPipeline.process()` (finally block)
 
 **Example**:
 ```python
@@ -155,7 +155,7 @@ coding_tasks_total.add(1, {"outcome": "success"})
 **Labels**:
 - `outcome`: `"success"`, `"no_changes"`, or `"error"`
 
-**Emitted**: `coding_orchestrator.py` → `CodingOrchestrator.handle()` (finally block)
+**Emitted**: `coding_pipeline.py` → `CodingPipeline.process()` (finally block)
 
 **Example**:
 ```python
@@ -175,7 +175,7 @@ coding_tasks_duration.record(elapsed, {"outcome": "success"})
 **Labels**:
 - `object_kind`: `"merge_request"`, `"note"`, or `"unknown"`
 
-**Emitted**: `webhook.py` → `webhook()` endpoint (before payload parsing)
+**Emitted**: `gitlab_webhook.py` → `webhook()` endpoint (before payload parsing)
 
 **Example**:
 ```python
@@ -195,7 +195,7 @@ webhook_received_total.add(1, {"object_kind": "merge_request"})
 **Labels**:
 - `handler`: `"review"` or `"copilot_comment"`
 
-**Emitted**: `webhook.py` → `_process_review()` or `_process_copilot_comment()` (exception handler)
+**Emitted**: `gitlab_webhook.py` → `_process_review()` or `_process_discussion()` (exception handler)
 
 **Example**:
 ```python
@@ -324,7 +324,7 @@ with _tracer.start_as_current_span("mr.review", attributes={"project_id": projec
 
 ```
 http.request (FastAPI)
-└── mr.review (orchestrator.py)
+└── mr.review (review_pipeline.py)
     ├── git.clone (git/clone.py)
     ├── copilot.session (copilot_session.py)
     └── git.cleanup (git/clone.py)

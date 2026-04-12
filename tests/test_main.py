@@ -88,7 +88,7 @@ async def test_lifespan_with_jira_creates_shared_lock_manager(
     env_vars: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test that shared RepoLockManager is created and passed to orchestrator."""
+    """Test that shared RepoLockManager is created and passed to CodingTaskRunner."""
     monkeypatch.setenv("JIRA_URL", JIRA_URL)
     monkeypatch.setenv("JIRA_EMAIL", JIRA_EMAIL)
     monkeypatch.setenv("JIRA_API_TOKEN", JIRA_TOKEN)
@@ -105,14 +105,14 @@ async def test_lifespan_with_jira_creates_shared_lock_manager(
     mock_poller.start = AsyncMock()
     mock_poller.stop = AsyncMock()
 
-    mock_orchestrator = AsyncMock()
+    mock_runner = AsyncMock()
 
     with (
         patch("gitlab_copilot_agent.main.JiraClient", return_value=mock_jira_client),
         patch("gitlab_copilot_agent.main.JiraPoller", return_value=mock_poller),
         patch(
-            "gitlab_copilot_agent.main.CodingOrchestrator", return_value=mock_orchestrator
-        ) as mock_orch_class,
+            "gitlab_copilot_agent.main.CodingTaskRunner", return_value=mock_runner
+        ) as mock_runner_class,
         patch("gitlab_copilot_agent.main.CredentialRegistry"),
         patch("gitlab_copilot_agent.main.ProjectRegistry") as mock_registry_cls,
     ):
@@ -123,8 +123,8 @@ async def test_lifespan_with_jira_creates_shared_lock_manager(
             assert test_app.state.app_context.repo_locks is not None
             assert isinstance(test_app.state.app_context.repo_locks, RepoLockManager)
             assert test_app.state.project_registry is mock_registry
-            mock_orch_class.assert_called_once()
-            args, _kwargs = mock_orch_class.call_args
+            mock_runner_class.assert_called_once()
+            args, _kwargs = mock_runner_class.call_args
             assert isinstance(args[3], LocalTaskExecutor)
             assert args[4] is test_app.state.app_context.repo_locks
 
@@ -173,7 +173,7 @@ async def test_shutdown_call_ordering(
     with (
         patch("gitlab_copilot_agent.main.JiraClient", return_value=mock_jira),
         patch("gitlab_copilot_agent.main.JiraPoller", return_value=mock_poller),
-        patch("gitlab_copilot_agent.main.CodingOrchestrator"),
+        patch("gitlab_copilot_agent.main.CodingTaskRunner"),
         patch("gitlab_copilot_agent.main.CredentialRegistry"),
         patch("gitlab_copilot_agent.main.ProjectRegistry") as mock_reg,
         patch("gitlab_copilot_agent.main.create_lock", return_value=mock_locks),
@@ -423,7 +423,7 @@ async def test_jira_status_env_vars_backfill_into_rendered_bindings(
             "gitlab_copilot_agent.main.JiraPoller",
             return_value=AsyncMock(start=AsyncMock(), stop=AsyncMock()),
         ),
-        patch("gitlab_copilot_agent.main.CodingOrchestrator"),
+        patch("gitlab_copilot_agent.main.CodingTaskRunner"),
         patch("gitlab_copilot_agent.main.CredentialRegistry"),
         patch("gitlab_copilot_agent.main.ProjectRegistry") as mock_reg_cls,
     ):

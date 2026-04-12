@@ -1,6 +1,6 @@
 """DiscussionPipeline — structured four-stage thread interaction handler.
 
-Extracts ``handle_discussion_interaction()`` into the Pipeline protocol:
+Four-stage Pipeline protocol implementation:
 prepare (clone + fetch context) → execute (LLM discussion) →
 process (apply patch + post reply + resolve) → cleanup (remove repo).
 """
@@ -97,8 +97,6 @@ def _find_triggering_discussion(
 
 class DiscussionPipeline:
     """Four-stage discussion pipeline.
-
-    Replaces the monolithic ``handle_discussion_interaction()`` function:
 
     - **prepare**: clone, fetch MR + discussions, find triggering thread
     - **execute**: build prompt, run Copilot discussion session

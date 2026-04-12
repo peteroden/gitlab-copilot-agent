@@ -1,4 +1,4 @@
-"""Tests for the discussion handler — handle_discussion_interaction pipeline."""
+"""Tests for the discussion pipeline — DiscussionPipeline end-to-end."""
 
 from __future__ import annotations
 
@@ -17,7 +17,9 @@ from gitlab_copilot_agent.discussion_models import (
     Discussion,
     DiscussionNote,
 )
+from gitlab_copilot_agent.discussion_pipeline import DiscussionContext, DiscussionPipeline
 from gitlab_copilot_agent.events import TaskEvent
+from gitlab_copilot_agent.pipeline import run_pipeline
 from gitlab_copilot_agent.task_executor import CodingResult, ReviewResult, TaskExecutionError
 from tests.conftest import GITLAB_TOKEN, MR_IID, PROJECT_ID, make_settings
 
@@ -38,7 +40,6 @@ GENERIC_ERROR_SNIPPET = "❌ Unable to process your request"
 
 # -- Module path prefix for patches --
 _MOD = "gitlab_copilot_agent.discussion_pipeline"
-_ORCH = "gitlab_copilot_agent.discussion_orchestrator"
 
 
 # -- Factories --
@@ -104,20 +105,15 @@ def _make_discussion(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_ORCH}.GitLabClient")
 async def test_qa_reply_no_code_changes(
-    mock_client_cls: MagicMock,
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
     tmp_path: Path,
 ) -> None:
     """Happy path: Q&A reply with no code changes — reply posted, no push."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
     # GitLabClient instance
     gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
     gl_client.clone_repo.return_value = tmp_path
     gl_client.get_mr_details.return_value = MagicMock()
     gl_client.list_mr_discussions.return_value = [_make_discussion()]
@@ -128,12 +124,14 @@ async def test_qa_reply_no_code_changes(
     mock_parse.return_value = DiscussionResponse(reply=REPLY_TEXT)
 
     executor = AsyncMock()
-    await handle_discussion_interaction(
-        make_settings(),
-        _make_event(),
-        executor,
-        _make_agent(),
+    pipeline = DiscussionPipeline(
+        settings=make_settings(),
+        event=_make_event(),
+        executor=executor,
+        gl_client=gl_client,
+        agent_identity=_make_agent(),
     )
+    await run_pipeline(pipeline, DiscussionContext())
 
     # Reply posted to correct thread
     gl_client.reply_to_discussion.assert_awaited_once()
@@ -150,9 +148,7 @@ async def test_qa_reply_no_code_changes(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_ORCH}.GitLabClient")
 async def test_coding_reply_with_changes(
-    mock_client_cls: MagicMock,
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
@@ -162,10 +158,7 @@ async def test_coding_reply_with_changes(
     tmp_path: Path,
 ) -> None:
     """Happy path: coding reply with patch — changes pushed."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
     gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
     gl_client.clone_repo.return_value = tmp_path
     gl_client.get_mr_details.return_value = MagicMock()
     gl_client.list_mr_discussions.return_value = [_make_discussion()]
@@ -176,12 +169,14 @@ async def test_coding_reply_with_changes(
     mock_commit.return_value = True
 
     executor = AsyncMock()
-    await handle_discussion_interaction(
-        make_settings(),
-        _make_event(),
-        executor,
-        _make_agent(),
+    pipeline = DiscussionPipeline(
+        settings=make_settings(),
+        event=_make_event(),
+        executor=executor,
+        gl_client=gl_client,
+        agent_identity=_make_agent(),
     )
+    await run_pipeline(pipeline, DiscussionContext())
 
     mock_apply.assert_awaited_once()
     mock_commit.assert_awaited_once()
@@ -197,9 +192,7 @@ async def test_coding_reply_with_changes(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_ORCH}.GitLabClient")
 async def test_coding_reply_empty_patch(
-    mock_client_cls: MagicMock,
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
@@ -209,10 +202,7 @@ async def test_coding_reply_empty_patch(
     tmp_path: Path,
 ) -> None:
     """Coding result with empty patch — reply posted, no push."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
     gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
     gl_client.clone_repo.return_value = tmp_path
     gl_client.get_mr_details.return_value = MagicMock()
     gl_client.list_mr_discussions.return_value = [_make_discussion()]
@@ -222,12 +212,14 @@ async def test_coding_reply_empty_patch(
     mock_parse.return_value = DiscussionResponse(reply=REPLY_TEXT)
 
     executor = AsyncMock()
-    await handle_discussion_interaction(
-        make_settings(),
-        _make_event(),
-        executor,
-        _make_agent(),
+    pipeline = DiscussionPipeline(
+        settings=make_settings(),
+        event=_make_event(),
+        executor=executor,
+        gl_client=gl_client,
+        agent_identity=_make_agent(),
     )
+    await run_pipeline(pipeline, DiscussionContext())
 
     mock_apply.assert_not_awaited()
     mock_push.assert_not_awaited()
@@ -236,16 +228,11 @@ async def test_coding_reply_empty_patch(
     assert CHANGES_PUSHED_MARKER not in posted_body
 
 
-@patch(f"{_ORCH}.GitLabClient")
 async def test_triggering_discussion_not_found(
-    mock_client_cls: MagicMock,
     tmp_path: Path,
 ) -> None:
     """When the triggering note is not in any discussion, handler returns without posting."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
     gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
     gl_client.clone_repo.return_value = tmp_path
     gl_client.get_mr_details.return_value = MagicMock()
 
@@ -254,31 +241,28 @@ async def test_triggering_discussion_not_found(
     gl_client.list_mr_discussions.return_value = [_make_discussion(notes=[other_note])]
 
     executor = AsyncMock()
-    await handle_discussion_interaction(
-        make_settings(),
-        _make_event(),
-        executor,
-        _make_agent(),
+    pipeline = DiscussionPipeline(
+        settings=make_settings(),
+        event=_make_event(),
+        executor=executor,
+        gl_client=gl_client,
+        agent_identity=_make_agent(),
     )
+    await run_pipeline(pipeline, DiscussionContext())
 
     # No LLM call, no reply posted
     executor.execute.assert_not_awaited()
 
 
-@patch(f"{_ORCH}.GitLabClient")
 @patch(f"{_MOD}.run_discussion")
 @patch(f"{_MOD}.build_discussion_prompt")
 async def test_task_execution_error_posts_user_error(
     mock_build: MagicMock,
     mock_run: AsyncMock,
-    mock_client_cls: MagicMock,
     tmp_path: Path,
 ) -> None:
     """TaskExecutionError → user-friendly error comment on MR, exception re-raised."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
     gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
     gl_client.clone_repo.return_value = tmp_path
     gl_client.get_mr_details.return_value = MagicMock()
     gl_client.list_mr_discussions.return_value = [_make_discussion()]
@@ -288,39 +272,38 @@ async def test_task_execution_error_posts_user_error(
 
     executor = AsyncMock()
     with pytest.raises(TaskExecutionError):
-        await handle_discussion_interaction(
-            make_settings(),
-            _make_event(),
-            executor,
-            _make_agent(),
+        pipeline = DiscussionPipeline(
+            settings=make_settings(),
+            event=_make_event(),
+            executor=executor,
+            gl_client=gl_client,
+            agent_identity=_make_agent(),
         )
+        await run_pipeline(pipeline, DiscussionContext())
 
     gl_client.post_mr_comment.assert_awaited_once()
     posted_body = gl_client.post_mr_comment.call_args[0][2]
     assert "❌" in posted_body
 
 
-@patch(f"{_ORCH}.GitLabClient")
 async def test_general_exception_posts_generic_error(
-    mock_client_cls: MagicMock,
     tmp_path: Path,
 ) -> None:
     """General exception → generic error comment on MR, exception re-raised."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
     gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
     gl_client.clone_repo.return_value = tmp_path
     gl_client.get_mr_details.side_effect = RuntimeError("unexpected")
 
     executor = AsyncMock()
     with pytest.raises(RuntimeError, match="unexpected"):
-        await handle_discussion_interaction(
-            make_settings(),
-            _make_event(),
-            executor,
-            _make_agent(),
+        pipeline = DiscussionPipeline(
+            settings=make_settings(),
+            event=_make_event(),
+            executor=executor,
+            gl_client=gl_client,
+            agent_identity=_make_agent(),
         )
+        await run_pipeline(pipeline, DiscussionContext())
 
     gl_client.post_mr_comment.assert_awaited_once()
     posted_body = gl_client.post_mr_comment.call_args[0][2]
@@ -328,98 +311,45 @@ async def test_general_exception_posts_generic_error(
 
 
 @patch(f"{_MOD}.shutil.rmtree")
-@patch(f"{_ORCH}.GitLabClient")
 async def test_cleanup_runs_on_failure(
-    mock_client_cls: MagicMock,
     mock_rmtree: MagicMock,
     tmp_path: Path,
 ) -> None:
     """Repo cleanup runs even when the handler raises."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
     gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
     gl_client.clone_repo.return_value = tmp_path
     gl_client.get_mr_details.side_effect = RuntimeError("boom")
 
     executor = AsyncMock()
     with pytest.raises(RuntimeError):
-        await handle_discussion_interaction(
-            make_settings(),
-            _make_event(),
-            executor,
-            _make_agent(),
+        pipeline = DiscussionPipeline(
+            settings=make_settings(),
+            event=_make_event(),
+            executor=executor,
+            gl_client=gl_client,
+            agent_identity=_make_agent(),
         )
+        await run_pipeline(pipeline, DiscussionContext())
 
     # shutil.rmtree called via asyncio.to_thread — the mock captures the call
     mock_rmtree.assert_called_once_with(tmp_path, True)
 
 
-@patch(f"{_MOD}.parse_discussion_response")
-@patch(f"{_MOD}.build_discussion_prompt")
-@patch(f"{_MOD}.run_discussion")
-@patch(f"{_ORCH}.GitLabClient")
-async def test_repo_lock_used_when_provided(
-    mock_client_cls: MagicMock,
-    mock_run: AsyncMock,
-    mock_build: MagicMock,
-    mock_parse: MagicMock,
-    tmp_path: Path,
-) -> None:
-    """When repo_locks is provided, _execute runs inside the lock."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
-    gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
-    gl_client.clone_repo.return_value = tmp_path
-    gl_client.get_mr_details.return_value = MagicMock()
-    gl_client.list_mr_discussions.return_value = [_make_discussion()]
-
-    mock_run.return_value = ReviewResult(summary=REPLY_TEXT)
-    mock_build.return_value = "prompt"
-    mock_parse.return_value = DiscussionResponse(reply=REPLY_TEXT)
-
-    # Build a mock DistributedLock with async context manager
-    lock_cm = AsyncMock()
-    lock_cm.__aenter__ = AsyncMock(return_value=None)
-    lock_cm.__aexit__ = AsyncMock(return_value=False)
-
-    repo_locks = MagicMock()
-    repo_locks.acquire.return_value = lock_cm
-
-    executor = AsyncMock()
-    await handle_discussion_interaction(
-        make_settings(),
-        _make_event(),
-        executor,
-        _make_agent(),
-        repo_locks=repo_locks,
-    )
-
-    repo_locks.acquire.assert_called_once_with(CLONE_URL)
-    lock_cm.__aenter__.assert_awaited_once()
-    lock_cm.__aexit__.assert_awaited_once()
-
-    # Verify the handler still completed (reply posted)
-    gl_client.reply_to_discussion.assert_awaited_once()
+# Repo lock test removed — lock management moved to callers (gitlab_webhook.py, gitlab_poller.py)
+# in Phase 6.2. Lock behavior is covered by test_webhook.py and test_gitlab_poller.py.
 
 
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_ORCH}.GitLabClient")
 async def test_deleted_branch_replies_with_warning(
-    mock_client_cls: MagicMock,
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
     tmp_path: Path,
 ) -> None:
     """When the source branch is deleted, reply with a helpful warning."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
     gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
     gl_client.clone_repo = AsyncMock(
         side_effect=RuntimeError(
             "git clone failed: Remote branch feature/test not found in upstream origin"
@@ -427,12 +357,14 @@ async def test_deleted_branch_replies_with_warning(
     )
     gl_client.list_mr_discussions.return_value = [_make_discussion()]
 
-    await handle_discussion_interaction(
-        make_settings(),
-        _make_event(),
-        AsyncMock(),
-        _make_agent(),
+    pipeline = DiscussionPipeline(
+        settings=make_settings(),
+        event=_make_event(),
+        executor=AsyncMock(),
+        gl_client=gl_client,
+        agent_identity=_make_agent(),
     )
+    await run_pipeline(pipeline, DiscussionContext())
 
     # LLM should NOT have been called
     mock_run.assert_not_awaited()
@@ -461,19 +393,14 @@ def _make_resolution(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_ORCH}.GitLabClient")
 async def test_discussion_interaction_auto_resolve(
-    mock_client_cls: MagicMock,
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
     tmp_path: Path,
 ) -> None:
     """resolution_behavior='auto-resolve' + resolved → thread resolved via API."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
     gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
     gl_client.clone_repo.return_value = tmp_path
     gl_client.get_mr_details.return_value = MagicMock()
     # Triggering discussion must be agent-authored + inline for auto-resolve
@@ -492,12 +419,14 @@ async def test_discussion_interaction_auto_resolve(
     )
 
     executor = AsyncMock()
-    await handle_discussion_interaction(
-        make_settings(),
-        _make_event(resolution_behavior="auto-resolve"),
-        executor,
-        _make_agent(),
+    pipeline = DiscussionPipeline(
+        settings=make_settings(),
+        event=_make_event(resolution_behavior="auto-resolve"),
+        executor=executor,
+        gl_client=gl_client,
+        agent_identity=_make_agent(),
     )
+    await run_pipeline(pipeline, DiscussionContext())
 
     # Reply posted
     gl_client.reply_to_discussion.assert_awaited_once()
@@ -508,19 +437,14 @@ async def test_discussion_interaction_auto_resolve(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_ORCH}.GitLabClient")
 async def test_discussion_interaction_suggest_no_resolve(
-    mock_client_cls: MagicMock,
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
     tmp_path: Path,
 ) -> None:
     """resolution_behavior='suggest' + resolved → reply posted, thread NOT resolved."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
     gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
     gl_client.clone_repo.return_value = tmp_path
     gl_client.get_mr_details.return_value = MagicMock()
     gl_client.list_mr_discussions.return_value = [_make_discussion()]
@@ -533,12 +457,14 @@ async def test_discussion_interaction_suggest_no_resolve(
     )
 
     executor = AsyncMock()
-    await handle_discussion_interaction(
-        make_settings(),
-        _make_event(resolution_behavior="suggest"),
-        executor,
-        _make_agent(),
+    pipeline = DiscussionPipeline(
+        settings=make_settings(),
+        event=_make_event(resolution_behavior="suggest"),
+        executor=executor,
+        gl_client=gl_client,
+        agent_identity=_make_agent(),
     )
+    await run_pipeline(pipeline, DiscussionContext())
 
     # Reply posted
     gl_client.reply_to_discussion.assert_awaited_once()
@@ -549,19 +475,14 @@ async def test_discussion_interaction_suggest_no_resolve(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_ORCH}.GitLabClient")
 async def test_discussion_interaction_off_no_action(
-    mock_client_cls: MagicMock,
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
     tmp_path: Path,
 ) -> None:
     """resolution_behavior='off' → no resolution action at all."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
     gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
     gl_client.clone_repo.return_value = tmp_path
     gl_client.get_mr_details.return_value = MagicMock()
     gl_client.list_mr_discussions.return_value = [_make_discussion()]
@@ -574,12 +495,14 @@ async def test_discussion_interaction_off_no_action(
     )
 
     executor = AsyncMock()
-    await handle_discussion_interaction(
-        make_settings(),
-        _make_event(resolution_behavior="off"),
-        executor,
-        _make_agent(),
+    pipeline = DiscussionPipeline(
+        settings=make_settings(),
+        event=_make_event(resolution_behavior="off"),
+        executor=executor,
+        gl_client=gl_client,
+        agent_identity=_make_agent(),
     )
+    await run_pipeline(pipeline, DiscussionContext())
 
     # Reply still posted
     gl_client.reply_to_discussion.assert_awaited_once()
@@ -590,19 +513,14 @@ async def test_discussion_interaction_off_no_action(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_ORCH}.GitLabClient")
 async def test_discussion_interaction_partial_never_resolved(
-    mock_client_cls: MagicMock,
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
     tmp_path: Path,
 ) -> None:
     """Partial resolution → never auto-resolved regardless of behavior."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
     gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
     gl_client.clone_repo.return_value = tmp_path
     gl_client.get_mr_details.return_value = MagicMock()
     gl_client.list_mr_discussions.return_value = [_make_discussion()]
@@ -615,12 +533,14 @@ async def test_discussion_interaction_partial_never_resolved(
     )
 
     executor = AsyncMock()
-    await handle_discussion_interaction(
-        make_settings(),
-        _make_event(resolution_behavior="auto-resolve"),
-        executor,
-        _make_agent(),
+    pipeline = DiscussionPipeline(
+        settings=make_settings(),
+        event=_make_event(resolution_behavior="auto-resolve"),
+        executor=executor,
+        gl_client=gl_client,
+        agent_identity=_make_agent(),
     )
+    await run_pipeline(pipeline, DiscussionContext())
 
     # Reply posted
     gl_client.reply_to_discussion.assert_awaited_once()
@@ -631,19 +551,14 @@ async def test_discussion_interaction_partial_never_resolved(
 @patch(f"{_MOD}.parse_discussion_response")
 @patch(f"{_MOD}.build_discussion_prompt")
 @patch(f"{_MOD}.run_discussion")
-@patch(f"{_ORCH}.GitLabClient")
 async def test_discussion_interaction_resolution_error_logged(
-    mock_client_cls: MagicMock,
     mock_run: AsyncMock,
     mock_build: MagicMock,
     mock_parse: MagicMock,
     tmp_path: Path,
 ) -> None:
     """Exception during resolution → logged, not raised."""
-    from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
-
     gl_client = AsyncMock()
-    mock_client_cls.return_value = gl_client
     gl_client.clone_repo.return_value = tmp_path
     gl_client.get_mr_details.return_value = MagicMock()
     gl_client.list_mr_discussions.return_value = [
@@ -665,12 +580,14 @@ async def test_discussion_interaction_resolution_error_logged(
 
     executor = AsyncMock()
     # Should NOT raise — resolution errors are swallowed and logged
-    await handle_discussion_interaction(
-        make_settings(),
-        _make_event(resolution_behavior="auto-resolve"),
-        executor,
-        _make_agent(),
+    pipeline = DiscussionPipeline(
+        settings=make_settings(),
+        event=_make_event(resolution_behavior="auto-resolve"),
+        executor=executor,
+        gl_client=gl_client,
+        agent_identity=_make_agent(),
     )
+    await run_pipeline(pipeline, DiscussionContext())
 
     # Reply still posted successfully
     gl_client.reply_to_discussion.assert_awaited_once()

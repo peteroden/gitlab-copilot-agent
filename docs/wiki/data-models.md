@@ -85,7 +85,7 @@ GitLab-centric YAML configuration. All models use `strict=True` validation.
 |-------|------|-------------|
 | Normalized fields from webhook payloads | Various | Project ID, MR IID, event type, user, branches, etc. |
 
-**Used By**: `webhook.py`, `gitlab_poller.py` → produce; `orchestrator.py`, `discussion_orchestrator.py`, `review_pipeline.py`, `discussion_pipeline.py`, `coding_pipeline.py` → consume
+**Used By**: `gitlab_webhook.py`, `gitlab_poller.py` → produce; `review_pipeline.py`, `discussion_pipeline.py`, `coding_pipeline.py` → consume
 
 ---
 
@@ -710,13 +710,13 @@ graph TB
         CR[CredentialRegistry] -->|resolve token| RP
     end
     
-    WHP -.->|orchestrator.py| RR
+    WHP -.->|review_pipeline.py| RR
     RR -.->|review_engine.py| TP
     TP -.->|copilot_session.py| RCFG
     TP -.->|executor| PR
     PR -.->|comment_poster.py| MRD
     CR -.->|resolve_identity| AI
-    DH -.->|orchestrator.py| TP
+    DH -.->|discussion_pipeline.py| TP
 ```
 
 ---
