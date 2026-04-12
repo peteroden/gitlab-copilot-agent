@@ -362,31 +362,23 @@ Task Runner (separate process/container)
 
 The Copilot SDK's `SubprocessConfig.telemetry` configures the CLI subprocess to export its own OTEL traces.
 
-**Configuration**: `copilot_session.py` passes `TelemetryConfig(otlp_endpoint=...)` when an OTEL endpoint is available.
-
-**Protocol mismatch**: The Copilot CLI only supports OTLP HTTP, but the ACA managed OTEL agent only supports gRPC. A lightweight OTEL Collector sidecar bridges the gap:
+**Approach**: The CLI writes spans to a per-session JSONL file via `TelemetryConfig(file_path=...)`. After the session completes, `cli_trace_forwarder.py` reads the file, converts each span to `ReadableSpan`, and exports them through the app's existing OTLP gRPC exporter. This avoids a sidecar collector entirely.
 
 ```
-Copilot CLI ──OTLP HTTP──▶ otel-sidecar:4318 ──gRPC──▶ ACA managed agent:4317
+Copilot CLI ──file──▶ cli-traces.jsonl ──ReadableSpan──▶ app OTLP gRPC exporter
 ```
 
-The sidecar runs `otel/opentelemetry-collector-contrib` with a minimal config that receives HTTP on 4318 and forwards gRPC to the managed agent. Defined in:
-- **ACA**: `infra/container-apps.tf` — init container writes config, sidecar container runs collector
-- **K8s**: `helm/.../otel-sidecar-config.yaml` + sidecar in `scaledjob.yaml`
+**Why not a sidecar?** The CLI's OTLP HTTP exporter has reliability issues (empty payloads, batch flush timing). A sidecar collector adds ~200MB image pull overhead per job pod start, which causes ACA cold-start failures with `parallelism=1`.
 
-**Endpoint derivation**: `copilot_session.py` resolves the CLI's OTLP endpoint:
-- `COPILOT_OTEL_HTTP_ENDPOINT` → used directly (set to `http://localhost:4318` when sidecar present)
-- `OTEL_EXPORTER_OTLP_ENDPOINT` → port replaced with 4318 (fallback for single-port collectors)
+**Trace Linkage**: The SDK calls `get_trace_context()` before `create_session` and `send` RPCs, injecting the active `traceparent` into JSON-RPC payloads. CLI spans become children of the app's active span. The file exporter preserves real timestamps and trace/span IDs.
 
-**Trace Linkage**: The SDK calls `get_trace_context()` before `create_session` and `send` RPCs, injecting the active `traceparent` into JSON-RPC payloads. CLI internal spans become children of the app's active span.
+**CLI span types**: `invoke_agent` (per-session), `chat` (per-LLM call), `execute_tool` (per-tool call). All carry GenAI semantic convention attributes (`gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.usage.*`, etc.).
 
-**Known Limitation (CLI v1.0.24)**: The CLI's OTLP HTTP exporter sends empty payloads — it probes the endpoint but does not export span data over HTTP. The file exporter (`exporter_type="file"`) works correctly and produces `invoke_agent`, `chat`, and `execute_tool` spans with full GenAI semantic convention attributes. The sidecar infrastructure is deployed and ready; CLI traces will flow automatically once a future CLI version fixes the HTTP exporter. Track progress by testing with `TelemetryConfig(file_path="/tmp/traces.jsonl", exporter_type="file")`.
-
-**Environment Variables Set on CLI**:
-| Config Field | CLI Env Var |
-|---|---|
-| `otlp_endpoint` | `OTEL_EXPORTER_OTLP_ENDPOINT` |
-| (always) | `COPILOT_OTEL_ENABLED=true` |
+**Forwarding module**: `telemetry/cli_trace_forwarder.py`
+- Reads JSONL after `client.stop()` — all spans are available (file exporter writes synchronously)
+- Converts to `ReadableSpan` preserving original timestamps
+- Exports via the app's span exporter (stored in `telemetry._state`)
+- Failure-tolerant: never fails the task; logs and skips malformed lines
 
 ---
 
@@ -463,12 +455,12 @@ Structured audit events for security-relevant operations. All audit events inclu
 
 **Script**: `scripts/otel_console_collector.py`
 
-**Protocols**: gRPC on 4317 (app) + HTTP/protobuf on 4318 (Copilot CLI)
+**Protocols**: gRPC on 4317 (app spans) + HTTP on 4318 (accepts JSON + protobuf, chunked encoding)
 
 **Usage**:
 ```bash
-# Terminal 1: Run collector
-uv run python scripts/otel_console_collector.py
+# Terminal 1: Run collector (add --verbose for per-span trace IDs)
+uv run python scripts/otel_console_collector.py --verbose
 
 # Terminal 2: Run agent with OTEL enabled
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317

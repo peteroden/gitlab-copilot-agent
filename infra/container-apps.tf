@@ -427,11 +427,6 @@ resource "azurerm_container_app_job" "task_runner" {
         name  = "LOG_LEVEL"
         value = var.deployment_env == "dev" ? "debug" : "info"
       }
-      # Copilot CLI → localhost OTEL sidecar (HTTP/protobuf on 4318)
-      env {
-        name  = "COPILOT_OTEL_HTTP_ENDPOINT"
-        value = "http://localhost:4318"
-      }
 
       # BYOK provider config (only set when copilot_auth='byok')
       dynamic "env" {
@@ -457,76 +452,6 @@ resource "azurerm_container_app_job" "task_runner" {
           secret_name = env.key
         }
       }
-    }
-
-    # OTEL HTTP→gRPC bridge sidecar for Copilot CLI traces.
-    # Keep sidecar config in sync with helm/gitlab-copilot-agent/templates/otel-sidecar-config.yaml
-    # The ACA managed agent only speaks gRPC (port 4317) but the Copilot CLI
-    # only speaks OTLP HTTP. This lightweight collector receives HTTP on 4318
-    # and forwards to the managed agent's gRPC endpoint.
-    # Uses the same OTEL_EXPORTER_OTLP_ENDPOINT that ACA auto-injects
-    # (e.g. http://k8se-otel.k8se-apps.svc.cluster.local:4317).
-    init_container {
-      name   = "otel-config"
-      image  = "mcr.microsoft.com/cbl-mariner/busybox:2.0"
-      cpu    = 0.25
-      memory = "0.5Gi"
-      command = ["sh", "-c", <<-EOT
-        cat > /otel/config.yaml << 'EOF'
-receivers:
-  otlp:
-    protocols:
-      http:
-        endpoint: 0.0.0.0:4318
-exporters:
-  otlp:
-    endpoint: $${env:OTEL_GRPC_TARGET}
-    tls:
-      insecure: true
-service:
-  pipelines:
-    traces:
-      receivers: [otlp]
-      exporters: [otlp]
-    logs:
-      receivers: [otlp]
-      exporters: [otlp]
-EOF
-      EOT
-      ]
-      volume_mounts {
-        name = "otel-sidecar-config"
-        path = "/otel"
-      }
-    }
-
-    container {
-      name  = "otel-sidecar"
-      image = "otel/opentelemetry-collector-contrib:0.123.0"
-      # Match Helm sidecar limits (helm/gitlab-copilot-agent/templates/scaledjob.yaml)
-      # Helm: 100m/128Mi. ACA total must match a valid tier — main (1.0/2Gi) +
-      # sidecar must sum to 1.25/2.5Gi (nearest valid tier).
-      cpu    = 0.25
-      memory = "0.5Gi"
-      args   = ["--config=/otel/config.yaml"]
-
-      # The gRPC target for the managed OTEL agent. ACA auto-injects
-      # OTEL_EXPORTER_OTLP_ENDPOINT as http://host:4317 but the OTLP
-      # gRPC exporter expects host:port without scheme.
-      env {
-        name  = "OTEL_GRPC_TARGET"
-        value = "k8se-otel.k8se-apps.svc.cluster.local:4317"
-      }
-
-      volume_mounts {
-        name = "otel-sidecar-config"
-        path = "/otel"
-      }
-    }
-
-    volume {
-      name         = "otel-sidecar-config"
-      storage_type = "EmptyDir"
     }
   }
 

@@ -43,6 +43,7 @@ The implementation:
 2. **Consumer** (`task_runner.py`): `restore_trace_context()` calls `propagate.extract()` on the payload fields and attaches the restored context via `context.attach()`. All subsequent spans become children of the original trace.
 3. **Cleanup**: `_detach_trace()` detaches the restored context in all exit paths (success, error, finally) to prevent context leakage.
 4. **Pipeline spans**: `run_pipeline()` accepts `span_attributes` for semantic attributes (`project_id`, `mr_iid`, `task_type`, `trigger_source`) on the parent pipeline span.
+5. **CLI span forwarding** (`telemetry/cli_trace_forwarder.py`): The Copilot CLI writes spans to a per-session JSONL file. After `client.stop()`, the forwarder reads the file, converts spans to `ReadableSpan` (preserving original timestamps and trace/span IDs), and exports them through the app's OTLP gRPC exporter. This eliminates the need for a sidecar collector.
 
 ### Trust boundary
 

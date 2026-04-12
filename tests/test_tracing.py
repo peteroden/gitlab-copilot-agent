@@ -66,50 +66,6 @@ def _make_stub_pipeline() -> MagicMock:
     return p
 
 
-def _capture_copilot_config(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    otel_endpoint: str | None,
-    copilot_http_endpoint: str | None = None,
-) -> list[Any]:
-    """Run copilot_session with a fake client and capture the SubprocessConfig."""
-    if otel_endpoint:
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", otel_endpoint)
-    else:
-        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
-    if copilot_http_endpoint:
-        monkeypatch.setenv("COPILOT_OTEL_HTTP_ENDPOINT", copilot_http_endpoint)
-    else:
-        monkeypatch.delenv("COPILOT_OTEL_HTTP_ENDPOINT", raising=False)
-
-    captured: list[Any] = []
-
-    class _FakeClient:
-        def __init__(self, config: Any) -> None:
-            captured.append(config)
-
-        async def start(self) -> None:
-            pass
-
-        async def get_auth_status(self) -> MagicMock:
-            m = MagicMock()
-            m.authType = "token"
-            m.isAuthenticated = True
-            return m
-
-        async def create_session(self, **kw: Any) -> MagicMock:
-            s = MagicMock()
-            s.send = AsyncMock()
-            s.on = MagicMock()
-            s.disconnect = AsyncMock()
-            return s
-
-        async def stop(self) -> None:
-            pass
-
-    return captured, _FakeClient  # type: ignore[return-value]
-
-
 # ---------------------------------------------------------------------------
 # restore_trace_context
 # ---------------------------------------------------------------------------
@@ -223,39 +179,55 @@ class TestQueuePayloadTraceparent:
 
 
 class TestCopilotTelemetryConfig:
-    """TelemetryConfig is passed to SubprocessConfig based on OTEL env vars."""
+    """TelemetryConfig uses file exporter when OTEL is configured."""
 
     @pytest.mark.parametrize(
-        ("otel_ep", "http_ep", "expected_otlp"),
+        ("otel_ep", "expect_file"),
         [
-            ("http://collector:4317", None, "http://collector:4318"),
-            (None, None, None),
-            ("http://host:4317", "http://custom:9999", "http://custom:9999"),
-            ("http://collector.example.com", None, "http://collector.example.com:4318"),
-            ("http://collector:4317/v1/traces", None, "http://collector:4318/v1/traces"),
-            ("http://[::1]:4317", None, "http://[::1]:4318"),
+            ("http://collector:4317", True),
+            (None, False),
         ],
-        ids=[
-            "derives-http-from-grpc",
-            "disabled-when-unset",
-            "explicit-http-override",
-            "no-port",
-            "with-path",
-            "ipv6",
-        ],
+        ids=["file-exporter-when-otel-set", "disabled-when-unset"],
     )
     async def test_telemetry_config(
         self,
         monkeypatch: pytest.MonkeyPatch,
         otel_ep: str | None,
-        http_ep: str | None,
-        expected_otlp: str | None,
+        expect_file: bool,
     ) -> None:
-        captured, fake_cls = _capture_copilot_config(
-            monkeypatch, otel_endpoint=otel_ep, copilot_http_endpoint=http_ep
-        )
+        if otel_ep:
+            monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", otel_ep)
+        else:
+            monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+        monkeypatch.delenv("COPILOT_OTEL_HTTP_ENDPOINT", raising=False)
+
+        captured: list[Any] = []
+
+        class _FakeClient:
+            def __init__(self, config: Any) -> None:
+                captured.append(config)
+
+            async def start(self) -> None:
+                pass
+
+            async def get_auth_status(self) -> MagicMock:
+                m = MagicMock()
+                m.authType = "token"
+                m.isAuthenticated = True
+                return m
+
+            async def create_session(self, **kw: Any) -> MagicMock:
+                s = MagicMock()
+                s.send = AsyncMock()
+                s.on = MagicMock()
+                s.disconnect = AsyncMock()
+                return s
+
+            async def stop(self) -> None:
+                pass
+
         with (
-            patch("gitlab_copilot_agent.copilot_session.CopilotClient", fake_cls),
+            patch("gitlab_copilot_agent.copilot_session.CopilotClient", _FakeClient),
             patch("gitlab_copilot_agent.copilot_session.get_real_cli_path", return_value="/x"),
             patch(
                 "gitlab_copilot_agent.copilot_session.discover_repo_config",
@@ -263,6 +235,7 @@ class TestCopilotTelemetryConfig:
                     instructions=None, skill_directories=None, custom_agents=None
                 ),
             ),
+            patch("gitlab_copilot_agent.copilot_session.forward_cli_traces"),
         ):
             from gitlab_copilot_agent.copilot_session import run_copilot_session
             from tests.conftest import make_settings
@@ -272,10 +245,12 @@ class TestCopilotTelemetryConfig:
 
         assert len(captured) == 1
         tel = captured[0].telemetry
-        if expected_otlp is None:
-            assert tel is None
+        if expect_file:
+            assert tel is not None
+            assert "file_path" in tel
+            assert tel["file_path"].endswith("cli-traces.jsonl")
         else:
-            assert tel["otlp_endpoint"] == expected_otlp
+            assert tel is None
 
 
 # ---------------------------------------------------------------------------
@@ -308,3 +283,101 @@ class TestPipelineSpanAttributes:
 
         result = await run_pipeline(_make_stub_pipeline(), BasePipelineContext())  # type: ignore[arg-type]
         assert result.outcome == "success"
+
+
+# ---------------------------------------------------------------------------
+# CLI trace forwarder
+# ---------------------------------------------------------------------------
+
+CLI_SPAN_JSONL = json.dumps(
+    {
+        "type": "span",
+        "traceId": EXPECTED_TRACE_ID,
+        "spanId": "b7ad6b7169203331",
+        "parentSpanId": "1111111111111111",
+        "name": "chat gpt-4.1",
+        "kind": 2,
+        "startTime": [1700000000, 100000000],
+        "endTime": [1700000003, 200000000],
+        "attributes": {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.request.model": "gpt-4.1",
+            "gen_ai.response.finish_reasons": ["stop"],
+        },
+        "status": {"code": 0},
+        "resource": {"attributes": {"service.name": "github-copilot"}},
+        "instrumentationScope": {"name": "github.copilot", "version": "1.0.17"},
+    }
+)
+
+
+class TestCliTraceForwarder:
+    """Tests for telemetry.cli_trace_forwarder."""
+
+    def test_forward_parses_and_exports(self, tmp_path: Any) -> None:
+        trace_file = tmp_path / "traces.jsonl"
+        trace_file.write_text(CLI_SPAN_JSONL + "\n")
+
+        from unittest.mock import MagicMock
+
+        from gitlab_copilot_agent.telemetry import _state
+        from gitlab_copilot_agent.telemetry.cli_trace_forwarder import forward_cli_traces
+
+        mock_exporter = MagicMock()
+        old = _state.span_exporter
+        _state.span_exporter = mock_exporter
+        try:
+            count = forward_cli_traces(str(trace_file))
+        finally:
+            _state.span_exporter = old
+
+        assert count == 1
+        mock_exporter.export.assert_called_once()
+        spans = mock_exporter.export.call_args[0][0]
+        assert len(spans) == 1
+        span = spans[0]
+        assert span.name == "chat gpt-4.1"
+        assert format(span.context.trace_id, "032x") == EXPECTED_TRACE_ID
+        assert format(span.context.span_id, "016x") == "b7ad6b7169203331"
+        assert format(span.parent.span_id, "016x") == "1111111111111111"
+        # Verify real timestamps are preserved, not parse time
+        assert span.start_time == 1700000000 * 10**9 + 100000000
+        assert span.end_time == 1700000003 * 10**9 + 200000000
+
+    def test_forward_skips_when_no_exporter(self, tmp_path: Any) -> None:
+        trace_file = tmp_path / "traces.jsonl"
+        trace_file.write_text(CLI_SPAN_JSONL + "\n")
+
+        from gitlab_copilot_agent.telemetry import _state
+        from gitlab_copilot_agent.telemetry.cli_trace_forwarder import forward_cli_traces
+
+        old = _state.span_exporter
+        _state.span_exporter = None
+        try:
+            assert forward_cli_traces(str(trace_file)) == 0
+        finally:
+            _state.span_exporter = old
+
+    def test_forward_skips_missing_file(self) -> None:
+        from gitlab_copilot_agent.telemetry.cli_trace_forwarder import forward_cli_traces
+
+        assert forward_cli_traces("/nonexistent/path.jsonl") == 0
+
+    def test_forward_tolerates_malformed_lines(self, tmp_path: Any) -> None:
+        trace_file = tmp_path / "traces.jsonl"
+        trace_file.write_text("not json\n" + CLI_SPAN_JSONL + "\n")
+
+        from unittest.mock import MagicMock
+
+        from gitlab_copilot_agent.telemetry import _state
+        from gitlab_copilot_agent.telemetry.cli_trace_forwarder import forward_cli_traces
+
+        mock_exporter = MagicMock()
+        old = _state.span_exporter
+        _state.span_exporter = mock_exporter
+        try:
+            count = forward_cli_traces(str(trace_file))
+        finally:
+            _state.span_exporter = old
+
+        assert count == 1  # malformed line skipped, valid span exported

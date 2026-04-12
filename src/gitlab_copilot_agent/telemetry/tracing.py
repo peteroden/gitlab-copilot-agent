@@ -55,6 +55,7 @@ def init_telemetry() -> None:
     )
 
     span_exporter, metric_exporter, log_exporter = create_exporters()
+    _state.span_exporter = span_exporter
 
     # Traces
     tracer_provider = TracerProvider(resource=resource)

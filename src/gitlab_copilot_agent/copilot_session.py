@@ -6,8 +6,8 @@ import shutil
 import tempfile
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlparse, urlunparse
 
 import structlog
 from copilot import CopilotClient, SubprocessConfig
@@ -26,6 +26,7 @@ from gitlab_copilot_agent.metrics import (
 from gitlab_copilot_agent.process_sandbox import get_real_cli_path
 from gitlab_copilot_agent.repo_config import discover_repo_config
 from gitlab_copilot_agent.telemetry import get_tracer
+from gitlab_copilot_agent.telemetry.cli_trace_forwarder import forward_cli_traces
 
 log = structlog.get_logger()
 _tracer = get_tracer(__name__)
@@ -111,31 +112,15 @@ async def run_copilot_session(
                 sdk_env = build_sdk_env(settings.github_token)
                 sdk_env["HOME"] = session_home
 
-                # Enable Copilot CLI OTEL export when an endpoint is configured.
-                # The SDK translates TelemetryConfig into COPILOT_OTEL_* env vars
-                # on the CLI subprocess and propagates traceparent automatically.
-                #
-                # Protocol: The CLI defaults to otlp-http, but most collectors
-                # expose gRPC on 4317 and HTTP on 4318. COPILOT_OTEL_HTTP_ENDPOINT
-                # lets operators point the CLI at an HTTP endpoint explicitly.
-                # When only the gRPC endpoint is set, we default to port 4318
-                # (standard OTLP HTTP port) on the same host.
+                # Copilot CLI telemetry: write spans to a per-session JSONL
+                # file.  After the session ends we forward the spans through
+                # the app's existing OTLP gRPC exporter — no sidecar needed.
+                # Trace-context propagation (SDK→CLI) is automatic when OTEL
+                # is active in this process.
+                cli_trace_file = str(Path(session_home) / "cli-traces.jsonl")
                 telemetry: TelemetryConfig | None = None
-                cli_otel_endpoint = os.environ.get("COPILOT_OTEL_HTTP_ENDPOINT")
-                if not cli_otel_endpoint:
-                    grpc_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
-                    if grpc_endpoint:
-                        # Derive HTTP endpoint: replace port with 4318
-                        parsed = urlparse(grpc_endpoint)
-                        hostname = parsed.hostname or ""
-                        host = f"[{hostname}]" if ":" in hostname else hostname
-                        cli_otel_endpoint = urlunparse(parsed._replace(netloc=f"{host}:4318"))
-                if cli_otel_endpoint:
-                    telemetry = TelemetryConfig(otlp_endpoint=cli_otel_endpoint)
-                    # Reduce the CLI's OTLP batch export interval from the
-                    # default 5 s to 1 s so spans flush before client.stop()
-                    # terminates the process.
-                    sdk_env["OTEL_BSP_SCHEDULE_DELAY"] = "1000"
+                if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+                    telemetry = TelemetryConfig(file_path=cli_trace_file)
 
                 client = CopilotClient(
                     SubprocessConfig(
@@ -323,13 +308,10 @@ async def run_copilot_session(
                     finally:
                         await session.disconnect()
                 finally:
-                    # Allow the CLI's OTLP batch exporter to flush pending
-                    # spans before terminating the process.  The Node.js
-                    # batch exporter fires on a ~5 s schedule; without this
-                    # delay, spans from the final LLM call are lost because
-                    # client.stop() sends SIGTERM immediately.
-                    await asyncio.sleep(2)
                     await client.stop()
+                    # Forward CLI spans to the app's OTLP exporter.
+                    # File contains real timestamps from the CLI process.
+                    forward_cli_traces(cli_trace_file)
                 return result
             finally:
                 shutil.rmtree(session_home, ignore_errors=True)
