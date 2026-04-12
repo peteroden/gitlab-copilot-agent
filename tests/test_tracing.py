@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from contextlib import contextmanager
 from typing import Any
@@ -23,11 +24,8 @@ from gitlab_copilot_agent.telemetry.tracing import restore_trace_context
 
 # -- Constants --
 
-TASK_ID = "trace-test-001"
-TASK_TYPE = "review"
-USER_PROMPT = "Review this code."
-SYSTEM_PROMPT = "You are a reviewer."
-REPO_BLOB_KEY = "repos/trace-test-001.tar.gz"
+VALID_TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+EXPECTED_TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
 
 
 class _InMemoryExporter(SpanExporter):
@@ -42,9 +40,6 @@ class _InMemoryExporter(SpanExporter):
 
     def shutdown(self) -> None:
         pass
-
-    def get_finished_spans(self) -> list[Any]:
-        return list(self.spans)
 
 
 @contextmanager
@@ -62,158 +57,164 @@ def _tracing_provider():
         trace.set_tracer_provider(old_provider)
 
 
+def _make_stub_pipeline() -> MagicMock:
+    """Create a mock pipeline with all required async methods."""
+    p = MagicMock()
+    for method in ("prepare", "execute", "process", "cleanup", "handle_error"):
+        setattr(p, method, AsyncMock())
+    type(p).__name__ = "TestPipeline"
+    return p
+
+
+def _capture_copilot_config(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    otel_endpoint: str | None,
+    copilot_http_endpoint: str | None = None,
+) -> list[Any]:
+    """Run copilot_session with a fake client and capture the SubprocessConfig."""
+    if otel_endpoint:
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", otel_endpoint)
+    else:
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+    if copilot_http_endpoint:
+        monkeypatch.setenv("COPILOT_OTEL_HTTP_ENDPOINT", copilot_http_endpoint)
+    else:
+        monkeypatch.delenv("COPILOT_OTEL_HTTP_ENDPOINT", raising=False)
+
+    captured: list[Any] = []
+
+    class _FakeClient:
+        def __init__(self, config: Any) -> None:
+            captured.append(config)
+
+        async def start(self) -> None:
+            pass
+
+        async def get_auth_status(self) -> MagicMock:
+            m = MagicMock()
+            m.authType = "token"
+            m.isAuthenticated = True
+            return m
+
+        async def create_session(self, **kw: Any) -> MagicMock:
+            s = MagicMock()
+            s.send = AsyncMock()
+            s.on = MagicMock()
+            s.disconnect = AsyncMock()
+            return s
+
+        async def stop(self) -> None:
+            pass
+
+    return captured, _FakeClient  # type: ignore[return-value]
+
+
 # ---------------------------------------------------------------------------
 # restore_trace_context
 # ---------------------------------------------------------------------------
 
 
 class TestRestoreTraceContext:
-    """Tests for restore_trace_context() — W3C traceparent extraction."""
+    """W3C traceparent extraction and round-trip verification."""
 
-    def test_empty_traceparent_returns_none(self) -> None:
-        assert restore_trace_context("") is None
+    @pytest.mark.parametrize(
+        ("traceparent", "tracestate", "expected_none"),
+        [
+            ("", "", True),
+            (VALID_TRACEPARENT, "", False),
+            (VALID_TRACEPARENT, "congo=t61rcWkgMzE", False),
+            ("not-a-valid-traceparent", "", False),
+        ],
+        ids=["empty", "valid", "with-tracestate", "invalid-no-crash"],
+    )
+    def test_restore_returns_context_or_none(
+        self, traceparent: str, tracestate: str, expected_none: bool
+    ) -> None:
+        ctx = restore_trace_context(traceparent, tracestate)
+        assert (ctx is None) == expected_none
 
-    def test_valid_traceparent_returns_context(self) -> None:
-        tp = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
-        ctx = restore_trace_context(tp)
-        assert ctx is not None
-
-    def test_restored_context_has_correct_trace_id(self) -> None:
-        tp = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
-        ctx = restore_trace_context(tp)
+    def test_restored_trace_id_matches(self) -> None:
+        ctx = restore_trace_context(VALID_TRACEPARENT)
         assert ctx is not None
         span_ctx = trace.get_current_span(ctx).get_span_context()
-        assert format(span_ctx.trace_id, "032x") == "0af7651916cd43dd8448eb211c80319c"
-
-    def test_tracestate_is_preserved(self) -> None:
-        tp = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
-        ts = "congo=t61rcWkgMzE"
-        ctx = restore_trace_context(tp, ts)
-        assert ctx is not None
-        span_ctx = trace.get_current_span(ctx).get_span_context()
-        assert span_ctx.trace_id != 0
+        assert format(span_ctx.trace_id, "032x") == EXPECTED_TRACE_ID
 
     def test_roundtrip_parent_child_linkage(self) -> None:
-        """Serialize traceparent → restore → child span has correct parent."""
-        with _tracing_provider() as (provider, _exporter):
+        """Serialize → restore → child span has correct parent."""
+        with _tracing_provider() as (provider, _):
             tracer = provider.get_tracer("test")
-
-            # Create a parent span and serialize its traceparent
             with tracer.start_as_current_span("parent") as parent_span:
                 carrier: dict[str, str] = {}
                 propagate.inject(carrier, context=context_api.get_current())
-                traceparent = carrier["traceparent"]
-                parent_span_id = parent_span.get_span_context().span_id
+                parent_id = parent_span.get_span_context().span_id
 
-            # Restore in a "different process" context and create a child
-            restored = restore_trace_context(traceparent)
+            restored = restore_trace_context(carrier["traceparent"])
             assert restored is not None
             token = context_api.attach(restored)
             try:
-                with tracer.start_as_current_span("child") as child_span:
-                    child_parent_id = child_span.parent.span_id if child_span.parent else 0  # type: ignore[union-attr]
+                with tracer.start_as_current_span("child") as child:
+                    child_parent = child.parent.span_id if child.parent else 0  # type: ignore[union-attr]
             finally:
                 context_api.detach(token)
-
-            assert child_parent_id == parent_span_id
-
-    def test_invalid_traceparent_does_not_crash(self) -> None:
-        """Invalid traceparent should not raise — returns a context with invalid span."""
-        ctx = restore_trace_context("not-a-valid-traceparent")
-        # Should return a context (may have invalid/zero span), but not crash
-        assert ctx is not None
+            assert child_parent == parent_id
 
 
 # ---------------------------------------------------------------------------
-# Remote executor traceparent injection
+# Queue payload traceparent
 # ---------------------------------------------------------------------------
 
 
-class TestRemoteExecutorTraceInjection:
-    """Tests that RemoteTaskExecutor includes traceparent in queue payloads."""
+class TestQueuePayloadTraceparent:
+    """Traceparent fields on QueueTaskPayload and RemoteTaskExecutor payloads."""
 
-    async def test_payload_contains_traceparent(self) -> None:
-        """Queue payload should include traceparent and tracestate fields."""
+    @pytest.mark.parametrize(
+        ("extra_fields", "expected_tp", "expected_ts"),
+        [
+            ({}, "", ""),
+            ({"traceparent": "00-abc-def-01", "tracestate": "v=1"}, "00-abc-def-01", "v=1"),
+        ],
+        ids=["defaults-empty", "round-trips-from-json"],
+    )
+    def test_payload_traceparent_field(
+        self, extra_fields: dict[str, str], expected_tp: str, expected_ts: str
+    ) -> None:
+        base = {"task_type": "review", "task_id": "t1", "user_prompt": "test"}
+        payload = QueueTaskPayload.model_validate_json(json.dumps(base | extra_fields))
+        assert payload.traceparent == expected_tp
+        assert payload.tracestate == expected_ts
+
+    async def test_executor_injects_traceparent(self) -> None:
+        """RemoteTaskExecutor includes traceparent in queue dispatch payload."""
         from gitlab_copilot_agent.concurrency import MemoryResultStore, MemoryTaskQueue
         from gitlab_copilot_agent.task_executor import TaskParams
         from tests.conftest import make_settings
 
-        store = MemoryResultStore()
         queue = MemoryTaskQueue()
-        executor = RemoteTaskExecutor(store, queue, job_timeout=1)
-
+        executor = RemoteTaskExecutor(MemoryResultStore(), queue, job_timeout=1)
         task = TaskParams(
-            task_type=TASK_TYPE,
-            task_id=TASK_ID,
+            task_type="review",
+            task_id="trace-test",
             repo_url="https://gitlab.example.com/g/p.git",
             branch="main",
-            system_prompt=SYSTEM_PROMPT,
-            user_prompt=USER_PROMPT,
+            system_prompt="sys",
+            user_prompt="usr",
             settings=make_settings(),
         )
-
         with (
-            _tracing_provider() as (provider, _exporter),
+            _tracing_provider() as (provider, _),
             patch(
                 "gitlab_copilot_agent.remote_executor.tar_repo_to_bytes",
-                new=AsyncMock(return_value=b"fake-tar"),
+                new=AsyncMock(return_value=b"tar"),
             ),
         ):
             tracer = provider.get_tracer("test")
             with tracer.start_as_current_span("controller"), pytest.raises(TimeoutError):
                 await executor.execute(task)
 
-        # Check the queued message contains traceparent
-        assert queue._messages
-        msg_payload = json.loads(queue._messages[0].payload)
-        assert "traceparent" in msg_payload
-        assert msg_payload["traceparent"].startswith("00-")
-        assert "tracestate" in msg_payload
-
-
-# ---------------------------------------------------------------------------
-# QueueTaskPayload traceparent field
-# ---------------------------------------------------------------------------
-
-
-class TestQueueTaskPayloadTraceparent:
-    """Tests for traceparent/tracestate fields on QueueTaskPayload."""
-
-    def test_defaults_to_empty_strings(self) -> None:
-        payload = QueueTaskPayload(
-            task_type="review",
-            task_id="t1",
-            user_prompt="test",
-        )
-        assert payload.traceparent == ""
-        assert payload.tracestate == ""
-
-    def test_accepts_traceparent_from_json(self) -> None:
-        raw = json.dumps(
-            {
-                "task_type": "review",
-                "task_id": "t1",
-                "user_prompt": "test",
-                "traceparent": "00-abc123-def456-01",
-                "tracestate": "vendor=value",
-            }
-        )
-        payload = QueueTaskPayload.model_validate_json(raw)
-        assert payload.traceparent == "00-abc123-def456-01"
-        assert payload.tracestate == "vendor=value"
-
-    def test_missing_traceparent_uses_default(self) -> None:
-        """Backward compatibility: old payloads without traceparent still parse."""
-        raw = json.dumps(
-            {
-                "task_type": "review",
-                "task_id": "t1",
-                "user_prompt": "test",
-            }
-        )
-        payload = QueueTaskPayload.model_validate_json(raw)
-        assert payload.traceparent == ""
-        assert payload.tracestate == ""
+        msg = json.loads(queue._messages[0].payload)
+        assert msg["traceparent"].startswith("00-")
+        assert "tracestate" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -222,49 +223,30 @@ class TestQueueTaskPayloadTraceparent:
 
 
 class TestCopilotTelemetryConfig:
-    """Tests that copilot_session passes TelemetryConfig when OTEL endpoint is set."""
+    """TelemetryConfig is passed to SubprocessConfig based on OTEL env vars."""
 
-    async def test_telemetry_config_passed_when_otel_set(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("otel_ep", "http_ep", "expected_otlp"),
+        [
+            ("http://collector:4317", None, "http://collector:4318"),
+            (None, None, None),
+            ("http://host:4317", "http://custom:9999", "http://custom:9999"),
+        ],
+        ids=["derives-http-from-grpc", "disabled-when-unset", "explicit-http-override"],
+    )
+    async def test_telemetry_config(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        otel_ep: str | None,
+        http_ep: str | None,
+        expected_otlp: str | None,
     ) -> None:
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4317")
-        monkeypatch.delenv("COPILOT_OTEL_HTTP_ENDPOINT", raising=False)
-
-        captured_config: list[Any] = []
-
-        class _FakeClient:
-            def __init__(self, config: Any) -> None:
-                captured_config.append(config)
-
-            async def start(self) -> None:
-                pass
-
-            async def get_auth_status(self) -> MagicMock:
-                m = MagicMock()
-                m.authType = "token"
-                m.isAuthenticated = True
-                return m
-
-            async def create_session(self, **kwargs: Any) -> MagicMock:
-                session = MagicMock()
-
-                async def _send(prompt: str) -> None:
-                    pass
-
-                session.send = _send
-                session.on = MagicMock()
-                session.disconnect = AsyncMock()
-                return session
-
-            async def stop(self) -> None:
-                pass
-
+        captured, fake_cls = _capture_copilot_config(
+            monkeypatch, otel_endpoint=otel_ep, copilot_http_endpoint=http_ep
+        )
         with (
-            patch("gitlab_copilot_agent.copilot_session.CopilotClient", _FakeClient),
-            patch(
-                "gitlab_copilot_agent.copilot_session.get_real_cli_path",
-                return_value="/fake/cli",
-            ),
+            patch("gitlab_copilot_agent.copilot_session.CopilotClient", fake_cls),
+            patch("gitlab_copilot_agent.copilot_session.get_real_cli_path", return_value="/x"),
             patch(
                 "gitlab_copilot_agent.copilot_session.discover_repo_config",
                 return_value=MagicMock(
@@ -272,84 +254,18 @@ class TestCopilotTelemetryConfig:
                 ),
             ),
         ):
+            from gitlab_copilot_agent.copilot_session import run_copilot_session
             from tests.conftest import make_settings
 
-            settings = make_settings()
+            with contextlib.suppress(Exception):
+                await run_copilot_session(make_settings(), "/tmp/r", "s", "u", timeout=1)
 
-            try:
-                from gitlab_copilot_agent.copilot_session import run_copilot_session
-
-                await run_copilot_session(settings, "/tmp/repo", "system", "user", timeout=1)
-            except Exception:
-                pass  # Expected — fake session doesn't complete
-
-        assert len(captured_config) == 1
-        config = captured_config[0]
-        assert config.telemetry is not None
-        assert config.telemetry["otlp_endpoint"] == "http://collector:4318"
-
-    async def test_no_telemetry_config_when_otel_unset(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
-        monkeypatch.delenv("COPILOT_OTEL_HTTP_ENDPOINT", raising=False)
-
-        captured_config: list[Any] = []
-
-        class _FakeClient:
-            def __init__(self, config: Any) -> None:
-                captured_config.append(config)
-
-            async def start(self) -> None:
-                pass
-
-            async def get_auth_status(self) -> MagicMock:
-                m = MagicMock()
-                m.authType = "token"
-                m.isAuthenticated = True
-                return m
-
-            async def create_session(self, **kwargs: Any) -> MagicMock:
-                session = MagicMock()
-
-                async def _send(prompt: str) -> None:
-                    pass
-
-                session.send = _send
-                session.on = MagicMock()
-                session.disconnect = AsyncMock()
-                return session
-
-            async def stop(self) -> None:
-                pass
-
-        with (
-            patch("gitlab_copilot_agent.copilot_session.CopilotClient", _FakeClient),
-            patch(
-                "gitlab_copilot_agent.copilot_session.get_real_cli_path",
-                return_value="/fake/cli",
-            ),
-            patch(
-                "gitlab_copilot_agent.copilot_session.discover_repo_config",
-                return_value=MagicMock(
-                    instructions=None, skill_directories=None, custom_agents=None
-                ),
-            ),
-        ):
-            from tests.conftest import make_settings
-
-            settings = make_settings()
-
-            try:
-                from gitlab_copilot_agent.copilot_session import run_copilot_session
-
-                await run_copilot_session(settings, "/tmp/repo", "system", "user", timeout=1)
-            except Exception:
-                pass
-
-        assert len(captured_config) == 1
-        config = captured_config[0]
-        assert config.telemetry is None
+        assert len(captured) == 1
+        tel = captured[0].telemetry
+        if expected_otlp is None:
+            assert tel is None
+        else:
+            assert tel["otlp_endpoint"] == expected_otlp
 
 
 # ---------------------------------------------------------------------------
@@ -358,54 +274,27 @@ class TestCopilotTelemetryConfig:
 
 
 class TestPipelineSpanAttributes:
-    """Tests that run_pipeline() passes span_attributes to the parent span."""
+    """run_pipeline() forwards span_attributes to the parent span."""
 
     async def test_span_attributes_applied(self) -> None:
         from gitlab_copilot_agent.pipeline import BasePipelineContext, run_pipeline
 
-        pipeline = MagicMock()
-        pipeline.prepare = AsyncMock()
-        pipeline.execute = AsyncMock()
-        pipeline.process = AsyncMock()
-        pipeline.cleanup = AsyncMock()
-        pipeline.handle_error = AsyncMock()
-        type(pipeline).__name__ = "TestPipeline"
-
         attrs = {"project_id": 42, "mr_iid": 7, "task_type": "review"}
-
         exporter = _InMemoryExporter()
         provider = TracerProvider()
         provider.add_span_processor(SimpleSpanProcessor(exporter))
 
-        # Patch the module-level _tracer so run_pipeline() uses our provider
-        test_tracer = provider.get_tracer("pipeline")
-        with patch("gitlab_copilot_agent.pipeline._tracer", test_tracer):
-            await run_pipeline(
-                pipeline,
-                BasePipelineContext(),
-                span_attributes=attrs,
-            )  # type: ignore[arg-type]
+        with patch("gitlab_copilot_agent.pipeline._tracer", provider.get_tracer("pipeline")):
+            await run_pipeline(_make_stub_pipeline(), BasePipelineContext(), span_attributes=attrs)  # type: ignore[arg-type]
 
-        spans = exporter.get_finished_spans()
-        parent_span = [s for s in spans if s.name == "pipeline.TestPipeline"]
-        assert len(parent_span) == 1
-        span_attrs = dict(parent_span[0].attributes or {})
-        assert span_attrs["project_id"] == 42
-        assert span_attrs["mr_iid"] == 7
-        assert span_attrs["task_type"] == "review"
+        parent = [s for s in exporter.spans if s.name == "pipeline.TestPipeline"]
+        assert len(parent) == 1
+        assert dict(parent[0].attributes or {}) == attrs
         provider.shutdown()
 
     async def test_no_span_attributes_default(self) -> None:
-        """run_pipeline() works without span_attributes (backward compat)."""
+        """Backward compat: works without span_attributes."""
         from gitlab_copilot_agent.pipeline import BasePipelineContext, run_pipeline
 
-        pipeline = MagicMock()
-        pipeline.prepare = AsyncMock()
-        pipeline.execute = AsyncMock()
-        pipeline.process = AsyncMock()
-        pipeline.cleanup = AsyncMock()
-        pipeline.handle_error = AsyncMock()
-        type(pipeline).__name__ = "TestPipeline"
-
-        result = await run_pipeline(pipeline, BasePipelineContext())  # type: ignore[arg-type]
+        result = await run_pipeline(_make_stub_pipeline(), BasePipelineContext())  # type: ignore[arg-type]
         assert result.outcome == "success"
