@@ -7,6 +7,7 @@ import tempfile
 import time
 from collections.abc import Callable
 from typing import Any, cast
+from urllib.parse import urlparse, urlunparse
 
 import structlog
 from copilot import CopilotClient, SubprocessConfig
@@ -125,7 +126,10 @@ async def run_copilot_session(
                     grpc_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
                     if grpc_endpoint:
                         # Derive HTTP endpoint: replace port with 4318
-                        cli_otel_endpoint = grpc_endpoint.rsplit(":", 1)[0] + ":4318"
+                        parsed = urlparse(grpc_endpoint)
+                        hostname = parsed.hostname or ""
+                        host = f"[{hostname}]" if ":" in hostname else hostname
+                        cli_otel_endpoint = urlunparse(parsed._replace(netloc=f"{host}:4318"))
                 if cli_otel_endpoint:
                     telemetry = TelemetryConfig(otlp_endpoint=cli_otel_endpoint)
 

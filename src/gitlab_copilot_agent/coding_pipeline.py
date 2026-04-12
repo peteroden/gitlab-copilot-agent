@@ -293,4 +293,14 @@ class CodingTaskRunner:
                     gitlab_client=self._gitlab,
                     jira_client=self._jira,
                 )
-                await run_pipeline(pipeline, CodingContext())
+                await run_pipeline(
+                    pipeline,
+                    CodingContext(),
+                    span_attributes={
+                        "project_id": project_mapping.gitlab_project_id,
+                        "mr_iid": 0,
+                        "task_type": "coding",
+                        "trigger_source": "jira_poller",
+                        "jira_issue_key": issue.key,
+                    },
+                )

@@ -231,8 +231,18 @@ class TestCopilotTelemetryConfig:
             ("http://collector:4317", None, "http://collector:4318"),
             (None, None, None),
             ("http://host:4317", "http://custom:9999", "http://custom:9999"),
+            ("http://collector.example.com", None, "http://collector.example.com:4318"),
+            ("http://collector:4317/v1/traces", None, "http://collector:4318/v1/traces"),
+            ("http://[::1]:4317", None, "http://[::1]:4318"),
         ],
-        ids=["derives-http-from-grpc", "disabled-when-unset", "explicit-http-override"],
+        ids=[
+            "derives-http-from-grpc",
+            "disabled-when-unset",
+            "explicit-http-override",
+            "no-port",
+            "with-path",
+            "ipv6",
+        ],
     )
     async def test_telemetry_config(
         self,

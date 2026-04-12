@@ -106,6 +106,32 @@ def test_log_safe_contains_expected_fields() -> None:
     assert safe["task_type"] == "review"
 
 
+# -- span_attrs --
+
+
+def test_span_attrs_review() -> None:
+    attrs = make_task_event().span_attrs()
+    assert attrs == {
+        "project_id": PROJECT_ID,
+        "mr_iid": MR_IID,
+        "task_type": "review",
+        "trigger_source": "webhook",
+    }
+
+
+def test_span_attrs_coding_with_jira_key() -> None:
+    event = make_task_event(**_CODING_OPTIONAL, jira_issue_key="PROJ-42")
+    attrs = event.span_attrs()
+    assert attrs["mr_iid"] == 0
+    assert attrs["task_type"] == "coding"
+    assert attrs["jira_issue_key"] == "PROJ-42"
+
+
+def test_span_attrs_omits_jira_key_when_absent() -> None:
+    attrs = make_task_event().span_attrs()
+    assert "jira_issue_key" not in attrs
+
+
 # -- ScheduledTask --
 
 

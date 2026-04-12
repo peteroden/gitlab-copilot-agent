@@ -565,3 +565,41 @@ async def test_reopen_no_oldrev_check(client: AsyncClient, mock_run_pipeline: As
 
     assert resp.status_code == 200
     assert resp.json() == {"status": "queued"}
+
+
+# -- span_attributes wiring --
+
+
+async def test_review_webhook_passes_span_attributes(
+    client: AsyncClient, mock_run_pipeline: AsyncMock
+) -> None:
+    """run_pipeline receives span_attributes from the review webhook handler."""
+    resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+    assert resp.json() == {"status": "queued"}
+    await asyncio.sleep(0.1)
+
+    mock_run_pipeline.assert_awaited_once()
+    attrs = mock_run_pipeline.call_args.kwargs.get("span_attributes")
+    assert attrs is not None
+    assert attrs["project_id"] == PROJECT_ID
+    assert attrs["mr_iid"] == MR_IID
+    assert attrs["task_type"] == "review"
+    assert attrs["trigger_source"] == "webhook"
+
+
+async def test_discussion_webhook_passes_span_attributes(
+    client: AsyncClient,
+    mock_run_pipeline: AsyncMock,
+) -> None:
+    """run_pipeline receives span_attributes from the discussion webhook handler."""
+    _setup_credential_registry()
+    note_payload = _note_body()
+    resp = await client.post("/webhook", json=note_payload, headers=HEADERS)
+    assert resp.status_code == 200
+    await asyncio.sleep(0.1)
+
+    mock_run_pipeline.assert_awaited_once()
+    attrs = mock_run_pipeline.call_args.kwargs.get("span_attributes")
+    assert attrs is not None
+    assert attrs["task_type"] == "discussion"
+    assert attrs["trigger_source"] == "webhook"
