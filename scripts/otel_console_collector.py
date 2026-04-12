@@ -1,11 +1,14 @@
 """Minimal OTEL collector that logs received telemetry to the console.
 
 Usage:
-    uv run python scripts/otel_console_collector.py [--port 4317]
+    uv run python scripts/otel_console_collector.py [--port 4317] [--verbose]
 
 Starts a gRPC server on port 4317 that accepts OTLP traces, metrics,
 and logs, printing a summary line for each batch. Useful for local
 development and E2E testing without a real collector.
+
+Pass ``--verbose`` to print per-span detail including trace IDs, parent
+linkage, and attributes — useful for verifying trace propagation.
 """
 
 from __future__ import annotations
@@ -32,7 +35,12 @@ from opentelemetry.proto.collector.trace.v1 import (
 _CYAN = "\033[36m"
 _GREEN = "\033[32m"
 _YELLOW = "\033[33m"
+_DIM = "\033[2m"
 _RESET = "\033[0m"
+
+
+# Global verbose flag — set from CLI args before servers start.
+_verbose = False
 
 
 def _ts() -> str:
@@ -51,15 +59,99 @@ def _resource_name(resource_spans_or_metrics: object) -> str:
     return "unknown"
 
 
+def _format_attr_value(val: object) -> str:
+    """Format an OTLP AnyValue proto to a compact string."""
+    for field in ("string_value", "int_value", "double_value", "bool_value"):
+        v = getattr(val, field, None)
+        if v is not None and v != "" and v != 0:
+            return str(v)
+    # Check explicitly for 0/False/empty which getattr misses
+    if getattr(val, "int_value", None) == 0 and val.HasField("int_value"):  # type: ignore[union-attr]
+        return "0"
+    if getattr(val, "bool_value", None) is False and val.HasField("bool_value"):  # type: ignore[union-attr]
+        return "false"
+    return "?"
+
+
+def _format_span_attrs(span: object, limit: int = 6) -> str:
+    """Format span attributes as compact key=value pairs."""
+    attrs = getattr(span, "attributes", [])
+    parts = []
+    for attr in attrs[:limit]:
+        parts.append(f"{attr.key}={_format_attr_value(attr.value)}")
+    if len(attrs) > limit:
+        parts.append(f"+{len(attrs) - limit} more")
+    return ", ".join(parts)
+
+
+def _verbose_json_traces(body: bytes) -> None:
+    """Print per-span detail from raw OTLP JSON (avoids protobuf base64 ID mangling)."""
+    import json as json_mod  # noqa: PLC0415
+
+    try:
+        data = json_mod.loads(body)
+    except (json_mod.JSONDecodeError, ValueError):
+        return
+    for rs in data.get("resourceSpans", []):
+        svc = "unknown"
+        for attr in rs.get("resource", {}).get("attributes", []):
+            if attr.get("key") == "service.name":
+                svc = attr.get("value", {}).get("stringValue", "unknown")
+        for ss in rs.get("scopeSpans", []):
+            for s in ss.get("spans", []):
+                tid = s.get("traceId", "?")
+                sid = s.get("spanId", "?")
+                pid = s.get("parentSpanId") or "-"
+                name = s.get("name", "<unnamed>")
+                start = int(s.get("startTimeUnixNano", 0))
+                end = int(s.get("endTimeUnixNano", 0))
+                dur_ms = (end - start) / 1e6
+                attrs_list = s.get("attributes", [])
+                attr_parts = []
+                for a in attrs_list[:6]:
+                    val = a.get("value", {})
+                    v = (
+                        val.get("stringValue")
+                        or val.get("intValue")
+                        or val.get("doubleValue")
+                        or val.get("boolValue")
+                        or "?"
+                    )
+                    attr_parts.append(f"{a['key']}={v}")
+                if len(attrs_list) > 6:
+                    attr_parts.append(f"+{len(attrs_list) - 6} more")
+                attrs_str = ", ".join(attr_parts)
+                print(
+                    f"{_DIM}[{_ts()}]{_RESET} {_CYAN}SPAN{_RESET}   "
+                    f"trace={tid} span={sid} parent={pid} "
+                    f"name={name}  svc={svc}  {dur_ms:.1f}ms"
+                )
+                if attrs_str:
+                    print(f"                  attrs: {attrs_str}")
+
+
 class TraceService(trace_service_pb2_grpc.TraceServiceServicer):
-    def Export(self, request, context):  # type: ignore[override]
+    def Export(self, request, context, *, _skip_verbose: bool = False):  # type: ignore[override]
         for rs in request.resource_spans:
             svc = _resource_name(rs)
-            span_count = sum(len(ss.spans) for ss in rs.scope_spans)
             names = []
             for ss in rs.scope_spans:
                 for s in ss.spans:
                     names.append(s.name)
+                    if _verbose and not _skip_verbose:
+                        tid = s.trace_id.hex()
+                        sid = s.span_id.hex()
+                        pid = s.parent_span_id.hex() if s.parent_span_id else "-"
+                        dur_ms = (s.end_time_unix_nano - s.start_time_unix_nano) / 1e6
+                        attrs = _format_span_attrs(s)
+                        print(
+                            f"{_DIM}[{_ts()}]{_RESET} {_CYAN}SPAN{_RESET}   "
+                            f"trace={tid} span={sid} parent={pid} "
+                            f"name={s.name}  svc={svc}  {dur_ms:.1f}ms"
+                        )
+                        if attrs:
+                            print(f"                  attrs: {attrs}")
+            span_count = len(names)
             preview = ", ".join(names[:5])
             if len(names) > 5:
                 preview += f" (+{len(names) - 5} more)"
@@ -102,12 +194,15 @@ class LogsService(logs_service_pb2_grpc.LogsServiceServicer):
 def _run_http_server(port: int) -> None:
     """Run a simple HTTP OTLP receiver alongside the gRPC server.
 
-    Handles POST to /v1/traces, /v1/metrics, /v1/logs with protobuf bodies.
-    The Copilot CLI uses OTLP HTTP by default (port 4318).
+    Handles POST to /v1/traces, /v1/metrics, /v1/logs with protobuf or JSON
+    bodies (auto-detected via Content-Type). The Copilot CLI uses OTLP HTTP
+    with JSON encoding by default (port 4318).
     """
     import http.server  # noqa: PLC0415
+    import json as json_mod  # noqa: PLC0415
     import threading  # noqa: PLC0415
 
+    from google.protobuf.json_format import Parse  # noqa: PLC0415
     from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (  # noqa: PLC0415
         ExportLogsServiceRequest,
     )
@@ -122,26 +217,45 @@ def _run_http_server(port: int) -> None:
     metrics_svc = MetricsService()
     logs_svc = LogsService()
 
+    _ROUTE_MAP: dict[str, tuple[type, object]] = {
+        "/v1/traces": (ExportTraceServiceRequest, trace_svc),
+        "/v1/metrics": (ExportMetricsServiceRequest, metrics_svc),
+        "/v1/logs": (ExportLogsServiceRequest, logs_svc),
+    }
+
     class OTLPHandler(http.server.BaseHTTPRequestHandler):
         def log_message(self, format, *args):  # type: ignore[override]  # noqa: A002
             pass  # suppress access logs
 
         def do_POST(self):  # noqa: N802
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length) if length else b""
+            te = self.headers.get("Transfer-Encoding", "")
+            if "chunked" in te:
+                body = self._read_chunked()
+            else:
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length) if length else b""
+            content_type = self.headers.get("Content-Type", "")
+            is_json = "json" in content_type
+            if _verbose:
+                print(
+                    f"{_DIM}[{_ts()}]{_RESET} HTTP   "
+                    f"path={self.path}  len={len(body)}  type={'json' if is_json else 'proto'}"
+                )
             try:
-                if self.path == "/v1/traces":
-                    req = ExportTraceServiceRequest()
-                    req.ParseFromString(body)
-                    trace_svc.Export(req, None)
-                elif self.path == "/v1/metrics":
-                    req = ExportMetricsServiceRequest()  # type: ignore[assignment]
-                    req.ParseFromString(body)
-                    metrics_svc.Export(req, None)
-                elif self.path == "/v1/logs":
-                    req = ExportLogsServiceRequest()  # type: ignore[assignment]
-                    req.ParseFromString(body)
-                    logs_svc.Export(req, None)
+                route = _ROUTE_MAP.get(self.path)
+                if route and body:
+                    msg_cls, svc = route
+                    # For verbose JSON traces, use raw JSON to avoid
+                    # protobuf base64 mangling of trace/span IDs.
+                    if _verbose and is_json and self.path == "/v1/traces":
+                        _verbose_json_traces(body)
+                    req = msg_cls()
+                    if is_json:
+                        Parse(body, req, ignore_unknown_fields=True)
+                    else:
+                        req.ParseFromString(body)
+                    # Skip proto-level verbose for JSON traces (already displayed above)
+                    svc.Export(req, None, _skip_verbose=is_json)  # type: ignore[union-attr]
                 self.send_response(200)
                 self.end_headers()
             except Exception as exc:
@@ -149,16 +263,37 @@ def _run_http_server(port: int) -> None:
                 self.send_response(400)
                 self.end_headers()
 
+        def _read_chunked(self) -> bytes:
+            chunks: list[bytes] = []
+            while True:
+                line = self.rfile.readline().strip()
+                if not line:
+                    break
+                size = int(line, 16)
+                if size == 0:
+                    self.rfile.readline()  # trailing CRLF
+                    break
+                chunks.append(self.rfile.read(size))
+                self.rfile.readline()  # chunk-terminating CRLF
+            return b"".join(chunks)
+
     httpd = http.server.HTTPServer(("0.0.0.0", port), OTLPHandler)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
 
 
 def main() -> None:
+    global _verbose  # noqa: PLW0603
+
     parser = argparse.ArgumentParser(description="Console OTEL collector")
     parser.add_argument("--port", type=int, default=4317, help="gRPC listen port")
     parser.add_argument("--http-port", type=int, default=4318, help="HTTP/protobuf listen port")
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="Print per-span detail (trace ID, parent, attrs) for trace propagation debugging",
+    )
     args = parser.parse_args()
+    _verbose = args.verbose
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
     trace_service_pb2_grpc.add_TraceServiceServicer_to_server(TraceService(), server)
