@@ -227,7 +227,8 @@ class TestCopilotTelemetryConfig:
     async def test_telemetry_config_passed_when_otel_set(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4317")
+        monkeypatch.delenv("COPILOT_OTEL_HTTP_ENDPOINT", raising=False)
 
         captured_config: list[Any] = []
 
@@ -291,6 +292,7 @@ class TestCopilotTelemetryConfig:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+        monkeypatch.delenv("COPILOT_OTEL_HTTP_ENDPOINT", raising=False)
 
         captured_config: list[Any] = []
 

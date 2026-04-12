@@ -99,9 +99,66 @@ class LogsService(logs_service_pb2_grpc.LogsServiceServicer):
         return logs_service_pb2.ExportLogsServiceResponse()
 
 
+def _run_http_server(port: int) -> None:
+    """Run a simple HTTP OTLP receiver alongside the gRPC server.
+
+    Handles POST to /v1/traces, /v1/metrics, /v1/logs with protobuf bodies.
+    The Copilot CLI uses OTLP HTTP by default (port 4318).
+    """
+    import http.server  # noqa: PLC0415
+    import threading  # noqa: PLC0415
+
+    from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import (  # noqa: PLC0415
+        ExportLogsServiceRequest,
+    )
+    from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (  # noqa: PLC0415
+        ExportMetricsServiceRequest,
+    )
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (  # noqa: PLC0415
+        ExportTraceServiceRequest,
+    )
+
+    trace_svc = TraceService()
+    metrics_svc = MetricsService()
+    logs_svc = LogsService()
+
+    class OTLPHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, format, *args):  # type: ignore[override]  # noqa: A002
+            pass  # suppress access logs
+
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length else b""
+            try:
+                if self.path == "/v1/traces":
+                    req = ExportTraceServiceRequest()
+                    req.ParseFromString(body)
+                    trace_svc.Export(req, None)
+                elif self.path == "/v1/metrics":
+                    req = ExportMetricsServiceRequest()  # type: ignore[assignment]
+                    req.ParseFromString(body)
+                    metrics_svc.Export(req, None)
+                elif self.path == "/v1/logs":
+                    req = ExportLogsServiceRequest()  # type: ignore[assignment]
+                    req.ParseFromString(body)
+                    logs_svc.Export(req, None)
+                self.send_response(200)
+                self.end_headers()
+            except Exception as exc:
+                print(f"HTTP parse error on {self.path}: {exc}")
+                self.send_response(400)
+                self.end_headers()
+
+    httpd = http.server.HTTPServer(("0.0.0.0", port), OTLPHandler)
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    return httpd  # type: ignore[return-value]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Console OTEL collector")
     parser.add_argument("--port", type=int, default=4317, help="gRPC listen port")
+    parser.add_argument("--http-port", type=int, default=4318, help="HTTP/protobuf listen port")
     args = parser.parse_args()
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
@@ -111,8 +168,12 @@ def main() -> None:
     server.add_insecure_port(f"0.0.0.0:{args.port}")
     server.start()
 
+    _run_http_server(args.http_port)
+
     print(
-        f"\n📡 Console OTEL Collector listening on :{args.port}\n"
+        f"\n📡 Console OTEL Collector\n"
+        f"   gRPC  :{args.port}  (app traces/metrics/logs)\n"
+        f"   HTTP  :{args.http_port}  (Copilot CLI traces)\n"
         f"   Set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:{args.port}\n"
     )
     try:

@@ -113,10 +113,21 @@ async def run_copilot_session(
                 # Enable Copilot CLI OTEL export when an endpoint is configured.
                 # The SDK translates TelemetryConfig into COPILOT_OTEL_* env vars
                 # on the CLI subprocess and propagates traceparent automatically.
+                #
+                # Protocol: The CLI defaults to otlp-http, but most collectors
+                # expose gRPC on 4317 and HTTP on 4318. COPILOT_OTEL_HTTP_ENDPOINT
+                # lets operators point the CLI at an HTTP endpoint explicitly.
+                # When only the gRPC endpoint is set, we default to port 4318
+                # (standard OTLP HTTP port) on the same host.
                 telemetry: TelemetryConfig | None = None
-                otel_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
-                if otel_endpoint:
-                    telemetry = TelemetryConfig(otlp_endpoint=otel_endpoint)
+                cli_otel_endpoint = os.environ.get("COPILOT_OTEL_HTTP_ENDPOINT")
+                if not cli_otel_endpoint:
+                    grpc_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+                    if grpc_endpoint:
+                        # Derive HTTP endpoint: replace port with 4318
+                        cli_otel_endpoint = grpc_endpoint.rsplit(":", 1)[0] + ":4318"
+                if cli_otel_endpoint:
+                    telemetry = TelemetryConfig(otlp_endpoint=cli_otel_endpoint)
 
                 client = CopilotClient(
                     SubprocessConfig(
