@@ -479,7 +479,7 @@ receivers:
         endpoint: 0.0.0.0:4318
 exporters:
   otlp:
-    endpoint: ${env:OTEL_GRPC_TARGET}
+    endpoint: $${env:OTEL_GRPC_TARGET}
     tls:
       insecure: true
 service:
