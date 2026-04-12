@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Partially superseded by [ADR-0015](0015-pipeline-protocol.md) — pipeline protocol replaces the flow design; tech stack decisions (FastAPI, Copilot SDK, background tasks) still hold.
 
 ## Context
 
