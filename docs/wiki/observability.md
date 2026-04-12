@@ -380,7 +380,7 @@ The sidecar runs `otel/opentelemetry-collector-contrib` with a minimal config th
 
 **Trace Linkage**: The SDK calls `get_trace_context()` before `create_session` and `send` RPCs, injecting the active `traceparent` into JSON-RPC payloads. CLI internal spans become children of the app's active span.
 
-**Trace Linkage**: The SDK automatically calls `get_trace_context()` before `create_session` and `send` RPCs, injecting the active `traceparent` into JSON-RPC payloads. CLI internal spans become children of the app's active span.
+**Known Limitation (CLI v1.0.24)**: The CLI's OTLP HTTP exporter sends empty payloads — it probes the endpoint but does not export span data over HTTP. The file exporter (`exporter_type="file"`) works correctly and produces `invoke_agent`, `chat`, and `execute_tool` spans with full GenAI semantic convention attributes. The sidecar infrastructure is deployed and ready; CLI traces will flow automatically once a future CLI version fixes the HTTP exporter. Track progress by testing with `TelemetryConfig(file_path="/tmp/traces.jsonl", exporter_type="file")`.
 
 **Environment Variables Set on CLI**:
 | Config Field | CLI Env Var |
