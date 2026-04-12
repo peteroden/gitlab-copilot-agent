@@ -427,6 +427,11 @@ resource "azurerm_container_app_job" "task_runner" {
         name  = "LOG_LEVEL"
         value = var.deployment_env == "dev" ? "debug" : "info"
       }
+      # Copilot CLI → localhost OTEL sidecar (HTTP/protobuf on 4318)
+      env {
+        name  = "COPILOT_OTEL_HTTP_ENDPOINT"
+        value = "http://localhost:4318"
+      }
 
       # BYOK provider config (only set when copilot_auth='byok')
       dynamic "env" {
@@ -452,6 +457,61 @@ resource "azurerm_container_app_job" "task_runner" {
           secret_name = env.key
         }
       }
+    }
+
+    # OTEL HTTP→gRPC bridge sidecar for Copilot CLI traces.
+    # The ACA managed agent only speaks gRPC (port 4317) but the Copilot CLI
+    # only speaks OTLP HTTP. This lightweight collector receives HTTP on 4318
+    # and forwards to the managed agent's gRPC endpoint.
+    init_container {
+      name   = "otel-config"
+      image  = "mcr.microsoft.com/cbl-mariner/busybox:2.0"
+      cpu    = 0.25
+      memory = "0.5Gi"
+      command = ["sh", "-c", <<-EOT
+        cat > /otel/config.yaml << 'EOF'
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+exporters:
+  otlp:
+    endpoint: otel.service.k8se-apps:4317
+    tls:
+      insecure: true
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp]
+    logs:
+      receivers: [otlp]
+      exporters: [otlp]
+EOF
+      EOT
+      ]
+      volume_mounts {
+        name = "otel-sidecar-config"
+        path = "/otel"
+      }
+    }
+
+    container {
+      name   = "otel-sidecar"
+      image  = "otel/opentelemetry-collector-contrib:0.123.0"
+      cpu    = 0.25
+      memory = "0.5Gi"
+      args   = ["--config=/otel/config.yaml"]
+      volume_mounts {
+        name = "otel-sidecar-config"
+        path = "/otel"
+      }
+    }
+
+    volume {
+      name         = "otel-sidecar-config"
+      storage_type = "EmptyDir"
     }
   }
 

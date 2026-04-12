@@ -364,9 +364,21 @@ The Copilot SDK's `SubprocessConfig.telemetry` configures the CLI subprocess to 
 
 **Configuration**: `copilot_session.py` passes `TelemetryConfig(otlp_endpoint=...)` when an OTEL endpoint is available.
 
-**Protocol**: The CLI uses OTLP HTTP (port 4318 by convention), while the app uses gRPC (port 4317). The endpoint is derived automatically:
-- `COPILOT_OTEL_HTTP_ENDPOINT` → used directly (explicit override)
-- `OTEL_EXPORTER_OTLP_ENDPOINT` → port replaced with 4318 (automatic derivation)
+**Protocol mismatch**: The Copilot CLI only supports OTLP HTTP, but the ACA managed OTEL agent only supports gRPC. A lightweight OTEL Collector sidecar bridges the gap:
+
+```
+Copilot CLI ──OTLP HTTP──▶ otel-sidecar:4318 ──gRPC──▶ ACA managed agent:4317
+```
+
+The sidecar runs `otel/opentelemetry-collector-contrib` with a minimal config that receives HTTP on 4318 and forwards gRPC to the managed agent. Defined in:
+- **ACA**: `infra/container-apps.tf` — init container writes config, sidecar container runs collector
+- **K8s**: `helm/.../otel-sidecar-config.yaml` + sidecar in `scaledjob.yaml`
+
+**Endpoint derivation**: `copilot_session.py` resolves the CLI's OTLP endpoint:
+- `COPILOT_OTEL_HTTP_ENDPOINT` → used directly (set to `http://localhost:4318` when sidecar present)
+- `OTEL_EXPORTER_OTLP_ENDPOINT` → port replaced with 4318 (fallback for single-port collectors)
+
+**Trace Linkage**: The SDK calls `get_trace_context()` before `create_session` and `send` RPCs, injecting the active `traceparent` into JSON-RPC payloads. CLI internal spans become children of the app's active span.
 
 **Trace Linkage**: The SDK automatically calls `get_trace_context()` before `create_session` and `send` RPCs, injecting the active `traceparent` into JSON-RPC payloads. CLI internal spans become children of the app's active span.
 

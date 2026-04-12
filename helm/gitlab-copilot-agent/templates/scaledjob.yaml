@@ -55,6 +55,10 @@ spec:
                     name: {{ include "app.fullname" . }}
                     key: COPILOT_PROVIDER_API_KEY
                     optional: true
+              {{- if .Values.telemetry.otlpEndpoint }}
+              - name: COPILOT_OTEL_HTTP_ENDPOINT
+                value: "http://localhost:4318"
+              {{- end }}
             resources:
               limits:
                 cpu: {{ .Values.jobRunner.cpuLimit }}
@@ -65,9 +69,27 @@ spec:
               runAsUser: 1000
               readOnlyRootFilesystem: true
               capabilities: { drop: ["ALL"] }
+          {{- if .Values.telemetry.otlpEndpoint }}
+          - name: otel-sidecar
+            image: "{{ .Values.telemetry.collector.image.repository }}:{{ .Values.telemetry.collector.image.tag }}"
+            args: ["--config=/etc/otelcol/sidecar.yaml"]
+            ports: [{ containerPort: 4318, protocol: TCP }]
+            volumeMounts:
+              - name: otel-sidecar-config
+                mountPath: /etc/otelcol
+            resources:
+              limits:
+                cpu: 100m
+                memory: 128Mi
+          {{- end }}
         volumes:
           - name: tmp
             emptyDir: {}
+          {{- if .Values.telemetry.otlpEndpoint }}
+          - name: otel-sidecar-config
+            configMap:
+              name: {{ include "app.fullname" . }}-otel-sidecar
+          {{- end }}
         restartPolicy: Never
         {{- with .Values.hostAliases }}
         hostAliases: {{- toYaml . | nindent 8 }}
