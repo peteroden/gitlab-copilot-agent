@@ -14,18 +14,21 @@ from gitlab_copilot_agent.config import Settings
 from gitlab_copilot_agent.credential_registry import CredentialRegistry
 from gitlab_copilot_agent.dedup import DeduplicationService
 from gitlab_copilot_agent.discussion_models import AgentIdentity
-from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
+from gitlab_copilot_agent.discussion_pipeline import DiscussionContext, DiscussionPipeline
 from gitlab_copilot_agent.events import TaskEvent
 from gitlab_copilot_agent.gitlab_client import (
     GitLabClient,
     GitLabClientProtocol,
     MRListItem,
 )
-from gitlab_copilot_agent.orchestrator import handle_review
+from gitlab_copilot_agent.pipeline import run_pipeline
 from gitlab_copilot_agent.project_registry import ProjectRegistry
+from gitlab_copilot_agent.review_pipeline import ReviewContext, ReviewPipeline
 from gitlab_copilot_agent.task_executor import TaskExecutionError, TaskExecutor
+from gitlab_copilot_agent.telemetry import get_tracer
 
 log = structlog.get_logger()
+_tracer = get_tracer(__name__)
 _DEDUP_TTL = 86400
 _MAX_BACKOFF = 300
 
@@ -209,12 +212,19 @@ class GitLabPoller:
             resolution_behavior=resolution_behavior,
         )
         try:
-            await handle_review(
-                self._settings,
-                event,
-                self._executor,
-                credential_registry=self._credential_registry,
-            )
+            with _tracer.start_as_current_span(
+                "mr.review",
+                attributes={"project_id": event.project_id, "mr_iid": event.mr_iid or 0},
+            ):
+                gl_client = GitLabClient(self._settings.gitlab_url, event.token)
+                pipeline = ReviewPipeline(
+                    settings=self._settings,
+                    event=event,
+                    executor=self._executor,
+                    gl_client=gl_client,
+                    credential_registry=self._credential_registry,
+                )
+                await run_pipeline(pipeline, ReviewContext())
         except TaskExecutionError:
             await log.awarning("gitlab_review_task_failed", project_id=project_id, mr_iid=mr.iid)
             await self._dedup.mark_review(project_id, mr.iid, mr.sha)
@@ -324,13 +334,27 @@ class GitLabPoller:
                 )
 
                 try:
-                    await handle_discussion_interaction(
-                        self._settings,
-                        event,
-                        self._executor,
-                        agent_identity,
-                        repo_locks=self._repo_locks,
-                    )
+                    with _tracer.start_as_current_span(
+                        "mr.discussion_interaction",
+                        attributes={
+                            "project_id": event.project_id,
+                            "mr_iid": event.mr_iid or 0,
+                        },
+                    ):
+                        gl_client = GitLabClient(self._settings.gitlab_url, event.token)
+                        pipeline = DiscussionPipeline(
+                            settings=self._settings,
+                            event=event,
+                            executor=self._executor,
+                            gl_client=gl_client,
+                            agent_identity=agent_identity,
+                        )
+                        ctx = DiscussionContext()
+                        if self._repo_locks:
+                            async with self._repo_locks.acquire(event.clone_url):
+                                await run_pipeline(pipeline, ctx)
+                        else:
+                            await run_pipeline(pipeline, ctx)
                 except TaskExecutionError:
                     await log.awarning(
                         "gitlab_mention_note_task_failed",

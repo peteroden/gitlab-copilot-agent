@@ -44,4 +44,4 @@ Option B. The YAML → rendered JSON pipeline gives us human-friendly authoring 
 - **Harder**: Operators must understand the YAML → JSON rendering step (mitigated by CLI tooling and docs).
 - **Risk**: New env vars (`GITLAB_TOKEN__*`) require container restart to take effect — only mapping changes are hot-reloadable.
 
-> **Note**: `mr_comment_handler.py` referenced in the original ADR was replaced by `discussion_orchestrator.py`. The GitLab poller now uses per-project tokens via `_client_for_project()` and resolves agent identity per credential_ref.
+> **Note**: `discussion_pipeline.py` (formerly `discussion_orchestrator.py`) is where the discussion logic is inlined. The GitLab poller now uses per-project tokens via `_client_for_project()` and resolves agent identity per credential_ref.

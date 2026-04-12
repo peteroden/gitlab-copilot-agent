@@ -105,7 +105,7 @@ async def test_reload_endpoint_returns_keys(
     with (
         patch("gitlab_copilot_agent.main.JiraClient"),
         patch("gitlab_copilot_agent.main.JiraPoller", return_value=mock_poller),
-        patch("gitlab_copilot_agent.main.CodingOrchestrator"),
+        patch("gitlab_copilot_agent.main.CodingTaskRunner"),
         patch("gitlab_copilot_agent.main.CredentialRegistry"),
         patch("gitlab_copilot_agent.main.ProjectRegistry") as mock_reg_cls,
     ):

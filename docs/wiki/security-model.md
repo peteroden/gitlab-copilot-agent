@@ -16,7 +16,7 @@ graph TB
     end
     
     subgraph "Trust Boundary 1: HMAC Validation"
-        WH[webhook.py<br/>X-Gitlab-Token check]
+        WH[gitlab_webhook.py<br/>X-Gitlab-Token check]
     end
     
     subgraph "Trusted Zone (Green)"
@@ -77,10 +77,10 @@ graph TB
 **Flow**:
 1. GitLab computes HMAC of request body with `GITLAB_WEBHOOK_SECRET`
 2. Sends as `X-Gitlab-Token` header
-3. `webhook.py` recomputes HMAC and compares using `hmac.compare_digest()` (constant-time)
+3. `gitlab_webhook.py` recomputes HMAC and compares using `hmac.compare_digest()` (constant-time)
 4. Invalid token → 401 Unauthorized
 
-**Code**: `webhook.py` → `_validate_webhook_token()`
+**Code**: `gitlab_webhook.py` → `_validate_webhook_token()`
 
 **Threat**: If secret is compromised, attacker can replay webhooks or trigger arbitrary reviews.
 
@@ -181,7 +181,7 @@ Each GitLab token maps to a different user. The `CredentialRegistry` lazily disc
 - Commit check: `oldrev` must be present for `"update"` (skips title-only updates)
 - Self-comment guard: skip notes authored by `agent_gitlab_username`
 
-**Code**: `webhook.py`, `models.py`
+**Code**: `gitlab_webhook.py`, `models.py`
 
 ---
 

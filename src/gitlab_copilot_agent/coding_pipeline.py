@@ -1,6 +1,6 @@
 """CodingPipeline — structured four-stage Jira-to-MR coding workflow.
 
-Extracts ``CodingOrchestrator.handle()`` into the Pipeline protocol:
+Four-stage Pipeline protocol implementation:
 prepare (clone + branch) → execute (LLM coding) →
 process (apply + commit + push + MR + Jira) → cleanup (remove repo + metrics).
 """
@@ -16,6 +16,7 @@ import structlog
 
 from gitlab_copilot_agent.coding_engine import run_coding_task, strip_json_block
 from gitlab_copilot_agent.coding_workflow import apply_coding_result
+from gitlab_copilot_agent.concurrency import DistributedLock, MemoryLock
 from gitlab_copilot_agent.error_messages import user_error_message
 from gitlab_copilot_agent.git import (
     TransientCloneError,
@@ -28,18 +29,25 @@ from gitlab_copilot_agent.gitlab_client import GitLabClient  # noqa: TC001
 from gitlab_copilot_agent.jira_client import JiraClient  # noqa: TC001
 from gitlab_copilot_agent.jira_models import JiraIssue  # noqa: TC001
 from gitlab_copilot_agent.metrics import coding_tasks_duration, coding_tasks_total
-from gitlab_copilot_agent.pipeline import BasePipelineContext, post_pipeline_error, stage_requires
+from gitlab_copilot_agent.pipeline import (
+    BasePipelineContext,
+    post_pipeline_error,
+    run_pipeline,
+    stage_requires,
+)
 from gitlab_copilot_agent.project_registry import ResolvedProject  # noqa: TC001
 from gitlab_copilot_agent.task_executor import (
     TaskExecutionError,
     TaskResult,  # noqa: TC001 — Pydantic runtime field type
 )
+from gitlab_copilot_agent.telemetry import get_tracer
 
 if TYPE_CHECKING:
     from gitlab_copilot_agent.config import Settings
     from gitlab_copilot_agent.task_executor import TaskExecutor
 
 log = structlog.get_logger()
+_tracer = get_tracer(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -65,8 +73,6 @@ class CodingContext(BasePipelineContext):
 
 class CodingPipeline:
     """Four-stage coding pipeline.
-
-    Replaces the monolithic ``CodingOrchestrator.handle()`` function:
 
     - **prepare**: clone repo, create unique branch, transition Jira to In Progress
     - **execute**: run Copilot coding session
@@ -245,3 +251,46 @@ class CodingPipeline:
             task_error_prefix="⚠️ Automated implementation failed.",
             generic_msg="⚠️ Automated implementation failed. Check service logs for details.",
         )
+
+
+# ---------------------------------------------------------------------------
+# Task runner — satisfies jira_poller.CodingTaskHandler protocol
+# ---------------------------------------------------------------------------
+
+
+class CodingTaskRunner:
+    """Runs coding tasks through CodingPipeline with tracing and repo locking."""
+
+    def __init__(
+        self,
+        settings: Settings,
+        gitlab: GitLabClient,
+        jira: JiraClient,
+        executor: TaskExecutor,
+        repo_locks: DistributedLock | None = None,
+    ) -> None:
+        self._settings = settings
+        self._gitlab = gitlab
+        self._jira = jira
+        self._executor = executor
+        self._repo_locks = repo_locks or MemoryLock()
+
+    async def handle(self, issue: JiraIssue, project_mapping: ResolvedProject) -> None:
+        """Run a Jira coding task through the pipeline protocol."""
+        with _tracer.start_as_current_span(
+            "jira.coding_task",
+            attributes={
+                "jira_key": issue.key,
+                "project_id": project_mapping.gitlab_project_id,
+            },
+        ):
+            async with self._repo_locks.acquire(project_mapping.clone_url):
+                pipeline = CodingPipeline(
+                    settings=self._settings,
+                    issue=issue,
+                    project_mapping=project_mapping,
+                    executor=self._executor,
+                    gitlab_client=self._gitlab,
+                    jira_client=self._jira,
+                )
+                await run_pipeline(pipeline, CodingContext())

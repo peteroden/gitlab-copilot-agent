@@ -10,8 +10,9 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from gitlab_copilot_agent import metrics as app_metrics
-from gitlab_copilot_agent.gitlab_client import MRDetails
-from gitlab_copilot_agent.orchestrator import handle_review
+from gitlab_copilot_agent.gitlab_client import GitLabClient, MRDetails
+from gitlab_copilot_agent.pipeline import run_pipeline
+from gitlab_copilot_agent.review_pipeline import ReviewContext, ReviewPipeline
 from gitlab_copilot_agent.task_executor import ReviewResult, TaskExecutionError
 from tests.conftest import (
     DIFF_REFS,
@@ -106,23 +107,34 @@ def test_copilot_session_duration_records_task_type() -> None:
 # These patch the metric instruments at the call site to verify recording.
 
 
+def _make_mock_gl_client(
+    mock_run_review: AsyncMock,
+    *,
+    mr_details_side_effect: Exception | None = None,
+) -> AsyncMock:
+    """Wire up a mock GitLabClient for review pipeline tests."""
+    gl = AsyncMock(spec=GitLabClient)
+    gl.clone_repo.return_value = "/tmp/fake-repo"
+    if mr_details_side_effect:
+        gl.get_mr_details.side_effect = mr_details_side_effect
+    else:
+        gl.get_mr_details.return_value = MRDetails(
+            title="t", description=None, diff_refs=DIFF_REFS, changes=[]
+        )
+    gl.list_mr_discussions.return_value = []
+    gl.get_mr_commits.return_value = []
+    mock_run_review.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
+    return gl
+
+
 @patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
 async def test_review_pipeline_records_success_metrics(
-    mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     _mock_post: AsyncMock,
 ) -> None:
-    """handle_review records reviews_total and reviews_duration with outcome=success."""
-    mock_gl = mock_client_class.return_value
-    mock_gl.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
-    mock_gl.cleanup = AsyncMock()
-    mock_gl.get_mr_details = AsyncMock(
-        return_value=MRDetails(title="t", description=None, diff_refs=DIFF_REFS, changes=[])
-    )
-    mock_gl.list_mr_discussions = AsyncMock(return_value=[])
-    mock_run_review.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
+    """ReviewPipeline records reviews_total and reviews_duration with outcome=success."""
+    gl = _make_mock_gl_client(mock_run_review)
 
     mock_total = MagicMock()
     mock_duration = MagicMock()
@@ -130,7 +142,13 @@ async def test_review_pipeline_records_success_metrics(
         patch("gitlab_copilot_agent.review_pipeline.reviews_total", mock_total),
         patch("gitlab_copilot_agent.review_pipeline.reviews_duration", mock_duration),
     ):
-        await handle_review(make_settings(), make_task_event(), AsyncMock())
+        pipeline = ReviewPipeline(
+            settings=make_settings(),
+            event=make_task_event(),
+            executor=AsyncMock(),
+            gl_client=gl,
+        )
+        await run_pipeline(pipeline, ReviewContext())
 
     mock_total.add.assert_called_once_with(1, {"outcome": "success"})
     mock_duration.record.assert_called_once()
@@ -140,16 +158,11 @@ async def test_review_pipeline_records_success_metrics(
 
 
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
 async def test_review_pipeline_records_error_metrics(
-    mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
 ) -> None:
-    """handle_review records reviews_total with outcome=error on failure."""
-    mock_gl = mock_client_class.return_value
-    mock_gl.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
-    mock_gl.get_mr_details = AsyncMock(side_effect=RuntimeError("boom"))
-    mock_gl.cleanup = AsyncMock()
+    """ReviewPipeline records reviews_total with outcome=error on failure."""
+    gl = _make_mock_gl_client(mock_run_review, mr_details_side_effect=RuntimeError("boom"))
 
     mock_total = MagicMock()
     mock_duration = MagicMock()
@@ -158,7 +171,13 @@ async def test_review_pipeline_records_error_metrics(
         patch("gitlab_copilot_agent.review_pipeline.reviews_duration", mock_duration),
         pytest.raises(RuntimeError),
     ):
-        await handle_review(make_settings(), make_task_event(), AsyncMock())
+        pipeline = ReviewPipeline(
+            settings=make_settings(),
+            event=make_task_event(),
+            executor=AsyncMock(),
+            gl_client=gl,
+        )
+        await run_pipeline(pipeline, ReviewContext())
 
     mock_total.add.assert_called_once_with(1, {"outcome": "error"})
     mock_duration.record.assert_called_once()
@@ -166,26 +185,29 @@ async def test_review_pipeline_records_error_metrics(
 
 
 @patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
 async def test_review_task_execution_failure_posts_comment_without_raising(
-    mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
 ) -> None:
-    mock_gl = mock_client_class.return_value
-    mock_gl.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
-    mock_gl.cleanup = AsyncMock()
-    mock_gl.get_mr_details = AsyncMock(
-        return_value=MRDetails(title="t", description=None, diff_refs=DIFF_REFS, changes=[])
+    gl = AsyncMock(spec=GitLabClient)
+    gl.clone_repo.return_value = "/tmp/fake-repo"
+    gl.get_mr_details.return_value = MRDetails(
+        title="t", description=None, diff_refs=DIFF_REFS, changes=[]
     )
-    mock_gl.list_mr_discussions = AsyncMock(return_value=[])
-    mock_gl.post_mr_comment = AsyncMock()
+    gl.list_mr_discussions.return_value = []
+    gl.get_mr_commits.return_value = []
     mock_run_review.side_effect = TaskExecutionError("Task failed: runner error")
 
     with pytest.raises(TaskExecutionError, match="runner error"):
-        await handle_review(make_settings(), make_task_event(), AsyncMock())
+        pipeline = ReviewPipeline(
+            settings=make_settings(),
+            event=make_task_event(),
+            executor=AsyncMock(),
+            gl_client=gl,
+        )
+        await run_pipeline(pipeline, ReviewContext())
 
-    mock_gl.post_mr_comment.assert_awaited_once()
-    comment = mock_gl.post_mr_comment.call_args[0][2]
+    gl.post_mr_comment.assert_awaited_once()
+    comment = gl.post_mr_comment.call_args[0][2]
     assert "Automated review failed" in comment
     assert "runner error" not in comment  # user-friendly message, no internal details
 
@@ -197,11 +219,11 @@ async def test_webhook_records_error_metric_on_background_failure(
     mock_errors = MagicMock()
     with (
         patch(
-            "gitlab_copilot_agent.webhook.handle_review",
+            "gitlab_copilot_agent.gitlab_webhook.run_pipeline",
             new_callable=AsyncMock,
             side_effect=RuntimeError("clone failed"),
         ),
-        patch("gitlab_copilot_agent.webhook.webhook_errors_total", mock_errors),
+        patch("gitlab_copilot_agent.gitlab_webhook.webhook_errors_total", mock_errors),
     ):
         resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
         assert resp.json()["status"] == "queued"
@@ -213,7 +235,7 @@ async def test_webhook_records_error_metric_on_background_failure(
 async def test_webhook_records_received_metric(client: AsyncClient) -> None:
     """webhook_received_total incremented on every webhook, even ignored ones."""
     mock_received = MagicMock()
-    with patch("gitlab_copilot_agent.webhook.webhook_received_total", mock_received):
+    with patch("gitlab_copilot_agent.gitlab_webhook.webhook_received_total", mock_received):
         await client.post("/webhook", json={"object_kind": "push"}, headers=HEADERS)
 
     mock_received.add.assert_called_once_with(1, {"object_kind": "push"})

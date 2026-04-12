@@ -11,12 +11,12 @@ graph TB
     end
 
     subgraph "Service Pod (app:app, non-root)"
-        WH[webhook.py<br/>FastAPI]
+        WH[gitlab_webhook.py<br/>FastAPI]
         GLP[gitlab_poller.py<br/>Background Task]
         JP[jira_poller.py<br/>Background Task]
-        ORCH[orchestrator.py<br/>Review Handler]
-        DISC[discussion_orchestrator.py<br/>Thread Handler]
-        CODING[coding_orchestrator.py<br/>Coding Handler]
+        RPIPE[review_pipeline.py<br/>Review Pipeline]
+        DPIPE[discussion_pipeline.py<br/>Discussion Pipeline]
+        CPIPE[coding_pipeline.py<br/>Coding Pipeline]
         EXEC[LocalTaskExecutor]
         COPILOT[copilot_session.py<br/>SDK Wrapper]
     end
@@ -41,23 +41,23 @@ graph TB
     GLP -->|Poll MRs/Notes<br/>API token auth| GL
     JP -->|Search issues<br/>Basic auth| JIRA
 
-    WH --> ORCH
-    GLP --> ORCH
-    WH --> DISC
-    WH --> CODING
-    JP --> CODING
+    WH --> RPIPE
+    GLP --> RPIPE
+    WH --> DPIPE
+    WH --> CPIPE
+    JP --> CPIPE
 
-    ORCH --> EXEC
-    DISC --> EXEC
-    CODING --> EXEC
+    RPIPE --> EXEC
+    DPIPE --> EXEC
+    CPIPE --> EXEC
     EXEC --> COPILOT
     
     COPILOT -->|GitHub Token<br/>or BYOK API Key| GHAPI
 
-    ORCH --> GL
-    DISC --> GL
-    CODING --> GL
-    CODING --> JIRA
+    RPIPE --> GL
+    DPIPE --> GL
+    CPIPE --> GL
+    CPIPE --> JIRA
 
     EXEC -.->|Distributed Lock| AZURE_STORAGE
     GLP -.->|Dedup Store| AZURE_STORAGE
@@ -72,9 +72,9 @@ graph TB
     K8SEXEC -.->|Poll result blob| AZURE_STORAGE
     K8SEXEC -.->|Read patch, apply via git| K8SEXEC
 
-    ORCH --> REPO
-    DISC --> REPO
-    CODING --> REPO
+    RPIPE --> REPO
+    DPIPE --> REPO
+    CPIPE --> REPO
     JOB1 --> REPO
     JOB2 --> REPO
 
@@ -82,30 +82,28 @@ graph TB
     classDef trusted fill:#ccffcc
     classDef semi fill:#ffffcc
     class GL,JIRA,REPO,GHAPI untrusted
-    class WH,GLP,JP,ORCH,DISC,CODING,EXEC,COPILOT,K8SEXEC trusted
+    class WH,GLP,JP,RPIPE,DPIPE,CPIPE,EXEC,COPILOT,K8SEXEC trusted
     class AZURE_STORAGE,JOB1,JOB2 semi
 ```
 
 ## Component Layers
 
 ### 1. HTTP Ingestion Layer
-- **`webhook.py`**: FastAPI endpoints for GitLab webhooks (merge_request, note). Uses `get_app_context()` for typed dependency access.
+- **`gitlab_webhook.py`**: FastAPI endpoints for GitLab webhooks (merge_request, note). Uses `get_app_context()` for typed dependency access.
 - **`gitlab_poller.py`**: Background poller for MR discovery and @mention notes
 - **`jira_poller.py`**: Background poller for issues in "AI Ready" status
 
 ### 2. Processing Layer
 - **`events.py`**: `TaskEvent` Pydantic model — unified internal event replacing direct webhook payload passing
 - **`pipeline.py`**: `Pipeline` protocol (prepare → execute → process → cleanup) + `run_pipeline()` runner + `BasePipelineContext`
-- **`orchestrator.py`**: MR review orchestration (constructs `ReviewPipeline`, calls `run_pipeline()`)
 - **`review_pipeline.py`**: `ReviewPipeline` + `ReviewContext` — clone → review → parse → post
-- **`discussion_orchestrator.py`**: Unified @mention/thread interaction handler (constructs `DiscussionPipeline`, calls `run_pipeline()`)
 - **`discussion_pipeline.py`**: `DiscussionPipeline` + `DiscussionContext` — clone → fetch context → LLM → reply ± commit/push ± resolve
-- **`coding_orchestrator.py`**: Jira issue implementation (constructs `CodingPipeline`, calls `run_pipeline()`)
 - **`coding_pipeline.py`**: `CodingPipeline` + `CodingContext` — clone → code → apply result → branch → MR
 - **`coding_workflow.py`**: Shared helper for applying coding results (diff passback from k8s pods)
 - **`review_engine.py`**: Review prompt construction and execution
 - **`coding_engine.py`**: Coding task prompt construction and .gitignore hygiene
 - **`prompt_defaults.py`**: Canonical system prompt defaults and `get_prompt()` resolver
+- **`discussion_engine.py`**: Discussion prompt construction and response parsing
 
 ### 3. Execution Layer
 - **`task_executor.py`**: TaskExecutor protocol + LocalTaskExecutor

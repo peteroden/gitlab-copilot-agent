@@ -40,7 +40,7 @@ Use a third-party DI framework.
 
 **Option B** — Frozen `AppContext` dataclass with mutable state kept separately.
 
-Immutable services (`settings`, `executor`, `repo_locks`, `dedup_store`, `review_tracker`, `credential_registry`, `allowed_project_ids`) live in the frozen `AppContext` at `app.state.app_context`. Mutable state (`project_registry`, `jira_poller`, `gl_poller`) stays on `app.state` directly to support hot-reload via `/config/reload`.
+Immutable services (`settings`, `executor`, `repo_locks`, `dedup_store`, `dedup`, `credential_registry`, `allowed_project_ids`) live in the frozen `AppContext` at `app.state.app_context`. Mutable state (`project_registry`, `jira_poller`, `gl_poller`) stays on `app.state` directly to support hot-reload via `/config/reload`.
 
 `get_app_context(request: Request) -> AppContext` is the FastAPI dependency for typed access. It raises `RuntimeError` with a clear message if the context isn't initialized.
 
@@ -48,7 +48,7 @@ Tests use `make_app_context(**overrides)` factory and `dataclasses.replace()` fo
 
 ## Consequences
 
-- All `getattr(app.state, ...)` calls in webhook.py replaced with `get_app_context(request)`
+- All `getattr(app.state, ...)` calls in gitlab_webhook.py replaced with `get_app_context(request)`
 - `project_registry` access remains via `request.app.state.project_registry` (mutable, may be None)
 - Test fixtures simplified: `make_app_context()` replaces 7 individual `app.state.X = Y` lines
 - `pyright: ignore[reportPrivateUsage]` remains in `/config/reload` for poller internal mutation (hot-reload design constraint)
