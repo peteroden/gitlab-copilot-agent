@@ -501,11 +501,12 @@ EOF
     }
 
     container {
-      name   = "otel-sidecar"
-      image  = "otel/opentelemetry-collector-contrib:0.123.0"
+      name  = "otel-sidecar"
+      image = "otel/opentelemetry-collector-contrib:0.123.0"
       # Match Helm sidecar limits (helm/gitlab-copilot-agent/templates/scaledjob.yaml)
+      # Helm: 100m/128Mi. ACA minimum is 0.25Gi and requires ≤2 decimal places.
       cpu    = 0.1
-      memory = "0.125Gi"
+      memory = "0.25Gi"
       args   = ["--config=/otel/config.yaml"]
 
       # The gRPC target for the managed OTEL agent. ACA auto-injects
