@@ -152,7 +152,6 @@ def _run_http_server(port: int) -> None:
     httpd = http.server.HTTPServer(("0.0.0.0", port), OTLPHandler)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
-    return httpd  # type: ignore[return-value]
 
 
 def main() -> None:

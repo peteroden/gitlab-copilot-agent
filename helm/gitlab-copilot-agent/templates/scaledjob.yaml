@@ -70,6 +70,7 @@ spec:
               readOnlyRootFilesystem: true
               capabilities: { drop: ["ALL"] }
           {{- if .Values.telemetry.otlpEndpoint }}
+          # OTEL sidecar — keep in sync with infra/container-apps.tf otel-sidecar
           - name: otel-sidecar
             image: "{{ .Values.telemetry.collector.image.repository }}:{{ .Values.telemetry.collector.image.tag }}"
             args: ["--config=/etc/otelcol/sidecar.yaml"]

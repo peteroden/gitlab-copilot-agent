@@ -5,9 +5,11 @@ import json
 import os
 import shutil
 import sys
+from contextvars import Token
 from pathlib import Path
 
 import structlog
+from opentelemetry.context import Context
 from pydantic import BaseModel, ConfigDict, Field
 
 from gitlab_copilot_agent.coding_engine import parse_agent_output
@@ -303,7 +305,7 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
     task_queue: TaskQueue | None = None
 
     queue_result = await _dequeue_task()
-    trace_token: object | None = None  # context.attach() token for cleanup
+    trace_token: Token[Context] | None = None
     if queue_result is not None:
         payload, queue_msg, task_queue = queue_result
         task_type = payload.task_type
@@ -434,12 +436,12 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
         _detach_trace(trace_token)
 
 
-def _detach_trace(token: object | None) -> None:
+def _detach_trace(token: Token[Context] | None) -> None:
     """Detach restored trace context if attached. Safe to call with None."""
     if token is not None:
         from opentelemetry import context as ctx_api  # noqa: PLC0415
 
-        ctx_api.detach(token)  # pyright: ignore[reportArgumentType]
+        ctx_api.detach(token)
 
 
 def main() -> None:

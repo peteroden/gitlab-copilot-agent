@@ -460,6 +460,7 @@ resource "azurerm_container_app_job" "task_runner" {
     }
 
     # OTEL HTTP→gRPC bridge sidecar for Copilot CLI traces.
+    # Keep sidecar config in sync with helm/gitlab-copilot-agent/templates/otel-sidecar-config.yaml
     # The ACA managed agent only speaks gRPC (port 4317) but the Copilot CLI
     # only speaks OTLP HTTP. This lightweight collector receives HTTP on 4318
     # and forwards to the managed agent's gRPC endpoint.
@@ -502,8 +503,9 @@ EOF
     container {
       name   = "otel-sidecar"
       image  = "otel/opentelemetry-collector-contrib:0.123.0"
-      cpu    = 0.25
-      memory = "0.5Gi"
+      # Match Helm sidecar limits (helm/gitlab-copilot-agent/templates/scaledjob.yaml)
+      cpu    = 0.1
+      memory = "0.125Gi"
       args   = ["--config=/otel/config.yaml"]
 
       # The gRPC target for the managed OTEL agent. ACA auto-injects
