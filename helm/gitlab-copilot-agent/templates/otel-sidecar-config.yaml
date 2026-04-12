@@ -13,7 +13,7 @@ data:
             endpoint: 0.0.0.0:4318
     exporters:
       otlp:
-        endpoint: {{ include "app.fullname" . }}-otel-collector:4317
+        endpoint: {{ printf "%s-otel-collector:4317" (include "app.fullname" .) }}
         tls:
           insecure: true
     service:

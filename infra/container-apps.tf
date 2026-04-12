@@ -463,6 +463,8 @@ resource "azurerm_container_app_job" "task_runner" {
     # The ACA managed agent only speaks gRPC (port 4317) but the Copilot CLI
     # only speaks OTLP HTTP. This lightweight collector receives HTTP on 4318
     # and forwards to the managed agent's gRPC endpoint.
+    # Uses the same OTEL_EXPORTER_OTLP_ENDPOINT that ACA auto-injects
+    # (e.g. http://k8se-otel.k8se-apps.svc.cluster.local:4317).
     init_container {
       name   = "otel-config"
       image  = "mcr.microsoft.com/cbl-mariner/busybox:2.0"
@@ -477,7 +479,7 @@ receivers:
         endpoint: 0.0.0.0:4318
 exporters:
   otlp:
-    endpoint: otel.service.k8se-apps:4317
+    endpoint: ${env:OTEL_GRPC_TARGET}
     tls:
       insecure: true
 service:
@@ -503,6 +505,15 @@ EOF
       cpu    = 0.25
       memory = "0.5Gi"
       args   = ["--config=/otel/config.yaml"]
+
+      # The gRPC target for the managed OTEL agent. ACA auto-injects
+      # OTEL_EXPORTER_OTLP_ENDPOINT as http://host:4317 but the OTLP
+      # gRPC exporter expects host:port without scheme.
+      env {
+        name  = "OTEL_GRPC_TARGET"
+        value = "k8se-otel.k8se-apps.svc.cluster.local:4317"
+      }
+
       volume_mounts {
         name = "otel-sidecar-config"
         path = "/otel"
