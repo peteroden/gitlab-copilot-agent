@@ -132,6 +132,10 @@ async def run_copilot_session(
                         cli_otel_endpoint = urlunparse(parsed._replace(netloc=f"{host}:4318"))
                 if cli_otel_endpoint:
                     telemetry = TelemetryConfig(otlp_endpoint=cli_otel_endpoint)
+                    # Reduce the CLI's OTLP batch export interval from the
+                    # default 5 s to 1 s so spans flush before client.stop()
+                    # terminates the process.
+                    sdk_env["OTEL_BSP_SCHEDULE_DELAY"] = "1000"
 
                 client = CopilotClient(
                     SubprocessConfig(
@@ -319,6 +323,12 @@ async def run_copilot_session(
                     finally:
                         await session.disconnect()
                 finally:
+                    # Allow the CLI's OTLP batch exporter to flush pending
+                    # spans before terminating the process.  The Node.js
+                    # batch exporter fires on a ~5 s schedule; without this
+                    # delay, spans from the final LLM call are lost because
+                    # client.stop() sends SIGTERM immediately.
+                    await asyncio.sleep(2)
                     await client.stop()
                 return result
             finally:
