@@ -237,6 +237,8 @@ class TestDispatchPayloadSecurity:
             "system_prompt",
             "user_prompt",
             "plugins",
+            "traceparent",
+            "tracestate",
         }
         assert keys == expected
         secret_keys = {"gitlab_token", "github_token", "copilot_provider_api_key"}

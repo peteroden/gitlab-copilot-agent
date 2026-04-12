@@ -22,6 +22,7 @@ from gitlab_copilot_agent.git import (
 )
 from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.telemetry import configure_logging, init_telemetry
+from gitlab_copilot_agent.telemetry.tracing import restore_trace_context
 
 log = structlog.get_logger()
 ENV_TASK_TYPE, ENV_TASK_ID = "TASK_TYPE", "TASK_ID"
@@ -41,6 +42,8 @@ class QueueTaskPayload(BaseModel):
     system_prompt: str = Field(default="", description="System prompt for Copilot session")
     user_prompt: str = Field(description="User prompt for Copilot session")
     plugins: list[str] | None = Field(default=None, description="Per-repo plugin specs")
+    traceparent: str = Field(default="", description="W3C traceparent from controller span")
+    tracestate: str = Field(default="", description="W3C tracestate from controller span")
 
 
 _RETRY_PROMPT = (
@@ -300,6 +303,7 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
     task_queue: TaskQueue | None = None
 
     queue_result = await _dequeue_task()
+    trace_token: object | None = None  # context.attach() token for cleanup
     if queue_result is not None:
         payload, queue_msg, task_queue = queue_result
         task_type = payload.task_type
@@ -307,6 +311,13 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
         repo_blob_key = payload.repo_blob_key
         user_prompt = payload.user_prompt
         plugins = payload.plugins
+        # Restore W3C trace context from controller so all task spans
+        # are children of the originating controller span.
+        restored = restore_trace_context(payload.traceparent, payload.tracestate)
+        if restored is not None:
+            from opentelemetry import context as ctx_api
+
+            trace_token = ctx_api.attach(restored)
     else:
         try:
             task_type = _get_required_env(ENV_TASK_TYPE)
@@ -322,6 +333,7 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
     bound_log = log.bind(task_id=task_id, task_type=task_type)
     if task_type not in VALID_TASK_TYPES:
         await bound_log.aerror("invalid_task_type", valid=sorted(VALID_TASK_TYPES))
+        _detach_trace(trace_token)
         return 1
     if task_type == "echo":
         try:
@@ -338,6 +350,7 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
         finally:
             if task_queue:
                 await task_queue.aclose()
+            _detach_trace(trace_token)
 
     # Review/coding tasks require blob-based repo transfer
     settings = TaskRunnerSettings()  # pyright: ignore[reportCallIssue]
@@ -418,6 +431,15 @@ async def run_task() -> int:  # noqa: C901 — dispatch routing requires branchi
             await task_queue.aclose()
         if repo_path is not None:
             shutil.rmtree(repo_path, ignore_errors=True)
+        _detach_trace(trace_token)
+
+
+def _detach_trace(token: object | None) -> None:
+    """Detach restored trace context if attached. Safe to call with None."""
+    if token is not None:
+        from opentelemetry import context as ctx_api  # noqa: PLC0415
+
+        ctx_api.detach(token)  # pyright: ignore[reportArgumentType]
 
 
 def main() -> None:

@@ -110,11 +110,21 @@ class CredentialRegistry:
                 return cached
 
             token = self.resolve(credential_ref)
-            identity = await _fetch_identity(gitlab_url, token)
+            try:
+                identity = await _fetch_identity(gitlab_url, token)
+            except Exception:
+                log.warning(
+                    "audit.auth_failure",
+                    credential_ref=ref,
+                    gitlab_url=gitlab_url,
+                )
+                raise
             self._identities[ref] = (identity, time.monotonic())
             log.info(
-                "agent_identity_resolved",
+                "audit.auth_attempt",
                 credential_ref=ref,
+                gitlab_url=gitlab_url,
+                success=True,
                 user_id=identity.user_id,
                 username=identity.username,
             )

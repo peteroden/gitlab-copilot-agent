@@ -10,6 +10,7 @@ from typing import Any, cast
 
 import structlog
 from copilot import CopilotClient, SubprocessConfig
+from copilot.client import TelemetryConfig
 from copilot.session import (
     CustomAgentConfig,
     PermissionHandler,
@@ -109,11 +110,20 @@ async def run_copilot_session(
                 sdk_env = build_sdk_env(settings.github_token)
                 sdk_env["HOME"] = session_home
 
+                # Enable Copilot CLI OTEL export when an endpoint is configured.
+                # The SDK translates TelemetryConfig into COPILOT_OTEL_* env vars
+                # on the CLI subprocess and propagates traceparent automatically.
+                telemetry: TelemetryConfig | None = None
+                otel_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+                if otel_endpoint:
+                    telemetry = TelemetryConfig(otlp_endpoint=otel_endpoint)
+
                 client = CopilotClient(
                     SubprocessConfig(
                         cli_path=cli_path,
                         env=sdk_env,
                         github_token=settings.github_token or None,
+                        telemetry=telemetry,
                     ),
                 )
                 await client.start()
