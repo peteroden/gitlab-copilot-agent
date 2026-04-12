@@ -224,7 +224,7 @@ class GitLabPoller:
                     gl_client=gl_client,
                     credential_registry=self._credential_registry,
                 )
-                await run_pipeline(pipeline, ReviewContext())
+                await run_pipeline(pipeline, ReviewContext(), span_attributes=event.span_attrs())
         except TaskExecutionError:
             await log.awarning("gitlab_review_task_failed", project_id=project_id, mr_iid=mr.iid)
             await self._dedup.mark_review(project_id, mr.iid, mr.sha)
@@ -350,11 +350,12 @@ class GitLabPoller:
                             agent_identity=agent_identity,
                         )
                         ctx = DiscussionContext()
+                        attrs = event.span_attrs()
                         if self._repo_locks:
                             async with self._repo_locks.acquire(event.clone_url):
-                                await run_pipeline(pipeline, ctx)
+                                await run_pipeline(pipeline, ctx, span_attributes=attrs)
                         else:
-                            await run_pipeline(pipeline, ctx)
+                            await run_pipeline(pipeline, ctx, span_attributes=attrs)
                 except TaskExecutionError:
                     await log.awarning(
                         "gitlab_mention_note_task_failed",

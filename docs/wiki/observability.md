@@ -297,6 +297,11 @@ with _tracer.start_as_current_span("mr.review", attributes={"project_id": projec
     pass
 ```
 
+**Pipeline Spans**: `run_pipeline()` accepts `span_attributes` for semantic attributes on the parent span:
+```python
+await run_pipeline(pipeline, ctx, span_attributes={"project_id": 42, "mr_iid": 7, "task_type": "review"})
+```
+
 **Auto-Instrumentation**:
 - FastAPI: HTTP request spans created automatically
 - HTTPX: HTTP client spans for GitLab/Jira API calls
@@ -306,6 +311,10 @@ with _tracer.start_as_current_span("mr.review", attributes={"project_id": projec
 ### Trace Context in Logs
 
 **Processor**: `telemetry/logging.py` → `add_trace_context()`
+
+**Applies to**:
+- **structlog** (app code) — via processors pipeline
+- **stdlib/foreign logs** (Copilot SDK, httpx, uvicorn) — via `foreign_pre_chain`
 
 **Behavior**:
 1. Get current span from context
@@ -318,75 +327,152 @@ with _tracer.start_as_current_span("mr.review", attributes={"project_id": projec
 
 ---
 
+### Distributed Tracing Across Queue Boundary
+
+The service propagates W3C Trace Context (`traceparent`/`tracestate`) across the Azure Storage Queue boundary so controller and task runner spans appear in a single distributed trace.
+
+**Flow**:
+```
+Controller (webhook/poller)
+├── mr.review / coding_task span
+│   ├── pipeline.ReviewPipeline
+│   │   ├── pipeline.prepare
+│   │   ├── pipeline.execute
+│   │   ├── pipeline.process
+│   │   └── pipeline.cleanup
+│   └── remote_executor.execute
+│       └── [traceparent injected into queue message]
+│
+Task Runner (separate process/container)
+├── task.execute  ← parent restored from traceparent
+│   └── copilot.session
+│       └── [Copilot CLI internal spans via TelemetryConfig]
+```
+
+**Implementation**:
+- `remote_executor.py`: Injects `traceparent`/`tracestate` into queue payload via `opentelemetry.propagate.inject`
+- `task_runner.py`: Restores trace context via `restore_trace_context()` immediately after dequeue, wrapping the entire task execution
+- `QueueTaskPayload`: Carries `traceparent` and `tracestate` fields (default `""` for backward compatibility)
+
+**Trust Boundary**: Traceparent is serialized by the controller and deserialized by the task runner. An attacker with queue write access could inject arbitrary trace context, but queue access already implies full system compromise. No integrity check is needed.
+
+---
+
+### Copilot CLI OTEL Integration
+
+The Copilot SDK's `SubprocessConfig.telemetry` configures the CLI subprocess to export its own OTEL traces.
+
+**Approach**: The CLI writes spans to a per-session JSONL file via `TelemetryConfig(file_path=...)`. After the session completes, `cli_trace_forwarder.py` reads the file, converts each span to `ReadableSpan`, and exports them through the app's existing OTLP gRPC exporter. This avoids a sidecar collector entirely.
+
+```
+Copilot CLI ──file──▶ cli-traces.jsonl ──ReadableSpan──▶ app OTLP gRPC exporter
+```
+
+**Why not a sidecar?** The CLI's OTLP HTTP exporter has reliability issues (empty payloads, batch flush timing). A sidecar collector adds ~200MB image pull overhead per job pod start, which causes ACA cold-start failures with `parallelism=1`.
+
+**Trace Linkage**: The SDK calls `get_trace_context()` before `create_session` and `send` RPCs, injecting the active `traceparent` into JSON-RPC payloads. CLI spans become children of the app's active span. The file exporter preserves real timestamps and trace/span IDs.
+
+**CLI span types**: `invoke_agent` (per-session), `chat` (per-LLM call), `execute_tool` (per-tool call). All carry GenAI semantic convention attributes (`gen_ai.operation.name`, `gen_ai.request.model`, `gen_ai.usage.*`, etc.).
+
+**Forwarding module**: `telemetry/cli_trace_forwarder.py`
+- Reads JSONL after `client.stop()` — all spans are available (file exporter writes synchronously)
+- Converts to `ReadableSpan` preserving original timestamps
+- Exports via the app's span exporter (stored in `telemetry._state`)
+- Failure-tolerant: never fails the task; logs and skips malformed lines
+
+---
+
 ### Span Hierarchy
 
-**Example**: MR Review
+**Example**: MR Review (local executor)
 
 ```
 http.request (FastAPI)
-└── mr.review (review_pipeline.py)
-    ├── git.clone (git/clone.py)
-    ├── copilot.session (copilot_session.py)
-    └── git.cleanup (git/clone.py)
+└── mr.review (gitlab_webhook.py)
+    └── pipeline.ReviewPipeline
+        ├── pipeline.prepare (clone, fetch MR details)
+        ├── pipeline.execute (copilot.session → CLI spans)
+        ├── pipeline.process (parse, post comments)
+        └── pipeline.cleanup
 ```
 
-**Attributes**: Each span includes relevant context (project_id, mr_iid, repo_path, etc.)
+**Example**: Coding Task (remote executor, distributed trace)
+
+```
+jira.poll (jira_poller.py)
+└── coding_task (coding_pipeline.py)
+    └── pipeline.CodingPipeline
+        ├── pipeline.prepare (clone, create branch)
+        ├── pipeline.execute → remote_executor
+        │   └── [queue dispatch with traceparent]
+        │       Task Runner (separate container):
+        │       └── task.execute
+        │           └── copilot.session → CLI spans
+        ├── pipeline.process (apply patch, create MR)
+        └── pipeline.cleanup
+```
+
+**Attributes**: `project_id`, `mr_iid`, `task_type`, `trigger_source` on pipeline spans.
+
+---
+
+## Structured Audit Logging
+
+Structured audit events for security-relevant operations. All audit events include `trace_id`/`span_id` when inside an active span.
+
+### API Call Auditing
+
+**Location**: `gitlab_client.py` → `_request()`
+
+**Event**: `audit.api_call` — one record per logical API call (not per retry attempt)
+
+**Fields**:
+- `service`: `"gitlab"`
+- `method`: HTTP method (GET, POST, PUT, DELETE)
+- `path`: API path (e.g., `/projects/42/merge_requests`)
+- `status`: HTTP status code (0 for transport errors)
+- `duration_ms`: Total wall time including retries
+- `attempts`: Number of attempts (1 = no retries)
+- `error`: Error message (only on failure)
+
+**Level**: `info` on success, `warning` on failure (transport or HTTP error)
+
+### Authentication Auditing
+
+**Location**: `credential_registry.py` → `resolve_identity()`
+
+**Events**:
+- `audit.auth_attempt` — successful identity resolution (not emitted for cache hits)
+  - Fields: `credential_ref`, `gitlab_url`, `success=True`, `user_id`, `username`
+- `audit.auth_failure` — failed identity resolution
+  - Fields: `credential_ref`, `gitlab_url`
 
 ---
 
 ## Console Collector Script (Local Dev)
 
-**Purpose**: Run local OTEL Collector for dev/test without K8s cluster.
+**Purpose**: Run local OTEL Collector for dev/test without external infrastructure.
 
-**Script**: `scripts/otel-console-collector.sh` (not in repo, example below)
+**Script**: `scripts/otel_console_collector.py`
 
-**Example**:
-```bash
-#!/bin/bash
-# Run OTEL Collector in Docker with console exporter
-
-docker run --rm -p 4317:4317 -p 4318:4318 \
-  -v $(pwd)/otel-config.yaml:/etc/otel/config.yaml \
-  otel/opentelemetry-collector-contrib:0.115.0 \
-  --config /etc/otel/config.yaml
-```
-
-**otel-config.yaml**:
-```yaml
-receivers:
-  otlp:
-    protocols:
-      grpc:
-        endpoint: 0.0.0.0:4317
-
-exporters:
-  logging:
-    loglevel: debug
-
-service:
-  pipelines:
-    traces:
-      receivers: [otlp]
-      exporters: [logging]
-    metrics:
-      receivers: [otlp]
-      exporters: [logging]
-    logs:
-      receivers: [otlp]
-      exporters: [logging]
-```
+**Protocols**: gRPC on 4317 (app spans) + HTTP on 4318 (accepts JSON + protobuf, chunked encoding)
 
 **Usage**:
 ```bash
-# Terminal 1: Run collector
-./scripts/otel-console-collector.sh
+# Terminal 1: Run collector (add --verbose for per-span trace IDs)
+uv run python scripts/otel_console_collector.py --verbose
 
 # Terminal 2: Run agent with OTEL enabled
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 uv run uvicorn gitlab_copilot_agent.main:app --host 0.0.0.0 --port 8000
 ```
 
-**Output**: Traces, metrics, logs printed to console (logging exporter)
+**Output**: Traces, metrics, and logs printed to console with color-coded prefixes:
+```
+[02:22:56] TRACE  svc=gitlab-copilot-agent  spans=8  [pipeline.prepare, pipeline.execute, ...]
+[02:22:56] METRIC svc=gitlab-copilot-agent  metrics=2  [otel.sdk.span.started, ...]
+[02:22:56] LOG    svc=gitlab-copilot-agent  level=INFO  controller_span
+```
 
 ---
 

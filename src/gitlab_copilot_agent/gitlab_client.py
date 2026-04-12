@@ -204,9 +204,12 @@ class GitLabClient:
             httpx.HTTPStatusError: On non-retryable HTTP errors.
             httpx.TransportError: When all retries are exhausted.
         """
+        import time  # noqa: PLC0415
+
         can_retry = idempotent if idempotent is not None else method.upper() in ("GET", "HEAD")
         max_attempts = _MAX_RETRIES if can_retry else 1
         last_exc: Exception | None = None
+        start = time.monotonic()
 
         for attempt in range(max_attempts):
             try:
@@ -224,7 +227,30 @@ class GitLabClient:
                     )
                     await asyncio.sleep(delay)
                     continue
-                resp.raise_for_status()
+                try:
+                    resp.raise_for_status()
+                except httpx.HTTPStatusError:
+                    duration_ms = round((time.monotonic() - start) * 1000)
+                    log.warning(
+                        "audit.api_call",
+                        service="gitlab",
+                        method=method,
+                        path=path,
+                        status=resp.status_code,
+                        duration_ms=duration_ms,
+                        attempts=attempt + 1,
+                    )
+                    raise
+                duration_ms = round((time.monotonic() - start) * 1000)
+                log.info(
+                    "audit.api_call",
+                    service="gitlab",
+                    method=method,
+                    path=path,
+                    status=resp.status_code,
+                    duration_ms=duration_ms,
+                    attempts=attempt + 1,
+                )
                 return resp
             except httpx.TransportError as exc:
                 last_exc = exc
@@ -237,6 +263,17 @@ class GitLabClient:
                         error=str(exc),
                     )
                     await asyncio.sleep(delay)
+        duration_ms = round((time.monotonic() - start) * 1000)
+        log.warning(
+            "audit.api_call",
+            service="gitlab",
+            method=method,
+            path=path,
+            status=0,
+            duration_ms=duration_ms,
+            attempts=max_attempts,
+            error=str(last_exc),
+        )
         if last_exc is not None:
             raise last_exc
         raise RuntimeError("Request failed after retries")  # pragma: no cover

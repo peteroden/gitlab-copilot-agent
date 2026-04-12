@@ -39,12 +39,15 @@ def configure_logging() -> None:
         ],
     )
 
-    # Route stdlib logging (uvicorn, OTEL SDK, etc.) through structlog
+    # Route stdlib logging (uvicorn, OTEL SDK, Copilot SDK, etc.) through structlog.
+    # add_trace_context injects trace_id/span_id into every foreign log record
+    # so Copilot SDK and httpx logs carry the active span's context.
     formatter = structlog.stdlib.ProcessorFormatter(
         processor=renderer,
         foreign_pre_chain=[
             structlog.stdlib.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
+            add_trace_context,  # pyright: ignore[reportArgumentType]
         ],
     )
     handler = logging.StreamHandler(sys.stdout)

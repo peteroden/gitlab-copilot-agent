@@ -8,6 +8,7 @@ from gitlab_copilot_agent.telemetry.logging import (
 from gitlab_copilot_agent.telemetry.tracing import (
     get_tracer,
     init_telemetry,
+    restore_trace_context,
     shutdown_telemetry,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "emit_to_otel_logs",
     "get_tracer",
     "init_telemetry",
+    "restore_trace_context",
     "shutdown_telemetry",
 ]

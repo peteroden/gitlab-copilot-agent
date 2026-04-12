@@ -81,6 +81,18 @@ class TaskEvent(BaseModel):
                 raise ValueError(msg)
         return self
 
+    def span_attrs(self) -> dict[str, str | int]:
+        """Semantic attributes for pipeline trace spans."""
+        attrs: dict[str, str | int] = {
+            "project_id": self.project_id,
+            "mr_iid": self.mr_iid or 0,
+            "task_type": self.task_type,
+            "trigger_source": self.trigger_source,
+        }
+        if self.jira_issue_key:
+            attrs["jira_issue_key"] = self.jira_issue_key
+        return attrs
+
     def log_safe(self) -> dict[str, object]:
         """Return a dict safe for structured logging — no secrets.
 

@@ -6,10 +6,12 @@ import shutil
 import tempfile
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, cast
 
 import structlog
 from copilot import CopilotClient, SubprocessConfig
+from copilot.client import TelemetryConfig
 from copilot.session import (
     CustomAgentConfig,
     PermissionHandler,
@@ -24,6 +26,7 @@ from gitlab_copilot_agent.metrics import (
 from gitlab_copilot_agent.process_sandbox import get_real_cli_path
 from gitlab_copilot_agent.repo_config import discover_repo_config
 from gitlab_copilot_agent.telemetry import get_tracer
+from gitlab_copilot_agent.telemetry.cli_trace_forwarder import forward_cli_traces
 
 log = structlog.get_logger()
 _tracer = get_tracer(__name__)
@@ -109,11 +112,22 @@ async def run_copilot_session(
                 sdk_env = build_sdk_env(settings.github_token)
                 sdk_env["HOME"] = session_home
 
+                # Copilot CLI telemetry: write spans to a per-session JSONL
+                # file.  After the session ends we forward the spans through
+                # the app's existing OTLP gRPC exporter — no sidecar needed.
+                # Trace-context propagation (SDK→CLI) is automatic when OTEL
+                # is active in this process.
+                cli_trace_file = str(Path(session_home) / "cli-traces.jsonl")
+                telemetry: TelemetryConfig | None = None
+                if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+                    telemetry = TelemetryConfig(file_path=cli_trace_file)
+
                 client = CopilotClient(
                     SubprocessConfig(
                         cli_path=cli_path,
                         env=sdk_env,
                         github_token=settings.github_token or None,
+                        telemetry=telemetry,
                     ),
                 )
                 await client.start()
@@ -295,6 +309,9 @@ async def run_copilot_session(
                         await session.disconnect()
                 finally:
                     await client.stop()
+                    # Forward CLI spans to the app's OTLP exporter.
+                    # File contains real timestamps from the CLI process.
+                    forward_cli_traces(cli_trace_file)
                 return result
             finally:
                 shutil.rmtree(session_home, ignore_errors=True)

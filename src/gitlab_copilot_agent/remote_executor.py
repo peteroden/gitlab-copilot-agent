@@ -17,6 +17,7 @@ import time
 from typing import TYPE_CHECKING
 
 import structlog
+from opentelemetry import context, propagate
 
 from gitlab_copilot_agent.git import tar_repo_to_bytes
 from gitlab_copilot_agent.task_executor import (
@@ -127,6 +128,11 @@ class RemoteTaskExecutor:
             tarball = await tar_repo_to_bytes(task.repo_path)
             await self._task_queue.upload_blob(repo_blob_key, tarball)
 
+        # Propagate W3C trace context across the queue boundary so task
+        # runner spans are children of this controller span.
+        trace_ctx: dict[str, str] = {}
+        propagate.inject(trace_ctx, context=context.get_current())
+
         payload = json.dumps(
             {
                 "task_type": task.task_type,
@@ -135,6 +141,8 @@ class RemoteTaskExecutor:
                 "system_prompt": task.system_prompt,
                 "user_prompt": task.user_prompt,
                 "plugins": task.plugins,
+                "traceparent": trace_ctx.get("traceparent", ""),
+                "tracestate": trace_ctx.get("tracestate", ""),
             }
         )
         bound.info("remote_enqueue_starting")

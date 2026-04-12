@@ -104,7 +104,7 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
                 gl_client=gl_client,
                 credential_registry=credential_registry,
             )
-            await run_pipeline(pipeline, ReviewContext())
+            await run_pipeline(pipeline, ReviewContext(), span_attributes=event.span_attrs())
         await app_context.dedup.mark_review(project_id, mr.iid, head_sha)
         bound.info("background_review_completed")
     except Exception:
@@ -217,7 +217,8 @@ async def _process_discussion(
             )
 
             async def _execute() -> None:
-                await run_pipeline(pipeline, DiscussionContext())
+                attrs = event.span_attrs()
+                await run_pipeline(pipeline, DiscussionContext(), span_attributes=attrs)
 
             if repo_locks:
                 async with repo_locks.acquire(event.clone_url):

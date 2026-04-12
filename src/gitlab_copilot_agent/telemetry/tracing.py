@@ -6,7 +6,8 @@ import logging
 import os
 
 import structlog
-from opentelemetry import metrics, trace
+from opentelemetry import context as context_api
+from opentelemetry import metrics, propagate, trace
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.trace import TracerProvider
@@ -54,6 +55,7 @@ def init_telemetry() -> None:
     )
 
     span_exporter, metric_exporter, log_exporter = create_exporters()
+    _state.span_exporter = span_exporter
 
     # Traces
     tracer_provider = TracerProvider(resource=resource)
@@ -129,3 +131,22 @@ def shutdown_telemetry() -> None:
 def get_tracer(name: str) -> trace.Tracer:
     """Get a tracer instance."""
     return trace.get_tracer(name)
+
+
+def restore_trace_context(traceparent: str, tracestate: str = "") -> context_api.Context | None:
+    """Restore W3C trace context from propagated headers.
+
+    Returns the extracted context, or ``None`` if *traceparent* is empty.
+    Callers use ``context_api.attach(ctx)`` to activate it.
+
+    Trust boundary note: traceparent is serialized by the controller and
+    deserialized by the task runner.  An attacker with queue write access
+    could inject arbitrary trace context, but queue access already implies
+    full system compromise.  No integrity check is needed.
+    """
+    if not traceparent:
+        return None
+    carrier: dict[str, str] = {"traceparent": traceparent}
+    if tracestate:
+        carrier["tracestate"] = tracestate
+    return propagate.extract(carrier)

@@ -136,7 +136,9 @@ class Pipeline[PipelineContextT: BasePipelineContext](Protocol):
 
 
 async def run_pipeline[PipelineContextT: BasePipelineContext](
-    pipeline: Pipeline[PipelineContextT], pipeline_context: PipelineContextT
+    pipeline: Pipeline[PipelineContextT],
+    pipeline_context: PipelineContextT,
+    span_attributes: dict[str, str | int] | None = None,
 ) -> PipelineContextT:
     """Execute a pipeline through all four stages with tracing.
 
@@ -146,6 +148,12 @@ async def run_pipeline[PipelineContextT: BasePipelineContext](
     - handle_error is called on failure before cleanup
     - outcome is set to ``"success"`` only if no stage raised AND the
       pipeline did not already set a more specific outcome
+
+    Args:
+        pipeline: The pipeline implementation.
+        pipeline_context: Mutable context passed through stages.
+        span_attributes: Optional semantic attributes for the parent span
+            (e.g. project_id, mr_iid, task_type, trigger_source).
     """
     pipeline_name = type(pipeline).__name__
     start = time.monotonic()
@@ -153,6 +161,7 @@ async def run_pipeline[PipelineContextT: BasePipelineContext](
 
     with _tracer.start_as_current_span(
         f"pipeline.{pipeline_name}",
+        attributes=span_attributes or {},
     ):
         try:
             with _tracer.start_as_current_span("pipeline.prepare"):

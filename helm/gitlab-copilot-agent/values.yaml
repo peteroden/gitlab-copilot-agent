@@ -36,11 +36,6 @@ telemetry:
   otlpEndpoint: ""
   # Optional deployment environment label (e.g. "production", "staging")
   environment: ""
-  collector:
-    image: { repository: otel/opentelemetry-collector-contrib, tag: "0.115.0" }
-    resources:
-      limits: { cpu: 200m, memory: 256Mi }
-      requests: { cpu: 50m, memory: 128Mi }
 jobRunner: { image: "", cpuLimit: "1", memoryLimit: 1Gi, timeout: 600 }
 service: { type: ClusterIP }
 serviceAccount: { create: true, name: "" }
