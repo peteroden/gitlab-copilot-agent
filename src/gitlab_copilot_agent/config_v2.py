@@ -70,6 +70,11 @@ class ServerConfig(BaseModel):
     model_config = ConfigDict(strict=True)
 
     log_level: str = Field(default="info", description="Log level")
+    auto_merge_enabled: bool = Field(
+        default=False,
+        description="When False (default), coding tasks create Draft MRs requiring "
+        "manual un-draft before merge. When True, creates ready MRs.",
+    )
     clone_dir: str | None = Field(default=None, description="Base directory for repo clones")
     shutdown_timeout: int = Field(
         default=30, gt=0, description="Graceful shutdown timeout in seconds"

@@ -33,8 +33,14 @@ from gitlab_copilot_agent.git import (
     validate_clone_url_host,
 )
 from gitlab_copilot_agent.gitlab_client import GitLabClient, MRDetails  # noqa: TC001
-from gitlab_copilot_agent.pipeline import BasePipelineContext, post_pipeline_error, stage_requires
+from gitlab_copilot_agent.pipeline import (
+    BasePipelineContext,
+    post_pipeline_error,
+    stage_requires,
+    write_context_file,
+)
 from gitlab_copilot_agent.prompt_defaults import get_prompt
+from gitlab_copilot_agent.prompt_sanitizer import strip_dangerous_chars
 from gitlab_copilot_agent.task_executor import (
     CodingResult,
     TaskExecutionError,
@@ -64,6 +70,7 @@ class DiscussionContext(BasePipelineContext):
     discussion_history: DiscussionHistory | None = None
     triggering: Discussion | None = None
     branch_deleted: bool = False
+    base_sha: str | None = None
 
     # Set by execute
     raw_result: TaskResult | None = None
@@ -88,6 +95,37 @@ def _find_triggering_discussion(
             if note.note_id == note_id:
                 return disc
     return None
+
+
+def _format_current_thread(
+    discussion: Discussion,
+    agent_user_id: int,
+) -> str:
+    """Format the triggering discussion thread for ``.copilot-review/current-thread.md``."""
+    lines = [f"# Discussion Thread (ID: {discussion.discussion_id})\n"]
+    for note in discussion.notes:
+        role = "Agent" if note.author_id == agent_user_id else note.author_username
+        body = strip_dangerous_chars(note.body)
+        lines.append(f"**{role}** ({note.created_at}):\n{body}\n")
+    return "\n".join(lines)
+
+
+def _format_other_discussions(
+    discussions: list[Discussion],
+    triggering_id: str,
+) -> str:
+    """Format other active discussions for ``.copilot-review/other-discussions.md``."""
+    other = [d for d in discussions if d.discussion_id != triggering_id]
+    if not other:
+        return ""
+    lines = [f"# Other Active Discussions ({len(other)} threads)\n"]
+    for disc in other:
+        first_note = disc.notes[0] if disc.notes else None
+        if first_note:
+            status = "resolved" if disc.is_resolved else "open"
+            body = strip_dangerous_chars(first_note.body)
+            lines.append(f"- [{status}] {body}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +211,53 @@ class DiscussionPipeline:
             await self._log.awarning("triggering_discussion_not_found", note_id=note_id)
             pipeline_context.outcome = "not_found"
 
+        # File-based prompt strategy: fetch merge base + write context files
+        if self._settings.prompt_strategy == "file-based" and pipeline_context.mr_details:
+            base_sha = pipeline_context.mr_details.diff_refs.base_sha
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "fetch",
+                "--depth=1",
+                "origin",
+                base_sha,
+                cwd=str(pipeline_context.repo_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await proc.communicate()
+            if proc.returncode == 0:
+                pipeline_context.base_sha = base_sha
+            else:
+                await self._log.awarning("base_sha_fetch_failed", base_sha=base_sha)
+                pipeline_context.base_sha = None
+
+            # Write context files to sibling -context/ directory
+            repo_path = pipeline_context.repo_path
+            if repo_path:
+                ctx_dir = write_context_file(
+                    repo_path,
+                    "mr-description.md",
+                    pipeline_context.mr_details.description or "",
+                )
+                pipeline_context.context_dir = ctx_dir
+                if pipeline_context.triggering:
+                    thread_content = _format_current_thread(
+                        pipeline_context.triggering,
+                        self._agent.user_id,
+                    )
+                    write_context_file(repo_path, "current-thread.md", thread_content)
+                if pipeline_context.discussions:
+                    triggering_id = (
+                        pipeline_context.triggering.discussion_id
+                        if pipeline_context.triggering
+                        else ""
+                    )
+                    other_content = _format_other_discussions(
+                        pipeline_context.discussions,
+                        triggering_id,
+                    )
+                    write_context_file(repo_path, "other-discussions.md", other_content)
+
     async def _reply_branch_deleted(self, mr_iid: int, note_id: int) -> None:
         """Try to reply in the triggering thread about a deleted branch."""
         event = self._event
@@ -211,6 +296,9 @@ class DiscussionPipeline:
                 mr_details,
                 discussion_history,
                 pipeline_context.triggering,
+                prompt_strategy=self._settings.prompt_strategy,
+                base_sha=pipeline_context.base_sha,
+                context_dir=pipeline_context.context_dir,
             ),
             source_branch=self._event.branch,
             note_id=self._event.note_id,  # type: ignore[arg-type]
@@ -321,9 +409,11 @@ class DiscussionPipeline:
     # -- cleanup -----------------------------------------------------------
 
     async def cleanup(self, pipeline_context: DiscussionContext) -> None:
-        """Remove cloned repo."""
+        """Remove cloned repo and context dir."""
         if pipeline_context.repo_path:
             await asyncio.to_thread(shutil.rmtree, pipeline_context.repo_path, True)
+        if pipeline_context.context_dir and pipeline_context.context_dir.exists():
+            await asyncio.to_thread(shutil.rmtree, pipeline_context.context_dir, True)
 
     # -- error handling ----------------------------------------------------
 

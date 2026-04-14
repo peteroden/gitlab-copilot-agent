@@ -21,7 +21,7 @@ from gitlab_copilot_agent.discussion_pipeline import DiscussionContext, Discussi
 from gitlab_copilot_agent.events import TaskEvent
 from gitlab_copilot_agent.pipeline import run_pipeline
 from gitlab_copilot_agent.task_executor import CodingResult, ReviewResult, TaskExecutionError
-from tests.conftest import GITLAB_TOKEN, MR_IID, PROJECT_ID, make_settings
+from tests.conftest import GITLAB_TOKEN, MR_IID, PROJECT_ID, make_mock_gitlab_client, make_settings
 
 # -- Test constants (discussion-specific) --
 
@@ -112,11 +112,7 @@ async def test_qa_reply_no_code_changes(
     tmp_path: Path,
 ) -> None:
     """Happy path: Q&A reply with no code changes — reply posted, no push."""
-    # GitLabClient instance
-    gl_client = AsyncMock()
-    gl_client.clone_repo.return_value = tmp_path
-    gl_client.get_mr_details.return_value = MagicMock()
-    gl_client.list_mr_discussions.return_value = [_make_discussion()]
+    gl_client = make_mock_gitlab_client(tmp_path, discussions=[_make_discussion()])
 
     # LLM returns a ReviewResult (no patch)
     mock_run.return_value = ReviewResult(summary=REPLY_TEXT)
@@ -158,10 +154,7 @@ async def test_coding_reply_with_changes(
     tmp_path: Path,
 ) -> None:
     """Happy path: coding reply with patch — changes pushed."""
-    gl_client = AsyncMock()
-    gl_client.clone_repo.return_value = tmp_path
-    gl_client.get_mr_details.return_value = MagicMock()
-    gl_client.list_mr_discussions.return_value = [_make_discussion()]
+    gl_client = make_mock_gitlab_client(tmp_path, discussions=[_make_discussion()])
 
     mock_run.return_value = CodingResult(summary=REPLY_TEXT, patch="diff --git a/f b/f")
     mock_build.return_value = "prompt"
@@ -202,10 +195,7 @@ async def test_coding_reply_empty_patch(
     tmp_path: Path,
 ) -> None:
     """Coding result with empty patch — reply posted, no push."""
-    gl_client = AsyncMock()
-    gl_client.clone_repo.return_value = tmp_path
-    gl_client.get_mr_details.return_value = MagicMock()
-    gl_client.list_mr_discussions.return_value = [_make_discussion()]
+    gl_client = make_mock_gitlab_client(tmp_path, discussions=[_make_discussion()])
 
     mock_run.return_value = CodingResult(summary=REPLY_TEXT, patch="")
     mock_build.return_value = "prompt"
@@ -232,13 +222,11 @@ async def test_triggering_discussion_not_found(
     tmp_path: Path,
 ) -> None:
     """When the triggering note is not in any discussion, handler returns without posting."""
-    gl_client = AsyncMock()
-    gl_client.clone_repo.return_value = tmp_path
-    gl_client.get_mr_details.return_value = MagicMock()
-
     # Return a discussion with a different note_id
     other_note = _make_discussion_note(note_id=999)
-    gl_client.list_mr_discussions.return_value = [_make_discussion(notes=[other_note])]
+    gl_client = make_mock_gitlab_client(
+        tmp_path, discussions=[_make_discussion(notes=[other_note])]
+    )
 
     executor = AsyncMock()
     pipeline = DiscussionPipeline(
@@ -262,10 +250,7 @@ async def test_task_execution_error_posts_user_error(
     tmp_path: Path,
 ) -> None:
     """TaskExecutionError → user-friendly error comment on MR, exception re-raised."""
-    gl_client = AsyncMock()
-    gl_client.clone_repo.return_value = tmp_path
-    gl_client.get_mr_details.return_value = MagicMock()
-    gl_client.list_mr_discussions.return_value = [_make_discussion()]
+    gl_client = make_mock_gitlab_client(tmp_path, discussions=[_make_discussion()])
 
     mock_build.return_value = "prompt"
     mock_run.side_effect = TaskExecutionError("authentication failed")
@@ -290,8 +275,7 @@ async def test_general_exception_posts_generic_error(
     tmp_path: Path,
 ) -> None:
     """General exception → generic error comment on MR, exception re-raised."""
-    gl_client = AsyncMock()
-    gl_client.clone_repo.return_value = tmp_path
+    gl_client = make_mock_gitlab_client(tmp_path)
     gl_client.get_mr_details.side_effect = RuntimeError("unexpected")
 
     executor = AsyncMock()
@@ -316,8 +300,7 @@ async def test_cleanup_runs_on_failure(
     tmp_path: Path,
 ) -> None:
     """Repo cleanup runs even when the handler raises."""
-    gl_client = AsyncMock()
-    gl_client.clone_repo.return_value = tmp_path
+    gl_client = make_mock_gitlab_client(tmp_path)
     gl_client.get_mr_details.side_effect = RuntimeError("boom")
 
     executor = AsyncMock()
@@ -349,13 +332,10 @@ async def test_deleted_branch_replies_with_warning(
     tmp_path: Path,
 ) -> None:
     """When the source branch is deleted, reply with a helpful warning."""
-    gl_client = AsyncMock()
-    gl_client.clone_repo = AsyncMock(
-        side_effect=RuntimeError(
-            "git clone failed: Remote branch feature/test not found in upstream origin"
-        )
+    gl_client = make_mock_gitlab_client(tmp_path, discussions=[_make_discussion()])
+    gl_client.clone_repo.side_effect = RuntimeError(
+        "git clone failed: Remote branch feature/test not found in upstream origin"
     )
-    gl_client.list_mr_discussions.return_value = [_make_discussion()]
 
     pipeline = DiscussionPipeline(
         settings=make_settings(),
@@ -400,16 +380,16 @@ async def test_discussion_interaction_auto_resolve(
     tmp_path: Path,
 ) -> None:
     """resolution_behavior='auto-resolve' + resolved → thread resolved via API."""
-    gl_client = AsyncMock()
-    gl_client.clone_repo.return_value = tmp_path
-    gl_client.get_mr_details.return_value = MagicMock()
     # Triggering discussion must be agent-authored + inline for auto-resolve
-    gl_client.list_mr_discussions.return_value = [
-        _make_discussion(
-            notes=[_make_discussion_note(author_id=AGENT_USER_ID)],
-            is_inline=True,
-        )
-    ]
+    gl_client = make_mock_gitlab_client(
+        tmp_path,
+        discussions=[
+            _make_discussion(
+                notes=[_make_discussion_note(author_id=AGENT_USER_ID)],
+                is_inline=True,
+            )
+        ],
+    )
 
     mock_run.return_value = ReviewResult(summary=REPLY_TEXT)
     mock_build.return_value = "prompt"
@@ -444,10 +424,7 @@ async def test_discussion_interaction_suggest_no_resolve(
     tmp_path: Path,
 ) -> None:
     """resolution_behavior='suggest' + resolved → reply posted, thread NOT resolved."""
-    gl_client = AsyncMock()
-    gl_client.clone_repo.return_value = tmp_path
-    gl_client.get_mr_details.return_value = MagicMock()
-    gl_client.list_mr_discussions.return_value = [_make_discussion()]
+    gl_client = make_mock_gitlab_client(tmp_path, discussions=[_make_discussion()])
 
     mock_run.return_value = ReviewResult(summary=REPLY_TEXT)
     mock_build.return_value = "prompt"
@@ -482,10 +459,7 @@ async def test_discussion_interaction_off_no_action(
     tmp_path: Path,
 ) -> None:
     """resolution_behavior='off' → no resolution action at all."""
-    gl_client = AsyncMock()
-    gl_client.clone_repo.return_value = tmp_path
-    gl_client.get_mr_details.return_value = MagicMock()
-    gl_client.list_mr_discussions.return_value = [_make_discussion()]
+    gl_client = make_mock_gitlab_client(tmp_path, discussions=[_make_discussion()])
 
     mock_run.return_value = ReviewResult(summary=REPLY_TEXT)
     mock_build.return_value = "prompt"
@@ -520,10 +494,7 @@ async def test_discussion_interaction_partial_never_resolved(
     tmp_path: Path,
 ) -> None:
     """Partial resolution → never auto-resolved regardless of behavior."""
-    gl_client = AsyncMock()
-    gl_client.clone_repo.return_value = tmp_path
-    gl_client.get_mr_details.return_value = MagicMock()
-    gl_client.list_mr_discussions.return_value = [_make_discussion()]
+    gl_client = make_mock_gitlab_client(tmp_path, discussions=[_make_discussion()])
 
     mock_run.return_value = ReviewResult(summary=REPLY_TEXT)
     mock_build.return_value = "prompt"
@@ -558,15 +529,15 @@ async def test_discussion_interaction_resolution_error_logged(
     tmp_path: Path,
 ) -> None:
     """Exception during resolution → logged, not raised."""
-    gl_client = AsyncMock()
-    gl_client.clone_repo.return_value = tmp_path
-    gl_client.get_mr_details.return_value = MagicMock()
-    gl_client.list_mr_discussions.return_value = [
-        _make_discussion(
-            notes=[_make_discussion_note(author_id=AGENT_USER_ID)],
-            is_inline=True,
-        )
-    ]
+    gl_client = make_mock_gitlab_client(
+        tmp_path,
+        discussions=[
+            _make_discussion(
+                notes=[_make_discussion_note(author_id=AGENT_USER_ID)],
+                is_inline=True,
+            )
+        ],
+    )
 
     mock_run.return_value = ReviewResult(summary=REPLY_TEXT)
     mock_build.return_value = "prompt"

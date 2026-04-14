@@ -480,6 +480,19 @@
           },
           "title": "Trusted Proxies",
           "type": "array"
+        },
+        "auto_merge_enabled": {
+          "default": false,
+          "description": "When false (default), coding tasks create Draft MRs requiring manual un-draft. When true, creates ready MRs.",
+          "title": "Auto Merge Enabled",
+          "type": "boolean"
+        },
+        "prompt_strategy": {
+          "default": "file-based",
+          "description": "How to deliver context to the LLM: 'file-based' (default) or 'inline'",
+          "enum": ["inline", "file-based"],
+          "title": "Prompt Strategy",
+          "type": "string"
         }
       },
       "title": "ServerConfig",

@@ -1,31 +1,28 @@
 """Tests for the CodingTaskRunner and CodingPipeline."""
 
-from pathlib import Path
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 from gitlab_copilot_agent.coding_pipeline import CodingTaskRunner
 from gitlab_copilot_agent.git import TransientCloneError
 from gitlab_copilot_agent.jira_models import JiraIssue, JiraIssueFields, JiraStatus
-from gitlab_copilot_agent.project_registry import ResolvedProject
 from gitlab_copilot_agent.task_executor import CodingResult, TaskExecutionError
 from tests.conftest import (
-    EXAMPLE_CLONE_URL,
-    JIRA_EMAIL,
-    JIRA_TOKEN,
-    JIRA_URL,
+    JIRA_SETTINGS,
+    make_resolved_project,
     make_settings,
 )
 
-_JIRA_SETTINGS = {
-    "jira_url": JIRA_URL,
-    "jira_email": JIRA_EMAIL,
-    "jira_api_token": JIRA_TOKEN,
-    "jira_project_map": '{"mappings": {}}',
-}
+_MOD = "gitlab_copilot_agent.coding_pipeline"
 
-_TEST_ISSUE = JiraIssue(
+_ISSUE = JiraIssue(
     id="10042",
     key="PROJ-42",
     fields=JiraIssueFields(
@@ -35,199 +32,172 @@ _TEST_ISSUE = JiraIssue(
     ),
 )
 
-_TEST_MAPPING = ResolvedProject(
-    jira_project="PROJ",
-    repo="group/project",
-    gitlab_project_id=99,
-    clone_url=EXAMPLE_CLONE_URL,
-    target_branch="main",
-    credential_ref="default",
-    token="test-token",
-    in_progress_status="In Progress",
-    in_review_status="In Review",
-)
+_MAPPING = make_resolved_project()
 
 
-@patch("gitlab_copilot_agent.coding_pipeline.run_coding_task")
-@patch("gitlab_copilot_agent.coding_pipeline.git_push")
-@patch("gitlab_copilot_agent.coding_pipeline.git_commit")
-@patch("gitlab_copilot_agent.coding_pipeline.git_unique_branch")
-@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
-async def test_handle_full_pipeline(
-    mock_clone: AsyncMock,
-    mock_branch: AsyncMock,
-    mock_commit: AsyncMock,
-    mock_push: AsyncMock,
-    mock_coding: AsyncMock,
-    tmp_path: Path,
-) -> None:
-    mock_clone.return_value = tmp_path
-    mock_branch.return_value = "agent/proj-42"
-    mock_coding.return_value = CodingResult(summary="Changes made")
-    mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
-    mock_gitlab.create_merge_request.return_value = 1
-    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
-    await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
-    mock_clone.assert_awaited_once()
-    mock_branch.assert_awaited_once_with(tmp_path, "agent/proj-42")
-    mock_commit.assert_awaited_once()
-    mock_push.assert_awaited_once()
-    mock_gitlab.create_merge_request.assert_awaited_once()
-    assert mock_jira.transition_issue.await_count == 2
-    mock_jira.transition_issue.assert_any_await("PROJ-42", "In Progress")
-    mock_jira.transition_issue.assert_any_await("PROJ-42", "In Review")
-    mock_jira.add_comment.assert_awaited_once()
-
-
-@patch("gitlab_copilot_agent.coding_pipeline.run_coding_task")
-@patch("gitlab_copilot_agent.coding_pipeline.git_push")
-@patch("gitlab_copilot_agent.coding_pipeline.git_commit")
-@patch("gitlab_copilot_agent.coding_pipeline.git_unique_branch")
-@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
-async def test_in_review_transition_failure_is_non_blocking(
-    mock_clone: AsyncMock,
-    mock_branch: AsyncMock,
-    mock_commit: AsyncMock,
-    mock_push: AsyncMock,
-    mock_coding: AsyncMock,
-    tmp_path: Path,
-) -> None:
-    """If 'In Review' transition fails, the task still completes successfully."""
-    mock_clone.return_value = tmp_path
-    mock_branch.return_value = "agent/proj-42"
-    mock_coding.return_value = CodingResult(summary="Changes made")
-    mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
-    mock_gitlab.create_merge_request.return_value = 1
-
-    # First call (In Progress) succeeds, second call (In Review) fails
-    mock_jira.transition_issue.side_effect = [None, ValueError("No transition")]
-
-    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
-    await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
-
-    assert mock_jira.transition_issue.await_count == 2
-    mock_gitlab.create_merge_request.assert_awaited_once()
-    mock_jira.add_comment.assert_awaited_once()
-
-
-@patch("gitlab_copilot_agent.coding_pipeline.run_coding_task")
-@patch("gitlab_copilot_agent.coding_pipeline.git_push")
-@patch("gitlab_copilot_agent.coding_pipeline.git_commit")
-@patch("gitlab_copilot_agent.coding_pipeline.git_unique_branch")
-@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
-async def test_custom_in_review_status_used(
-    mock_clone: AsyncMock,
-    mock_branch: AsyncMock,
-    mock_commit: AsyncMock,
-    mock_push: AsyncMock,
-    mock_coding: AsyncMock,
-    tmp_path: Path,
-) -> None:
-    """Per-project in_review_status on ResolvedProject is used for the transition."""
-    mock_clone.return_value = tmp_path
-    mock_branch.return_value = "agent/proj-42"
-    mock_coding.return_value = CodingResult(summary="Changes made")
-    mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
-    mock_gitlab.create_merge_request.return_value = 1
-
-    custom_mapping = ResolvedProject(
-        jira_project="PROJ",
-        repo="group/project",
-        gitlab_project_id=99,
-        clone_url=EXAMPLE_CLONE_URL,
-        target_branch="main",
-        credential_ref="default",
-        token="test-token",
-        in_review_status="QA Review",
+def _runner(
+    **settings_ov: Any,
+) -> tuple[CodingTaskRunner, AsyncMock, AsyncMock]:
+    gl, jira = AsyncMock(), AsyncMock()
+    gl.create_merge_request.return_value = 1
+    return (
+        CodingTaskRunner(
+            make_settings(**JIRA_SETTINGS, **settings_ov),
+            gl,
+            jira,
+            AsyncMock(),
+        ),
+        gl,
+        jira,
     )
-    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
-    await orch.handle(_TEST_ISSUE, custom_mapping)
-
-    mock_jira.transition_issue.assert_any_await("PROJ-42", "QA Review")
 
 
-@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
+@pytest.fixture()
+def coding_mocks(tmp_path: Path) -> dict[str, AsyncMock]:
+    with (
+        patch(f"{_MOD}.git_clone") as m_clone,
+        patch(f"{_MOD}.git_unique_branch") as m_branch,
+        patch(f"{_MOD}.git_commit") as m_commit,
+        patch(f"{_MOD}.git_push") as m_push,
+        patch(f"{_MOD}.run_coding_task") as m_coding,
+    ):
+        m_clone.return_value = tmp_path
+        m_branch.return_value = "agent/proj-42"
+        m_coding.return_value = CodingResult(summary="Changes made")
+        yield {
+            "clone": m_clone,
+            "branch": m_branch,
+            "commit": m_commit,
+            "push": m_push,
+            "coding": m_coding,
+        }
+
+
+# -- Happy-path tests --
+
+
+@pytest.mark.parametrize(
+    "auto_merge,expect_draft",
+    [(False, True), (True, False)],
+    ids=["draft", "ready"],
+)
+async def test_mr_mode(
+    coding_mocks: dict[str, AsyncMock],
+    auto_merge: bool,
+    expect_draft: bool,
+) -> None:
+    runner, gl, jira = _runner(auto_merge_enabled=auto_merge)
+    await runner.handle(_ISSUE, _MAPPING)
+
+    for name in ("clone", "branch", "commit", "push"):
+        coding_mocks[name].assert_awaited_once()
+    gl.create_merge_request.assert_awaited_once()
+
+    title = gl.create_merge_request.call_args[0][3]
+    if expect_draft:
+        assert title == "Draft: feat(proj-42): Add feature"
+    else:
+        assert title == "feat(proj-42): Add feature"
+
+    comment = jira.add_comment.call_args[0][1]
+    if expect_draft:
+        assert "Draft MR created:" in comment
+        assert "Auto-merge is disabled" in comment
+        assert "un-draft the MR to enable merging" in comment
+    else:
+        assert "MR created:" in comment
+        assert "Draft" not in comment
+
+    assert jira.transition_issue.await_count == 2
+    jira.transition_issue.assert_any_await("PROJ-42", "In Progress")
+    jira.transition_issue.assert_any_await("PROJ-42", "In Review")
+
+
+async def test_in_review_transition_failure_is_non_blocking(
+    coding_mocks: dict[str, AsyncMock],
+) -> None:
+    runner, gl, jira = _runner()
+    jira.transition_issue.side_effect = [None, ValueError("No transition")]
+    await runner.handle(_ISSUE, _MAPPING)
+
+    assert jira.transition_issue.await_count == 2
+    gl.create_merge_request.assert_awaited_once()
+    jira.add_comment.assert_awaited_once()
+
+
+async def test_custom_in_review_status_used(
+    coding_mocks: dict[str, AsyncMock],
+) -> None:
+    custom = make_resolved_project(in_review_status="QA Review")
+    runner, _, jira = _runner()
+    await runner.handle(_ISSUE, custom)
+    jira.transition_issue.assert_any_await("PROJ-42", "QA Review")
+
+
+# -- Failure-path tests --
+
+
+@patch(f"{_MOD}.git_clone")
 async def test_coding_failure_posts_comment_to_jira(
     mock_clone: AsyncMock,
 ) -> None:
-    """Verify that coding task failures post a comment to Jira."""
     mock_clone.side_effect = Exception("Git clone failed")
-    mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
-    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+    runner, _, jira = _runner()
 
     with pytest.raises(Exception, match="Git clone failed"):
-        await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
+        await runner.handle(_ISSUE, _MAPPING)
 
-    mock_jira.add_comment.assert_awaited_once()
-    call_args = mock_jira.add_comment.call_args
-    assert call_args[0][0] == "PROJ-42"
-    assert "Automated implementation failed" in call_args[0][1]
+    jira.add_comment.assert_awaited_once()
+    key, comment = jira.add_comment.call_args[0]
+    assert key == "PROJ-42"
+    assert "Automated implementation failed" in comment
 
 
-@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
+@patch(f"{_MOD}.git_clone")
 async def test_coding_failure_comment_posting_failure_is_logged(
     mock_clone: AsyncMock,
 ) -> None:
-    """If posting the failure comment itself fails, the original exception still raises."""
     mock_clone.side_effect = Exception("Git clone failed")
-    mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
-    mock_jira.add_comment.side_effect = Exception("Jira API error")
-    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+    runner, _, jira = _runner()
+    jira.add_comment.side_effect = Exception("Jira API error")
 
     with pytest.raises(Exception, match="Git clone failed"):
-        await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
+        await runner.handle(_ISSUE, _MAPPING)
+    jira.add_comment.assert_awaited_once()
 
-    mock_jira.add_comment.assert_awaited_once()
 
-
-@patch("gitlab_copilot_agent.coding_pipeline.run_coding_task")
-@patch("gitlab_copilot_agent.coding_pipeline.git_unique_branch")
-@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
 async def test_task_execution_failure_posts_error_details(
-    mock_clone: AsyncMock,
-    mock_branch: AsyncMock,
-    mock_coding: AsyncMock,
-    tmp_path: Path,
+    coding_mocks: dict[str, AsyncMock],
 ) -> None:
-    mock_clone.return_value = tmp_path
-    mock_branch.return_value = "agent/proj-42"
-    mock_coding.side_effect = TaskExecutionError("Task failed: missing files_changed")
-    mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
-    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+    coding_mocks["coding"].side_effect = TaskExecutionError(
+        "Task failed: missing files_changed",
+    )
+    runner, _, jira = _runner()
 
     with pytest.raises(TaskExecutionError, match="missing files_changed"):
-        await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
+        await runner.handle(_ISSUE, _MAPPING)
 
-    mock_jira.add_comment.assert_awaited_once()
-    comment = mock_jira.add_comment.call_args[0][1]
+    jira.add_comment.assert_awaited_once()
+    comment = jira.add_comment.call_args[0][1]
     assert "Automated implementation failed" in comment
     assert "unexpected error" in comment.lower()
 
 
-@patch("gitlab_copilot_agent.coding_pipeline.git_clone")
+@patch(f"{_MOD}.git_clone")
 async def test_transient_clone_failure_posts_detailed_comment(
     mock_clone: AsyncMock,
 ) -> None:
-    """Transient clone failure posts detailed comment and does not mark as processed."""
     mock_clone.side_effect = TransientCloneError(
-        "git clone failed for https://gitlab.example.com/group/project.git after 3 attempts: "
-        "The requested URL returned error: 403",
+        "git clone failed for https://gitlab.example.com/group/project.git"
+        " after 3 attempts: The requested URL returned error: 403",
         attempts=3,
     )
-    mock_gitlab, mock_jira = AsyncMock(), AsyncMock()
-    orch = CodingTaskRunner(make_settings(**_JIRA_SETTINGS), mock_gitlab, mock_jira, AsyncMock())
+    runner, _, jira = _runner()
+    await runner.handle(_ISSUE, _MAPPING)
 
-    # Should NOT re-raise — transient failures are handled gracefully
-    await orch.handle(_TEST_ISSUE, _TEST_MAPPING)
-
-    # Verify Jira comment content
-    assert mock_jira.add_comment.await_count == 1
-    call_args = mock_jira.add_comment.call_args
-    assert call_args[0][0] == "PROJ-42"
-    comment = call_args[0][1]
+    assert jira.add_comment.await_count == 1
+    key, comment = jira.add_comment.call_args[0]
+    assert key == "PROJ-42"
     assert "3 attempts" in comment
     assert "transient error" in comment
     assert "retry on the next poll cycle" in comment
-
-    # CodingTaskRunner has no dedup — JiraPoller owns that concern.
-    # The transient failure is handled gracefully without re-raising.

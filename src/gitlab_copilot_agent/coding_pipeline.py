@@ -34,6 +34,7 @@ from gitlab_copilot_agent.pipeline import (
     post_pipeline_error,
     run_pipeline,
     stage_requires,
+    write_context_file,
 )
 from gitlab_copilot_agent.project_registry import ResolvedProject  # noqa: TC001
 from gitlab_copilot_agent.task_executor import (
@@ -122,6 +123,21 @@ class CodingPipeline:
             pipeline_context.repo_path, f"agent/{self._issue.key.lower()}"
         )
 
+        # File-based prompt strategy: write Jira issue context file
+        if self._settings.prompt_strategy == "file-based" and pipeline_context.repo_path:
+            desc = (
+                self._issue.fields.description
+                if isinstance(self._issue.fields.description, str)
+                else ""
+            )
+            content = (
+                f"# {self._issue.key}\n\n"
+                f"**Summary:** {self._issue.fields.summary}\n\n"
+                f"**Description:**\n{desc}\n"
+            )
+            ctx_dir = write_context_file(pipeline_context.repo_path, "jira-issue.md", content)
+            pipeline_context.context_dir = ctx_dir
+
     # -- execute -----------------------------------------------------------
 
     async def execute(self, pipeline_context: CodingContext) -> None:
@@ -141,6 +157,8 @@ class CodingPipeline:
             self._issue.fields.summary,
             description,
             plugins=self._mapping.plugins,
+            prompt_strategy=self._settings.prompt_strategy,
+            context_dir=pipeline_context.context_dir,
         )
         await self._log.ainfo(
             "coding_complete",
@@ -177,6 +195,8 @@ class CodingPipeline:
             mapping.token,
         )
         mr_title = f"feat({issue.key.lower()}): {issue.fields.summary}"
+        if not self._settings.auto_merge_enabled:
+            mr_title = f"Draft: {mr_title}"
         mr_desc = (
             f"Automated implementation for {issue.key}.\n\n{strip_json_block(raw_result.summary)}"
         )
@@ -190,7 +210,16 @@ class CodingPipeline:
         mr_url = (
             f"{self._settings.gitlab_url}/{mapping.gitlab_project_id}/-/merge_requests/{mr_iid}"
         )
-        await self._jira.add_comment(issue.key, f"MR created: {mr_url}")
+        if not self._settings.auto_merge_enabled:
+            await self._log.ainfo("draft_mr_created", mr_url=mr_url, reason="auto_merge_disabled")
+            comment = (
+                f"Draft MR created: {mr_url}\n\n"
+                f"Auto-merge is disabled. Please review the changes in GitLab, "
+                f"then un-draft the MR to enable merging."
+            )
+        else:
+            comment = f"MR created: {mr_url}"
+        await self._jira.add_comment(issue.key, comment)
         await self._transition_to_in_review(issue.key)
         await self._log.ainfo("coding_task_complete", mr_iid=mr_iid)
 
@@ -209,9 +238,11 @@ class CodingPipeline:
     # -- cleanup -----------------------------------------------------------
 
     async def cleanup(self, pipeline_context: CodingContext) -> None:
-        """Remove cloned repo and record metrics."""
+        """Remove cloned repo, context dir, and record metrics."""
         if pipeline_context.repo_path:
             await asyncio.to_thread(shutil.rmtree, pipeline_context.repo_path, True)
+        if pipeline_context.context_dir and pipeline_context.context_dir.exists():
+            await asyncio.to_thread(shutil.rmtree, pipeline_context.context_dir, True)
         coding_tasks_total.add(1, {"outcome": pipeline_context.outcome})
         coding_tasks_duration.record(
             time.monotonic() - pipeline_context.start_time,

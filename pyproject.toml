@@ -115,4 +115,8 @@ dev = [
     "azure-data-tables==12.7.0",
     "aiohttp==3.13.5",
     "check-jsonschema==0.37.1",
+    "hypothesis==6.151.14",
+]
+fuzz = [
+    "atheris==3.0.0",
 ]

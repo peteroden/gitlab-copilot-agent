@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hmac
+import json
 import re
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from gitlab_copilot_agent.app_context import get_app_context
 from gitlab_copilot_agent.discussion_models import AgentIdentity
@@ -234,19 +236,22 @@ async def _process_discussion(
             await app_context.dedup.mark_note(payload.project.id, mr_iid, note_id)
 
 
-@router.post("/webhook", status_code=200)
+@router.post("/webhook", status_code=200, response_model=None)
 async def webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     x_gitlab_token: str | None = Header(default=None),
-) -> dict[str, str]:
+) -> dict[str, str] | JSONResponse:
     """Handle GitLab webhook events (MR and note)."""
     app_context = get_app_context(request)
     settings = app_context.settings
 
     _validate_webhook_token(x_gitlab_token, settings.gitlab_webhook_secret)
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return JSONResponse(status_code=400, content={"detail": "Invalid JSON"})
 
     # Project allowlist check
     if app_context.allowed_project_ids is not None:

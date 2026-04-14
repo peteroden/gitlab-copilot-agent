@@ -1,5 +1,6 @@
 """Integration test — full webhook → pipeline with mocked externals."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,7 +12,7 @@ from gitlab_copilot_agent.discussion_models import (
     DiscussionHistory,
     DiscussionNote,
 )
-from gitlab_copilot_agent.gitlab_client import GitLabClient, MRChange, MRCommit, MRDetails
+from gitlab_copilot_agent.gitlab_client import MRChange, MRCommit, MRDetails
 from gitlab_copilot_agent.pipeline import run_pipeline
 from gitlab_copilot_agent.review_pipeline import ReviewContext, ReviewPipeline
 from gitlab_copilot_agent.task_executor import ReviewResult
@@ -24,7 +25,8 @@ from tests.conftest import (
     MR_IID,
     MR_PAYLOAD,
     PROJECT_ID,
-    make_mr_changes,
+    make_mock_gitlab_client,
+    make_mr_details,
     make_settings,
     make_task_event,
 )
@@ -36,16 +38,10 @@ def _make_gl_client(
     mr_details_override: MRDetails | None = None,
 ) -> AsyncMock:
     """Wire up a mock GitLabClient for review pipeline tests."""
-    gl = AsyncMock(spec=GitLabClient)
-    gl.clone_repo.return_value = "/tmp/fake-repo"
-    gl.get_mr_details.return_value = mr_details_override or MRDetails(
-        title="Add feature",
-        description="Implements X",
-        diff_refs=DIFF_REFS,
-        changes=[],
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=mr_details_override or make_mr_details(changes=[]),
     )
-    gl.list_mr_discussions.return_value = []
-    gl.get_mr_commits.return_value = []
     mock_run_review.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
     return gl
 
@@ -111,8 +107,7 @@ async def test_pipeline_cleans_up_on_error(
     mock_rmtree: MagicMock,
 ) -> None:
     """Verify cleanup runs even when review raises."""
-    gl = AsyncMock(spec=GitLabClient)
-    gl.clone_repo.return_value = "/tmp/fake-repo"
+    gl = make_mock_gitlab_client(Path("/tmp/fake-repo"))
     gl.get_mr_details.side_effect = RuntimeError("SDK crashed")
 
     with pytest.raises(RuntimeError, match="SDK crashed"):
@@ -289,16 +284,11 @@ async def test_prior_feedback_rendered_in_prompt(
     mock_post_review: AsyncMock,
 ) -> None:
     """Prior agent comments flow through pipeline into the review prompt."""
-    gl = AsyncMock(spec=GitLabClient)
-    gl.clone_repo.return_value = "/tmp/fake-repo"
-    gl.get_mr_details.return_value = MRDetails(
-        title="Add feature",
-        description="Implements X",
-        diff_refs=DIFF_REFS,
-        changes=make_mr_changes(),
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=make_mr_details(),
+        discussions=_SAMPLE_DISCUSSIONS,
     )
-    gl.list_mr_discussions.return_value = _SAMPLE_DISCUSSIONS
-    gl.get_mr_commits.return_value = []
 
     mock_executor = AsyncMock()
     mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
@@ -356,16 +346,11 @@ async def test_incremental_review_with_marker(
     mock_post_review: AsyncMock,
 ) -> None:
     """Second review with SHA marker uses incremental diff via compare_commits."""
-    gl = AsyncMock(spec=GitLabClient)
-    gl.clone_repo.return_value = "/tmp/fake-repo"
-    gl.get_mr_details.return_value = MRDetails(
-        title="Add feature",
-        description="Implements X",
-        diff_refs=DIFF_REFS,
-        changes=make_mr_changes(),
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=make_mr_details(),
+        discussions=[_make_marker_discussion(_MARKER_SHA)],
     )
-    gl.list_mr_discussions.return_value = [_make_marker_discussion(_MARKER_SHA)]
-    gl.get_mr_commits.return_value = []
     gl.compare_commits.return_value = [
         MRChange(
             old_path=_INCREMENTAL_PATH,
@@ -399,16 +384,11 @@ async def test_incremental_review_compare_fails_fallback(
     mock_post_review: AsyncMock,
 ) -> None:
     """compare_commits failure falls back to full diff."""
-    gl = AsyncMock(spec=GitLabClient)
-    gl.clone_repo.return_value = "/tmp/fake-repo"
-    gl.get_mr_details.return_value = MRDetails(
-        title="Add feature",
-        description="Implements X",
-        diff_refs=DIFF_REFS,
-        changes=make_mr_changes(),
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=make_mr_details(),
+        discussions=[_make_marker_discussion(_MARKER_SHA)],
     )
-    gl.list_mr_discussions.return_value = [_make_marker_discussion(_MARKER_SHA)]
-    gl.get_mr_commits.return_value = []
     gl.compare_commits.side_effect = RuntimeError("Compare API error")
 
     mock_executor = AsyncMock()
@@ -496,16 +476,11 @@ async def test_suppressed_feedback_rendered_in_prompt(
     mock_post_review: AsyncMock,
 ) -> None:
     """Human-resolved and dismissed discussions flow through as suppressed feedback in prompt."""
-    gl = AsyncMock(spec=GitLabClient)
-    gl.clone_repo.return_value = "/tmp/fake-repo"
-    gl.get_mr_details.return_value = MRDetails(
-        title="Add feature",
-        description="Implements X",
-        diff_refs=DIFF_REFS,
-        changes=make_mr_changes(),
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=make_mr_details(),
+        discussions=[_HUMAN_RESOLVED_DISCUSSION, _DISMISSED_DISCUSSION],
     )
-    gl.list_mr_discussions.return_value = [_HUMAN_RESOLVED_DISCUSSION, _DISMISSED_DISCUSSION]
-    gl.get_mr_commits.return_value = []
 
     mock_executor = AsyncMock()
     mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
@@ -539,16 +514,11 @@ async def test_commit_messages_in_review_prompt(
     mock_post_review: AsyncMock,
 ) -> None:
     """Commit messages flow through pipeline into the review prompt."""
-    gl = AsyncMock(spec=GitLabClient)
-    gl.clone_repo.return_value = "/tmp/fake-repo"
-    gl.get_mr_details.return_value = MRDetails(
-        title="Add feature",
-        description="Implements X",
-        diff_refs=DIFF_REFS,
-        changes=make_mr_changes(),
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=make_mr_details(),
+        commits=_SAMPLE_COMMITS,
     )
-    gl.list_mr_discussions.return_value = []
-    gl.get_mr_commits.return_value = _SAMPLE_COMMITS
 
     mock_executor = AsyncMock()
     mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
@@ -569,15 +539,10 @@ async def test_commit_fetch_failure_graceful_degradation(
     mock_post_review: AsyncMock,
 ) -> None:
     """get_mr_commits failure logs warning but review proceeds without commits."""
-    gl = AsyncMock(spec=GitLabClient)
-    gl.clone_repo.return_value = "/tmp/fake-repo"
-    gl.get_mr_details.return_value = MRDetails(
-        title="Add feature",
-        description="Implements X",
-        diff_refs=DIFF_REFS,
-        changes=make_mr_changes(),
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=make_mr_details(),
     )
-    gl.list_mr_discussions.return_value = []
     gl.get_mr_commits.side_effect = RuntimeError("Commits API down")
 
     mock_executor = AsyncMock()

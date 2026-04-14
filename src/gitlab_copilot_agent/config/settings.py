@@ -54,11 +54,34 @@ class Settings(  # pyright: ignore[reportIncompatibleVariableOverride]
 
     # Prompt delivery strategy
     prompt_strategy: Literal["inline", "file-based"] = Field(
-        default="inline",
+        default="file-based",
         description=(
-            "How to deliver context to the LLM: 'inline' (current behavior) "
-            "or 'file-based' (diff via git, context as files — future)"
+            "How to deliver context to the LLM: 'file-based' (default, diff via git, "
+            "context as files) or 'inline' (all content inlined in prompt)"
         ),
+    )
+
+    # Merge behavior
+    auto_merge_enabled: bool = Field(
+        default=False,
+        description="When False (default), coding tasks create Draft MRs requiring "
+        "manual un-draft before merge. When True, creates ready MRs.",
+    )
+
+    # Ingress security
+    webhook_ip_allowlist: str = Field(
+        default="",
+        description="Comma-separated CIDR ranges allowed to send webhooks. Empty = allow all.",
+    )
+    trusted_proxies: str = Field(
+        default="",
+        description="Comma-separated CIDR ranges of trusted reverse proxies "
+        "for X-Forwarded-For parsing",
+    )
+    admin_token: str | None = Field(
+        default=None,
+        description="Separate admin token for /config/reload. "
+        "When unset, falls back to gitlab_webhook_secret.",
     )
 
     # Server

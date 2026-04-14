@@ -12,11 +12,11 @@ from gitlab_copilot_agent.prompt_defaults import get_prompt
 from gitlab_copilot_agent.review_engine import (
     MAX_COMMIT_CHARS,
     ReviewRequest,
-    _format_prior_feedback,
-    _format_suppressed_feedback,
     _is_dismissed,
     _is_human_resolved,
     build_review_prompt,
+    format_prior_feedback,
+    format_suppressed_feedback,
     run_review,
 )
 from gitlab_copilot_agent.task_executor import ReviewResult
@@ -163,7 +163,7 @@ async def test_run_review_forwards_discussion_history() -> None:
     mock_executor.execute.assert_awaited_once()
 
 
-# -- _format_prior_feedback unit tests --
+# -- format_prior_feedback unit tests --
 
 
 def test_format_prior_feedback_groups_by_file() -> None:
@@ -176,7 +176,7 @@ def test_format_prior_feedback_groups_by_file() -> None:
     discussions = [_make_discussion(discussion_id=f"d{i}", notes=[n]) for i, n in enumerate(notes)]
     history = _make_history(discussions=discussions)
 
-    result = _format_prior_feedback(history)
+    result = format_prior_feedback(history)
 
     # File a.py appears before b.py (sorted)
     assert result.index("src/a.py") < result.index("src/b.py")
@@ -193,7 +193,7 @@ def test_format_prior_feedback_excludes_resolved() -> None:
     disc = _make_discussion(notes=[note], is_resolved=True)
     history = _make_history(discussions=[disc])
 
-    assert _format_prior_feedback(history) == ""
+    assert format_prior_feedback(history) == ""
 
 
 def test_format_prior_feedback_excludes_human_comments() -> None:
@@ -202,7 +202,7 @@ def test_format_prior_feedback_excludes_human_comments() -> None:
     disc = _make_discussion(notes=[note])
     history = _make_history(discussions=[disc])
 
-    assert _format_prior_feedback(history) == ""
+    assert format_prior_feedback(history) == ""
 
 
 def test_format_prior_feedback_excludes_overview_notes() -> None:
@@ -211,7 +211,7 @@ def test_format_prior_feedback_excludes_overview_notes() -> None:
     disc = _make_discussion(notes=[note], is_inline=False)
     history = _make_history(discussions=[disc])
 
-    assert _format_prior_feedback(history) == ""
+    assert format_prior_feedback(history) == ""
 
 
 def test_format_prior_feedback_strips_severity_prefix() -> None:
@@ -220,7 +220,7 @@ def test_format_prior_feedback_strips_severity_prefix() -> None:
     disc = _make_discussion(notes=[note])
     history = _make_history(discussions=[disc])
 
-    result = _format_prior_feedback(history)
+    result = format_prior_feedback(history)
 
     assert "Consider error handling" in result
     assert "**[WARNING]**" not in result
@@ -233,7 +233,7 @@ def test_format_prior_feedback_strips_suggestion_blocks() -> None:
     disc = _make_discussion(notes=[note])
     history = _make_history(discussions=[disc])
 
-    result = _format_prior_feedback(history)
+    result = format_prior_feedback(history)
 
     assert "Fix the return type" in result
     assert "```suggestion" not in result
@@ -244,7 +244,7 @@ def test_format_prior_feedback_empty_history() -> None:
     """Empty discussions list produces no output."""
     history = _make_history(discussions=[])
 
-    assert _format_prior_feedback(history) == ""
+    assert format_prior_feedback(history) == ""
 
 
 # -- build_review_prompt integration tests --
@@ -295,7 +295,7 @@ def test_format_prior_feedback_skips_none_new_path() -> None:
     disc = _make_discussion(notes=[patched_note])
     history = _make_history(discussions=[disc])
 
-    assert _format_prior_feedback(history) == ""
+    assert format_prior_feedback(history) == ""
 
 
 def test_format_prior_feedback_handles_non_numeric_line() -> None:
@@ -307,7 +307,7 @@ def test_format_prior_feedback_handles_non_numeric_line() -> None:
     disc = _make_discussion(notes=[patched_note])
     history = _make_history(discussions=[disc])
 
-    result = _format_prior_feedback(history)
+    result = format_prior_feedback(history)
 
     assert "General:" in result
     assert "Consider error handling" in result
@@ -329,7 +329,7 @@ def test_format_prior_feedback_skips_null_position() -> None:
     disc = _make_discussion(notes=[note])
     history = _make_history(discussions=[disc])
 
-    assert _format_prior_feedback(history) == ""
+    assert format_prior_feedback(history) == ""
 
 
 # -- Discussion ID and resolution eval instruction tests --
@@ -341,7 +341,7 @@ def test_prior_feedback_includes_discussion_id() -> None:
     disc = _make_discussion(discussion_id="disc-tag-test", notes=[note])
     history = _make_history(discussions=[disc])
 
-    result = _format_prior_feedback(history)
+    result = format_prior_feedback(history)
 
     assert "[discussion: disc-tag-test]" in result
     assert "Consider error handling" in result
@@ -421,7 +421,7 @@ def test_prior_feedback_outdated_annotation() -> None:
     disc = _make_discussion(notes=[patched_note])
     history = _make_history(discussions=[disc])
 
-    result = _format_prior_feedback(history, current_head_sha=CURRENT_HEAD_SHA)
+    result = format_prior_feedback(history, current_head_sha=CURRENT_HEAD_SHA)
 
     assert OUTDATED_ANNOTATION in result
 
@@ -435,7 +435,7 @@ def test_prior_feedback_current_no_annotation() -> None:
     disc = _make_discussion(notes=[patched_note])
     history = _make_history(discussions=[disc])
 
-    result = _format_prior_feedback(history, current_head_sha=CURRENT_HEAD_SHA)
+    result = format_prior_feedback(history, current_head_sha=CURRENT_HEAD_SHA)
 
     assert OUTDATED_ANNOTATION not in result
     assert "Consider error handling" in result
@@ -598,7 +598,7 @@ def test_is_dismissed_matches_all_patterns() -> None:
         assert _is_dismissed(disc, AGENT_USER_ID) is True, f"Failed for: {phrase}"
 
 
-# -- _format_suppressed_feedback tests --
+# -- format_suppressed_feedback tests --
 
 
 def test_format_suppressed_feedback_human_resolved() -> None:
@@ -610,7 +610,7 @@ def test_format_suppressed_feedback_human_resolved() -> None:
     disc = _make_discussion(notes=[patched], is_resolved=True)
     history = _make_history(discussions=[disc])
 
-    result = _format_suppressed_feedback(history)
+    result = format_suppressed_feedback(history)
 
     assert "## Suppressed Feedback (Do Not Re-Raise)" in result
     assert "[MANUALLY RESOLVED]" in result
@@ -634,7 +634,7 @@ def test_format_suppressed_feedback_dismissed() -> None:
     disc = _make_discussion(notes=[agent_note, human_reply], is_resolved=False)
     history = _make_history(discussions=[disc])
 
-    result = _format_suppressed_feedback(history)
+    result = format_suppressed_feedback(history)
 
     assert "## Suppressed Feedback (Do Not Re-Raise)" in result
     assert "[DISMISSED]" in result
@@ -646,7 +646,7 @@ def test_format_suppressed_feedback_empty_when_no_items() -> None:
     disc = _make_discussion(notes=[note], is_resolved=False)
     history = _make_history(discussions=[disc])
 
-    result = _format_suppressed_feedback(history)
+    result = format_suppressed_feedback(history)
 
     assert result == ""
 
@@ -660,7 +660,7 @@ def test_format_suppressed_feedback_skips_non_inline() -> None:
     disc = _make_discussion(notes=[patched], is_resolved=True, is_inline=False)
     history = _make_history(discussions=[disc])
 
-    result = _format_suppressed_feedback(history)
+    result = format_suppressed_feedback(history)
 
     assert result == ""
 
@@ -674,7 +674,7 @@ def test_format_suppressed_feedback_skips_human_authored() -> None:
     disc = _make_discussion(notes=[patched], is_resolved=True)
     history = _make_history(discussions=[disc])
 
-    result = _format_suppressed_feedback(history)
+    result = format_suppressed_feedback(history)
 
     assert result == ""
 
@@ -688,7 +688,7 @@ def test_format_suppressed_feedback_includes_rules() -> None:
     disc = _make_discussion(notes=[patched], is_resolved=True)
     history = _make_history(discussions=[disc])
 
-    result = _format_suppressed_feedback(history)
+    result = format_suppressed_feedback(history)
 
     assert "Do NOT re-raise" in result
     assert "respect the developer's decision" in result
