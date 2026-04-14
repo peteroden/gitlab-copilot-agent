@@ -3,18 +3,23 @@
 import asyncio
 import glob
 import hmac
+import ipaddress
 import os
 import shutil
 import sys
 import tempfile
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 import structlog
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import ValidationError
+from starlette.responses import Response
 
 from gitlab_copilot_agent.app_context import AppContext
 from gitlab_copilot_agent.coding_pipeline import CodingTaskRunner
@@ -45,6 +50,64 @@ from gitlab_copilot_agent.telemetry import (
 configure_logging()
 
 log = structlog.get_logger()
+
+# -- Ingress security constants --
+ALLOWED_PATHS = frozenset({"/webhook", "/health", "/config/reload"})
+MAX_BODY_SIZE = 10 * 1024 * 1024  # 10 MB
+_RELOAD_COOLDOWN = 10  # seconds
+_reload_timestamps: dict[str, float] = {}
+
+# Type alias for pre-parsed network objects
+_IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+
+def _parse_cidrs(raw: str) -> list[_IPNetwork]:
+    """Parse comma-separated CIDR strings into IP network objects."""
+    networks: list[_IPNetwork] = []
+    for entry in raw.split(","):
+        stripped = entry.strip()
+        if stripped:
+            networks.append(ipaddress.ip_network(stripped, strict=False))
+    return networks
+
+
+def _get_client_ip(
+    request: Request,
+    trusted_proxies: list[_IPNetwork],
+) -> str:
+    """Extract real client IP, trusting X-Forwarded-For only from trusted proxies.
+
+    Uses rightmost-non-trusted-proxy algorithm per RFC 7239.
+    """
+    client_host = request.client.host if request.client else "unknown"
+    if not trusted_proxies:
+        return client_host
+
+    try:
+        client_addr = ipaddress.ip_address(client_host)
+    except ValueError:
+        return client_host
+
+    # Only trust XFF if direct connection is from a trusted proxy
+    if not any(client_addr in net for net in trusted_proxies):
+        return client_host
+
+    xff = request.headers.get("x-forwarded-for", "")
+    if not xff:
+        return client_host
+
+    # Walk from rightmost to leftmost, return first non-trusted IP
+    parts = [p.strip() for p in xff.split(",")]
+    for part in reversed(parts):
+        try:
+            addr = ipaddress.ip_address(part)
+        except ValueError:
+            continue
+        if not any(addr in net for net in trusted_proxies):
+            return str(addr)
+
+    # All XFF entries are trusted — use direct connection
+    return client_host
 
 
 def _cleanup_stale_repos(clone_dir: str | None = None) -> None:
@@ -121,6 +184,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sys.exit(1)
     _cleanup_stale_repos(settings.clone_dir)
     executor = _create_executor(settings.task_executor, settings)
+
+    # Pre-compute IP network objects for middleware (avoid per-request parsing)
+    app.state.webhook_ip_allowlist = _parse_cidrs(settings.webhook_ip_allowlist)
+    app.state.trusted_proxies = _parse_cidrs(settings.trusted_proxies)
 
     # Resolve project allowlist
     allowed_project_ids: set[int] | None = None
@@ -269,8 +336,103 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
 
-app = FastAPI(title="GitLab Copilot Agent", lifespan=lifespan)
+_is_development = os.environ.get("ENVIRONMENT") == "development"
+app = FastAPI(
+    title="GitLab Copilot Agent",
+    lifespan=lifespan,
+    docs_url="/docs" if _is_development else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if _is_development else None,
+)
 app.include_router(webhook_router)
+
+
+# -- Middleware (LIFO: last registered = first executed on request) --
+
+
+@app.middleware("http")
+async def ip_allowlist_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Reject webhook requests from IPs outside the allowlist.
+
+    Only active when webhook_ip_allowlist is non-empty.
+    Non-webhook paths are always allowed through.
+    """
+    if request.url.path != "/webhook":
+        return await call_next(request)
+
+    allowlist: list[_IPNetwork] = getattr(request.app.state, "webhook_ip_allowlist", [])
+    if not allowlist:
+        return await call_next(request)
+
+    trusted: list[_IPNetwork] = getattr(request.app.state, "trusted_proxies", [])
+    client_ip = _get_client_ip(request, trusted)
+
+    try:
+        addr = ipaddress.ip_address(client_ip)
+    except ValueError:
+        log.warning("webhook_ip_rejected", client_ip=client_ip, reason="invalid_ip")
+        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+
+    if not any(addr in net for net in allowlist):
+        log.warning("webhook_ip_rejected", client_ip=client_ip)
+        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def restrict_paths(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Return 404 for paths not in the allowed set."""
+    if request.url.path not in ALLOWED_PATHS:
+        log.warning("path_rejected", path=request.url.path)
+        return JSONResponse(status_code=404, content={"detail": "Not found"})
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def limit_body_size(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Reject request bodies exceeding MAX_BODY_SIZE.
+
+    Checks Content-Length header first (fast path), then wraps the ASGI
+    receive callable to count bytes for chunked transfer encoding.
+    """
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_BODY_SIZE:
+                log.warning(
+                    "body_size_rejected",
+                    content_length=int(content_length),
+                    max=MAX_BODY_SIZE,
+                )
+                return JSONResponse(status_code=413, content={"detail": "Request body too large"})
+        except ValueError:
+            pass  # malformed header — fall through to streaming check
+
+    # Streaming byte counter for chunked encoding
+    received = 0
+    original_receive = request._receive  # type: ignore[reportPrivateUsage]  # noqa: SLF001
+
+    async def counting_receive() -> Any:
+        nonlocal received
+        message = await original_receive()
+        body = message.get("body", b"")
+        received += len(body)
+        if received > MAX_BODY_SIZE:
+            log.warning("body_size_rejected", received=received, max=MAX_BODY_SIZE)
+            raise HTTPException(status_code=413, detail="Request body too large")
+        return message
+
+    request._receive = counting_receive  # type: ignore[reportPrivateUsage]  # noqa: SLF001
+    return await call_next(request)
+
+
 FastAPIInstrumentor.instrument_app(app)
 
 
@@ -284,23 +446,51 @@ async def health() -> dict[str, object]:
     return result
 
 
-@app.post("/config/reload")
+@app.post("/config/reload", response_model=None)
 async def config_reload(
     body: RenderedMap,
     request: Request,
-) -> dict[str, object]:
+) -> dict[str, object] | JSONResponse:
     """Reload the Jira project registry without restarting.
 
-    Requires the same webhook secret used for GitLab webhook auth.
+    Requires X-Admin-Token when admin_token is configured,
+    otherwise falls back to X-Gitlab-Token (webhook secret).
+    Rate-limited to one request per client IP every 10 seconds.
     """
     app_context: AppContext = request.app.state.app_context
     settings = app_context.settings
-    secret = settings.gitlab_webhook_secret
-    received = request.headers.get("X-Gitlab-Token")
-    if secret is None:
-        raise HTTPException(status_code=403, detail="Webhook secret not configured")
-    if received is None or not hmac.compare_digest(received, secret):
-        raise HTTPException(status_code=401, detail="Invalid token")
+
+    # Extract client IP early for logging
+    trusted: list[_IPNetwork] = getattr(request.app.state, "trusted_proxies", [])
+    client_ip = _get_client_ip(request, trusted)
+
+    # -- Admin auth (Step 3.4) --
+    if settings.admin_token:
+        received = request.headers.get("X-Admin-Token")
+        if received is None or not hmac.compare_digest(received, settings.admin_token):
+            log.warning("admin_auth_failed", client_ip=client_ip)
+            raise HTTPException(status_code=401, detail="Invalid admin token")
+    else:
+        secret = settings.gitlab_webhook_secret
+        if secret is None:
+            raise HTTPException(status_code=403, detail="Webhook secret not configured")
+        received = request.headers.get("X-Gitlab-Token")
+        if received is None or not hmac.compare_digest(received, secret):
+            log.warning("admin_auth_failed", client_ip=client_ip)
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+    # -- Rate limiting (Step 3.3) --
+    now = time.monotonic()
+    last = _reload_timestamps.get(client_ip, 0.0)
+    if now - last < _RELOAD_COOLDOWN:
+        retry_after = int(_RELOAD_COOLDOWN - (now - last)) + 1
+        log.warning("rate_limited", client_ip=client_ip, endpoint="/config/reload")
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limited"},
+            headers={"Retry-After": str(retry_after)},
+        )
+    _reload_timestamps[client_ip] = now
 
     poller: JiraPoller | None = app.state.jira_poller
     if poller is None:

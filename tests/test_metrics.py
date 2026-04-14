@@ -1,6 +1,7 @@
 """Tests for OTel metrics recording paths — unit and integration."""
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,7 +11,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from gitlab_copilot_agent import metrics as app_metrics
-from gitlab_copilot_agent.gitlab_client import GitLabClient, MRDetails
+from gitlab_copilot_agent.gitlab_client import MRDetails
 from gitlab_copilot_agent.pipeline import run_pipeline
 from gitlab_copilot_agent.review_pipeline import ReviewContext, ReviewPipeline
 from gitlab_copilot_agent.task_executor import ReviewResult, TaskExecutionError
@@ -19,6 +20,7 @@ from tests.conftest import (
     FAKE_REVIEW_OUTPUT,
     HEADERS,
     MR_PAYLOAD,
+    make_mock_gitlab_client,
     make_settings,
     make_task_event,
 )
@@ -113,16 +115,12 @@ def _make_mock_gl_client(
     mr_details_side_effect: Exception | None = None,
 ) -> AsyncMock:
     """Wire up a mock GitLabClient for review pipeline tests."""
-    gl = AsyncMock(spec=GitLabClient)
-    gl.clone_repo.return_value = "/tmp/fake-repo"
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=MRDetails(title="t", description=None, diff_refs=DIFF_REFS, changes=[]),
+    )
     if mr_details_side_effect:
         gl.get_mr_details.side_effect = mr_details_side_effect
-    else:
-        gl.get_mr_details.return_value = MRDetails(
-            title="t", description=None, diff_refs=DIFF_REFS, changes=[]
-        )
-    gl.list_mr_discussions.return_value = []
-    gl.get_mr_commits.return_value = []
     mock_run_review.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
     return gl
 
@@ -188,13 +186,10 @@ async def test_review_pipeline_records_error_metrics(
 async def test_review_task_execution_failure_posts_comment_without_raising(
     mock_run_review: AsyncMock,
 ) -> None:
-    gl = AsyncMock(spec=GitLabClient)
-    gl.clone_repo.return_value = "/tmp/fake-repo"
-    gl.get_mr_details.return_value = MRDetails(
-        title="t", description=None, diff_refs=DIFF_REFS, changes=[]
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=MRDetails(title="t", description=None, diff_refs=DIFF_REFS, changes=[]),
     )
-    gl.list_mr_discussions.return_value = []
-    gl.get_mr_commits.return_value = []
     mock_run_review.side_effect = TaskExecutionError("Task failed: runner error")
 
     with pytest.raises(TaskExecutionError, match="runner error"):

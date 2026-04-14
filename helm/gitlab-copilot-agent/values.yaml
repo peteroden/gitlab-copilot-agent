@@ -53,6 +53,11 @@ jira:
 extraEnv: {}
   # Tunable env vars via extraEnv:
   #   QUEUE_VISIBILITY_BUFFER: "60"  # seconds added to job timeout for queue message visibility (default: 60)
+  #   PROMPT_STRATEGY: "file-based"  # "file-based" (default) or "inline"
+  #   AUTO_MERGE_ENABLED: "false"    # "true" to create ready MRs instead of Draft
+  #   ADMIN_TOKEN: ""                # separate auth for /config/reload (falls back to webhook secret)
+  #   WEBHOOK_IP_ALLOWLIST: ""       # comma-separated CIDRs (empty = allow all)
+  #   TRUSTED_PROXIES: ""            # comma-separated proxy CIDRs for X-Forwarded-For
 clusterDomain: cluster.local
 hostAliases: []
 networkPolicies:

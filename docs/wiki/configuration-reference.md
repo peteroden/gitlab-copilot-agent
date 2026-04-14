@@ -195,6 +195,26 @@ At least one of these must be set:
 - **Default**: `None` (uses system temp dir)
 - **Description**: Base directory for repo clones (useful for persistent volumes)
 
+### `AUTO_MERGE_ENABLED`
+- **Type**: `bool`
+- **Required**: ❌ No
+- **Default**: `false`
+- **Description**: When `false` (default), coding tasks create Draft MRs that require manual un-drafting before merge. When `true`, MRs are created as ready-to-merge.
+
+### `ADMIN_TOKEN`
+- **Type**: `str | None`
+- **Required**: ❌ No
+- **Default**: `None`
+- **Description**: Separate authentication token for the `/config/reload` endpoint. When set, the endpoint requires an `X-Admin-Token` header matching this value. When not set, falls back to `X-Gitlab-Token` (webhook secret) for backward compatibility.
+- **Security**: Generate with `openssl rand -hex 32`. Use a unique value distinct from `GITLAB_WEBHOOK_SECRET` — separating these tokens limits blast radius if either is leaked.
+
+### `PROMPT_STRATEGY`
+- **Type**: `str`
+- **Required**: ❌ No
+- **Default**: `"file-based"`
+- **Options**: `"inline"`, `"file-based"`
+- **Description**: Controls how MR context (diff, description, discussions) is passed to the LLM. `"file-based"` (default) writes context to files and instructs the agent to read them via filesystem access + `git diff`, producing shorter prompts. `"inline"` embeds all context directly in the prompt for backward compatibility.
+
 ---
 
 ## Task Execution
