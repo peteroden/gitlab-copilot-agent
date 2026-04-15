@@ -4,14 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from gitlab_copilot_agent.git_operations import (
-    TransientCloneError,
-    _is_transient_clone_error,
-    _sanitize_url_for_log,
-    _validate_clone_url,
-    git_commit,
-    git_create_branch,
-    git_push,
+from gitlab_copilot_agent.git.clone import TransientCloneError
+from gitlab_copilot_agent.git.operations import git_commit, git_create_branch, git_push
+from gitlab_copilot_agent.git.validation import (
+    is_transient_clone_error as _is_transient_clone_error,
+)
+from gitlab_copilot_agent.git.validation import (
+    sanitize_url_for_log as _sanitize_url_for_log,
+)
+from gitlab_copilot_agent.git.validation import (
+    validate_clone_url as _validate_clone_url,
 )
 from tests.conftest import GITLAB_TOKEN
 
@@ -142,7 +144,7 @@ class TestGitPush:
 
 class TestRunGitTimeout:
     async def test_timeout_raises_runtime_error(self, work_repo: Path) -> None:
-        from gitlab_copilot_agent.git_operations import _run_git
+        from gitlab_copilot_agent.git.operations import _run_git
 
         # Use a git command that takes time — hash-object with stdin that never closes
         with pytest.raises(RuntimeError, match="timed out"):
@@ -156,7 +158,7 @@ class TestGitClone:
         """Clone should validate URL and return a path."""
         from unittest.mock import AsyncMock, patch
 
-        from gitlab_copilot_agent.git_operations import git_clone
+        from gitlab_copilot_agent.git import git_clone
 
         mock_proc = AsyncMock()
         mock_proc.communicate.return_value = (b"", b"")
@@ -187,7 +189,7 @@ class TestGitClone:
         """Clone directory should be removed when clone fails."""
         import tempfile
 
-        from gitlab_copilot_agent.git_operations import git_clone
+        from gitlab_copilot_agent.git import git_clone
 
         temp_dir = tempfile.gettempdir()
         before = set(Path(temp_dir).glob("mr-review-*"))
@@ -202,7 +204,7 @@ class TestGitClone:
         """Token must not appear in clone error messages."""
         from unittest.mock import AsyncMock, patch
 
-        from gitlab_copilot_agent.git_operations import git_clone
+        from gitlab_copilot_agent.git import git_clone
 
         secret = "glpat-super-secret"
         mock_proc = AsyncMock()
@@ -223,14 +225,14 @@ class TestGitClone:
 
     async def test_rejects_url_with_embedded_credentials(self) -> None:
         """Clone should reject URLs with embedded credentials."""
-        from gitlab_copilot_agent.git_operations import git_clone
+        from gitlab_copilot_agent.git import git_clone
 
         with pytest.raises(ValueError, match="must not contain embedded credentials"):
             await git_clone("https://oauth2:token@gitlab.com/project.git", "main", "fake-token")
 
     async def test_rejects_http_url(self) -> None:
         """Clone should reject non-HTTPS URLs."""
-        from gitlab_copilot_agent.git_operations import git_clone
+        from gitlab_copilot_agent.git import git_clone
 
         with pytest.raises(ValueError, match="must use HTTPS scheme"):
             await git_clone("http://gitlab.com/project.git", "main", "fake-token")
@@ -373,7 +375,7 @@ class TestGitCloneRetry:
         """Clone should retry on transient errors and succeed when resolved."""
         from unittest.mock import AsyncMock, patch
 
-        from gitlab_copilot_agent.git_operations import git_clone
+        from gitlab_copilot_agent.git import git_clone
 
         call_count = 0
 
@@ -419,7 +421,7 @@ class TestGitCloneRetry:
         """After max retries, TransientCloneError should be raised."""
         from unittest.mock import AsyncMock, patch
 
-        from gitlab_copilot_agent.git_operations import git_clone
+        from gitlab_copilot_agent.git import git_clone
 
         mock_proc = AsyncMock()
         mock_proc.communicate.return_value = (
@@ -447,7 +449,7 @@ class TestGitCloneRetry:
         """Non-transient errors should fail immediately without retry."""
         from unittest.mock import AsyncMock, patch
 
-        from gitlab_copilot_agent.git_operations import git_clone
+        from gitlab_copilot_agent.git import git_clone
 
         mock_proc = AsyncMock()
         mock_proc.communicate.return_value = (
@@ -479,7 +481,7 @@ class TestTarRepoToBytes:
         import io
         import tarfile
 
-        from gitlab_copilot_agent.git_operations import tar_repo_to_bytes
+        from gitlab_copilot_agent.git import tar_repo_to_bytes
 
         (tmp_path / "file.txt").write_text("hello")
         (tmp_path / "sub").mkdir()
@@ -499,7 +501,7 @@ class TestTarRepoToBytes:
         import io
         import tarfile
 
-        from gitlab_copilot_agent.git_operations import tar_repo_to_bytes
+        from gitlab_copilot_agent.git import tar_repo_to_bytes
 
         git_dir = tmp_path / ".git"
         git_dir.mkdir()
@@ -521,7 +523,7 @@ class TestExtractRepoTarball:
 
     async def test_round_trip(self, tmp_path: Path) -> None:
         """Tar then extract preserves file content."""
-        from gitlab_copilot_agent.git_operations import (
+        from gitlab_copilot_agent.git import (
             extract_repo_tarball,
             tar_repo_to_bytes,
         )

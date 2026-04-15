@@ -24,7 +24,7 @@ async with repo_locks.acquire(git_http_url):
 ```
 
 **Implementations**:
-- `MemoryLock` (`concurrency.py`): In-process asyncio locks with LRU eviction (created via `state.create_lock()`)
+- `MemoryLock` (`concurrency/memory.py`): In-process asyncio locks with LRU eviction (created via `state.create_lock()`)
 
 ---
 
@@ -122,15 +122,15 @@ async def acquire(self, key: str, ttl_seconds: int = 300) -> AsyncIterator[None]
 **Lock Key**: `git_http_url` (e.g., `https://gitlab.com/group/project.git`)
 
 **Operations Locked**:
-1. **MR @mention interaction** (`discussion_orchestrator.py`):
+1. **MR @mention interaction** (`discussion_pipeline.py`):
    - Clone → code → commit → push
    - Prevents concurrent pushes to same branch
-2. **Jira coding task** (`coding_orchestrator.py`):
+2. **Jira coding task** (`coding_pipeline.py`):
    - Clone → branch → code → commit → push → create MR
    - Prevents concurrent branch creation
 
 **Not Locked**:
-- **MR review** (`orchestrator.py`): Read-only operation (clone, no push)
+- **MR review** (`review_pipeline.py`): Read-only operation (clone, no push)
 - **GitLab poller**: Uses dedup store instead (no write operations per se)
 
 **Rationale**: Git operations on same repo must be serialized to avoid:
@@ -161,7 +161,7 @@ await dedup.mark_seen(key, ttl_seconds=86400)
 ```
 
 **Implementations**:
-- `MemoryDedup` (`concurrency.py`): In-process set with size-based eviction (created via `state.create_dedup()`)
+- `MemoryDedup` (`concurrency/memory.py`): In-process set with size-based eviction (created via `state.create_dedup()`)
 
 ---
 
@@ -213,20 +213,20 @@ await dedup.mark_seen(key, ttl_seconds=86400)
 **Key**: `review:{project_id}:{mr_iid}:{head_sha}`
 
 **TTL**: 
-- Webhook: None (uses `ReviewedMRTracker` in-memory)
+- Webhook: 86400s (24 hours, via `DeduplicationService.mark_review()`)
 - Poller: 86400s (24 hours)
 
 **Purpose**: Prevent duplicate reviews on same commit.
 
 **Tracked By**:
-- **Webhook**: `ReviewedMRTracker` (in-memory, per-pod)
-  - Tuple: `(project_id, mr_iid, head_sha)`
-  - Marked after successful review in `_process_review()`
+- **Webhook**: `DeduplicationService.is_review_seen()` / `mark_review()` (backed by `DeduplicationStore`)
+  - Key: `review:{project_id}:{mr_iid}:{head_sha}`
+  - Checked before dispatching `_process_review()`, marked after success
 - **Poller**: `DeduplicationStore` (memory or Redis)
   - Marked in `gitlab_poller.py` → `_process_mr()`
 
 **Race Condition**: 
-- **Webhook**: Multiple pods receive same webhook → each pod checks own `ReviewedMRTracker` → duplicate reviews possible
+- **Webhook**: Multiple pods receive same webhook → each pod checks own `DeduplicationService` → duplicate reviews possible without shared dedup store
 - **Poller**: Single poller instance → no race (watermark ensures MRs processed once per cycle)
 
 **Mitigation**: Use Redis dedup store for webhook in multi-pod setup.
@@ -249,15 +249,15 @@ await dedup.mark_seen(key, ttl_seconds=86400)
 
 ### 3. Jira Issues (Poller Only)
 
-**Key**: `issue.key` (e.g., `"PROJ-123"`)
+**Key**: `issue:{issue_key}` (e.g., `"issue:PROJ-123"`)
 
-**TTL**: Session lifetime (in-memory `ProcessedIssueTracker`)
+**TTL**: 86400s (24 hours, via `DeduplicationService.mark_issue()`)
 
 **Purpose**: Prevent re-processing same issue in a single poller run.
 
-**Tracked By**: `ProcessedIssueTracker` in `jira_poller.py`
+**Tracked By**: `DeduplicationService.is_issue_seen()` / `mark_issue()` in `jira_poller.py`
 
-**Persistence**: Cleared on service restart (allows re-processing after restart).
+**Persistence**: Backed by `DeduplicationStore` (cleared on service restart for memory backend).
 
 ---
 
@@ -271,51 +271,35 @@ await dedup.mark_seen(key, ttl_seconds=86400)
 
 **Mechanism**:
 1. After each review, the SHA marker is embedded in the summary note via `comment_poster.py`
-2. On subsequent reviews, `orchestrator.py` calls `extract_last_reviewed_sha()` to find the marker
+2. On subsequent reviews, `review_pipeline.py` calls `extract_last_reviewed_sha()` to find the marker
 3. If found, the Compare API computes the diff between the marker SHA and current head SHA
 4. If not found (first review, deploy, or failed post), falls back to full MR diff
 
 **Self-Healing**: Absent marker → full review (correct behavior for first review or post-deploy).
 
-**Not a Dedup Mechanism**: The SHA marker does not prevent duplicate reviews — that's handled by `ReviewedMRTracker` and `DeduplicationStore`. The marker only controls diff scope.
+**Not a Dedup Mechanism**: The SHA marker does not prevent duplicate reviews — that's handled by `DeduplicationService` and `DeduplicationStore`. The marker only controls diff scope.
 
 See ADR-0009 for the design decision.
 
 ---
 
-## ReviewedMRTracker
+## DeduplicationService
 
-**Purpose**: In-memory tracker for reviewed (project_id, mr_iid, head_sha) tuples.
+**Purpose**: Unified deduplication service that consolidates all dedup logic into a single interface (`dedup.py`). Replaces the former `ReviewedMRTracker` and `ProcessedIssueTracker` classes.
 
-**Data Structure**: `OrderedDict[tuple[int, int, str], None]`
+**Backed By**: `DeduplicationStore` (same protocol used for poller dedup)
 
-**Behavior**:
-1. `is_reviewed(project_id, mr_iid, head_sha)`: Check if tuple in dict
-2. `mark(project_id, mr_iid, head_sha)`: Add tuple, evict if needed
-3. Eviction: Same as `MemoryDedup` (oldest 50% when exceeds `max_size`)
+**Methods**:
+1. `is_review_seen(project_id, mr_iid, head_sha)`: Check if MR review already processed
+2. `mark_review(project_id, mr_iid, head_sha)`: Mark MR review as processed
+3. `is_note_seen(project_id, mr_iid, note_id)`: Check if note already processed
+4. `mark_note(project_id, mr_iid, note_id)`: Mark note as processed
+5. `is_issue_seen(issue_key)`: Check if Jira issue already processed
+6. `mark_issue(issue_key)`: Mark Jira issue as processed
 
-**Usage**: `webhook.py` → checks before dispatching `_process_review()`, marks after success.
+**Usage**: `gitlab_webhook.py` checks `dedup.is_review_seen()` before dispatching `_process_review()`, marks after success. `jira_poller.py` checks `dedup.is_issue_seen()` before dispatching coding tasks.
 
-**Why Separate from DeduplicationStore?**
-- Per-pod state (each pod tracks its own processed MRs)
-- Cleared on restart (allows re-review after pod restart)
-- Fast lookup (no Redis roundtrip)
-
-**Multi-Pod Caveat**: In multi-pod setup, different pods don't share state → duplicate reviews possible if same webhook delivered to multiple pods.
-
----
-
-## ProcessedIssueTracker
-
-**Purpose**: In-memory tracker for processed Jira issue keys.
-
-**Data Structure**: `OrderedDict[str, None]`
-
-**Behavior**: Same as `MemoryDedup`.
-
-**Usage**: `jira_poller.py` → checks before dispatching `CodingOrchestrator.handle()`, marks after success.
-
-**Persistence**: Cleared on restart (allows re-processing issues after restart).
+**Advantage Over Previous Design**: Single service backed by `DeduplicationStore`, enabling consistent behavior across memory and distributed backends. No separate per-pod trackers.
 
 ---
 
@@ -372,7 +356,7 @@ Pod A: acquire lock → clone → code → commit → push → release
 Pod B: wait for lock ────────────────────────────────┘→ clone → ...
 ```
 
-**Code**: `discussion_orchestrator.py`, `coding_orchestrator.py` both use `repo_locks.acquire()`.
+**Code**: `discussion_pipeline.py`, `coding_pipeline.py` both use `repo_locks.acquire()`.
 
 ---
 
@@ -415,7 +399,7 @@ Pod B: receive webhook → check dedup (hit) → skip
 
 **Code**: `gitlab_poller.py` uses `DeduplicationStore`.
 
-**Webhook Handler**: Uses `ReviewedMRTracker` (per-pod, not shared) → duplicates possible in multi-pod without Redis.
+**Webhook Handler**: Uses `DeduplicationService` (backed by `DeduplicationStore`) → duplicates possible in multi-pod without shared dedup backend.
 
 ---
 
@@ -497,9 +481,7 @@ Lock and dedup use in-memory implementations (single-controller deployment). Res
 
 **MemoryDedup**: All dedup state lost (potential duplicates).
 
-**ReviewedMRTracker**: Cleared (allows re-review).
-
-**ProcessedIssueTracker**: Cleared (allows re-processing Jira issues).
+**DeduplicationService**: Cleared (allows re-review and re-processing after restart with memory backend).
 
 **RedisLock**: All locks lost (released on disconnect).
 
@@ -518,8 +500,8 @@ Lock and dedup use in-memory implementations (single-controller deployment). Res
 **Logs**:
 - `repo_lock_eviction`: MemoryLock evicted entries (count, max_size, current_size)
 - `dedup_store_eviction`: MemoryDedup evicted entries (count, max_size, current_size)
-- `processed_issue_eviction`: ProcessedIssueTracker evicted entries
-- `reviewed_mr_eviction`: ReviewedMRTracker evicted entries
+- `processed_issue_eviction`: DeduplicationService evicted entries (issues)
+- `reviewed_mr_eviction`: DeduplicationService evicted entries (reviews)
 - `lock_renewal_failed`: RedisLock renewal failed (key, connection error)
 
 **Debugging**:

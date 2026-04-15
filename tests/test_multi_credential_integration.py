@@ -1,4 +1,4 @@
-"""Integration test — multi-credential flow through webhook → orchestrator.
+"""Integration test — multi-credential flow through webhook → pipeline.
 
 Verifies that webhooks for two different projects use separate per-project
 tokens (from the ProjectRegistry) throughout the full pipeline: webhook
@@ -84,12 +84,10 @@ def _mr_payload(project_id: int, repo: str, mr_iid: int = 1) -> dict[str, object
     }
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.gitlab_webhook.GitLabClient")
 async def test_multi_project_webhooks_use_distinct_tokens(
-    _mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     _mock_post_review: AsyncMock,
@@ -158,12 +156,10 @@ async def test_multi_project_webhooks_use_distinct_tokens(
         app.state.project_registry = None
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.gitlab_webhook.GitLabClient")
 async def test_note_webhook_multi_project_token_isolation(
-    _mock_gl_class: MagicMock,
     mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     _mock_post_review: AsyncMock,
@@ -213,14 +209,14 @@ async def test_note_webhook_multi_project_token_isolation(
 
     try:
         with patch(
-            "gitlab_copilot_agent.webhook.handle_discussion_interaction", new_callable=AsyncMock
-        ) as mock_handle:
+            "gitlab_copilot_agent.gitlab_webhook.run_pipeline", new_callable=AsyncMock
+        ) as mock_run:
             resp = await client.post("/webhook", json=note_payload, headers=HEADERS)
             assert resp.json() == {"status": "queued"}
             await asyncio.sleep(0.1)
 
-            mock_handle.assert_awaited_once()
-            _, kwargs = mock_handle.call_args
-            assert kwargs["project_token"] == PROJECT_BETA_TOKEN
+            mock_run.assert_awaited_once()
+            pipeline = mock_run.call_args[0][0]
+            assert pipeline._event.token == PROJECT_BETA_TOKEN
     finally:
         app.state.project_registry = None

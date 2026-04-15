@@ -1,5 +1,6 @@
-"""Integration test — full webhook → orchestrator pipeline with mocked externals."""
+"""Integration test — full webhook → pipeline with mocked externals."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,7 +13,8 @@ from gitlab_copilot_agent.discussion_models import (
     DiscussionNote,
 )
 from gitlab_copilot_agent.gitlab_client import MRChange, MRCommit, MRDetails
-from gitlab_copilot_agent.orchestrator import handle_review
+from gitlab_copilot_agent.pipeline import run_pipeline
+from gitlab_copilot_agent.review_pipeline import ReviewContext, ReviewPipeline
 from gitlab_copilot_agent.task_executor import ReviewResult
 from tests.conftest import (
     DIFF_REFS,
@@ -23,53 +25,62 @@ from tests.conftest import (
     MR_IID,
     MR_PAYLOAD,
     PROJECT_ID,
-    make_mr_changes,
+    make_mock_gitlab_client,
+    make_mr_details,
     make_settings,
-    make_webhook_payload,
+    make_task_event,
 )
 
 
-def _setup_mocks(
-    mock_client_class: MagicMock,
+def _make_gl_client(
     mock_run_review: AsyncMock,
-) -> MagicMock:
-    """Wire up standard mocks for the orchestrator pipeline."""
-    mock_gl_instance = mock_client_class.return_value
-    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
-    mock_gl_instance.cleanup = AsyncMock()
-    mock_gl_instance.get_mr_details = AsyncMock(
-        return_value=MRDetails(
-            title="Add feature",
-            description="Implements X",
-            diff_refs=DIFF_REFS,
-            changes=[],
-        )
+    *,
+    mr_details_override: MRDetails | None = None,
+) -> AsyncMock:
+    """Wire up a mock GitLabClient for review pipeline tests."""
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=mr_details_override or make_mr_details(changes=[]),
     )
-    mock_gl_instance.list_mr_discussions = AsyncMock(return_value=[])
-    mock_gl_instance.get_mr_commits = AsyncMock(return_value=[])
     mock_run_review.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
-    return mock_gl_instance  # type: ignore[no-any-return]
+    return gl
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+def _make_pipeline(
+    gl: AsyncMock,
+    executor: AsyncMock | None = None,
+    credential_registry: AsyncMock | None = None,
+    **event_overrides: object,
+) -> ReviewPipeline:
+    """Build a ReviewPipeline with the given mock client."""
+    return ReviewPipeline(
+        settings=make_settings(),
+        event=make_task_event(**event_overrides),
+        executor=executor or AsyncMock(),
+        gl_client=gl,
+        credential_registry=credential_registry,
+    )
+
+
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 async def test_full_pipeline(
-    mock_gl_class: MagicMock,
-    mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
     client: AsyncClient,
 ) -> None:
     """Verify webhook triggers the full pipeline with correct arguments."""
-    mock_gl_instance = _setup_mocks(mock_client_class, mock_run_review)
+    gl = _make_gl_client(mock_run_review)
+    with patch("gitlab_copilot_agent.gitlab_webhook.GitLabClient", return_value=gl):
+        resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "queued"}
 
-    resp = await client.post("/webhook", json=MR_PAYLOAD, headers=HEADERS)
-    assert resp.status_code == 200
-    assert resp.json() == {"status": "queued"}
+    import asyncio
 
-    mock_gl_instance.clone_repo.assert_awaited_once_with(
+    await asyncio.sleep(0.1)
+
+    gl.clone_repo.assert_awaited_once_with(
         "https://gitlab.example.com/group/my-project.git",
         "feature/x",
         GITLAB_TOKEN,
@@ -86,29 +97,24 @@ async def test_full_pipeline(
     assert post_args[1] == PROJECT_ID
     assert post_args[2] == MR_IID
 
-    mock_gl_instance.cleanup.assert_awaited_once()
 
-
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
-async def test_orchestrator_cleans_up_on_error(
-    mock_gl_class: MagicMock,
-    mock_client_class: MagicMock,
+@patch("gitlab_copilot_agent.review_pipeline.shutil.rmtree")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
+async def test_pipeline_cleans_up_on_error(
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
+    mock_rmtree: MagicMock,
 ) -> None:
     """Verify cleanup runs even when review raises."""
-    mock_gl_instance = mock_client_class.return_value
-    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
-    mock_gl_instance.get_mr_details = AsyncMock(side_effect=RuntimeError("SDK crashed"))
-    mock_gl_instance.cleanup = AsyncMock()
+    gl = make_mock_gitlab_client(Path("/tmp/fake-repo"))
+    gl.get_mr_details.side_effect = RuntimeError("SDK crashed")
 
     with pytest.raises(RuntimeError, match="SDK crashed"):
-        await handle_review(make_settings(), make_webhook_payload(), AsyncMock())
+        pipeline = _make_pipeline(gl)
+        await run_pipeline(pipeline, ReviewContext())
 
-    mock_gl_instance.cleanup.assert_awaited_once()
+    mock_rmtree.assert_called_once()
 
 
 # -- Shared test data for credential_registry tests --
@@ -153,30 +159,21 @@ _SAMPLE_DISCUSSIONS = [
 ]
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 async def test_discussion_history_passed_with_credential_registry(
-    mock_gl_class: MagicMock,
-    mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
 ) -> None:
     """When credential_registry is provided, discussion_history is forwarded to run_review."""
-    mock_gl_instance = _setup_mocks(mock_client_class, mock_run_review)
-
+    gl = _make_gl_client(mock_run_review)
     mock_registry = AsyncMock()
     mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
 
-    await handle_review(
-        make_settings(),
-        make_webhook_payload(),
-        AsyncMock(),
-        credential_registry=mock_registry,
-    )
+    pipeline = _make_pipeline(gl, credential_registry=mock_registry)
+    await run_pipeline(pipeline, ReviewContext())
 
-    mock_gl_instance.list_mr_discussions.assert_awaited_once_with(PROJECT_ID, MR_IID)
+    gl.list_mr_discussions.assert_awaited_once_with(PROJECT_ID, MR_IID)
     mock_registry.resolve_identity.assert_awaited_once_with("default", GITLAB_URL)
 
     review_kwargs = mock_run_review.call_args[1]
@@ -186,77 +183,56 @@ async def test_discussion_history_passed_with_credential_registry(
     assert history.discussions == []
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 async def test_discussion_history_none_without_credential_registry(
-    mock_gl_class: MagicMock,
-    mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
 ) -> None:
     """Without credential_registry, discussion_history is None."""
-    _setup_mocks(mock_client_class, mock_run_review)
+    gl = _make_gl_client(mock_run_review)
 
-    await handle_review(make_settings(), make_webhook_payload(), AsyncMock())
+    pipeline = _make_pipeline(gl)
+    await run_pipeline(pipeline, ReviewContext())
 
     review_kwargs = mock_run_review.call_args[1]
     assert review_kwargs["discussion_history"] is None
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 async def test_discussion_history_failure_is_non_fatal(
-    mock_gl_class: MagicMock,
-    mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
 ) -> None:
     """Identity resolution failure logs warning but review still completes."""
-    _setup_mocks(mock_client_class, mock_run_review)
-
+    gl = _make_gl_client(mock_run_review)
     mock_registry = AsyncMock()
     mock_registry.resolve_identity = AsyncMock(side_effect=RuntimeError("API down"))
 
-    await handle_review(
-        make_settings(),
-        make_webhook_payload(),
-        AsyncMock(),
-        credential_registry=mock_registry,
-    )
+    pipeline = _make_pipeline(gl, credential_registry=mock_registry)
+    await run_pipeline(pipeline, ReviewContext())
 
     # Review still ran, but without discussion_history
     review_kwargs = mock_run_review.call_args[1]
     assert review_kwargs["discussion_history"] is None
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 async def test_discussion_threads_flow_through_pipeline(
-    mock_gl_class: MagicMock,
-    mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
 ) -> None:
     """Actual discussion data (threads, authors, positions) is preserved through the pipeline."""
-    mock_gl_instance = _setup_mocks(mock_client_class, mock_run_review)
-    mock_gl_instance.list_mr_discussions = AsyncMock(return_value=_SAMPLE_DISCUSSIONS)
-    mock_gl_instance.get_mr_commits = AsyncMock(return_value=[])
+    gl = _make_gl_client(mock_run_review)
+    gl.list_mr_discussions.return_value = _SAMPLE_DISCUSSIONS
 
     mock_registry = AsyncMock()
     mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
 
-    await handle_review(
-        make_settings(),
-        make_webhook_payload(),
-        AsyncMock(),
-        credential_registry=mock_registry,
-    )
+    pipeline = _make_pipeline(gl, credential_registry=mock_registry)
+    await run_pipeline(pipeline, ReviewContext())
 
     review_kwargs = mock_run_review.call_args[1]
     history = review_kwargs["discussion_history"]
@@ -286,59 +262,33 @@ async def test_discussion_threads_flow_through_pipeline(
     assert reply.author_id != history.agent.user_id
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.run_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
+@patch("gitlab_copilot_agent.review_pipeline.run_review", new_callable=AsyncMock)
 async def test_resolution_behavior_flows_to_post_review(
-    mock_gl_class: MagicMock,
-    mock_client_class: MagicMock,
     mock_run_review: AsyncMock,
     mock_post_review: AsyncMock,
 ) -> None:
-    """resolution_behavior parameter flows from handle_review to post_review."""
-    _setup_mocks(mock_client_class, mock_run_review)
+    """resolution_behavior parameter flows from pipeline to post_review."""
+    gl = _make_gl_client(mock_run_review)
 
-    await handle_review(
-        make_settings(),
-        make_webhook_payload(),
-        AsyncMock(),
-        resolution_behavior="auto-resolve",
-    )
+    pipeline = _make_pipeline(gl, resolution_behavior="auto-resolve")
+    await run_pipeline(pipeline, ReviewContext())
 
     mock_post_review.assert_awaited_once()
     post_kwargs = mock_post_review.call_args[1]
     assert post_kwargs["resolution_behavior"] == "auto-resolve"
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 async def test_prior_feedback_rendered_in_prompt(
-    mock_gl_class: MagicMock,
-    mock_client_class: MagicMock,
     mock_post_review: AsyncMock,
 ) -> None:
-    """Prior agent comments flow through orchestrator into the review prompt.
-
-    Unlike other integration tests that patch run_review, this test lets
-    run_review execute with a mock executor so we can inspect the actual
-    user_prompt in TaskParams — verifying the full chain:
-    orchestrator → run_review → build_review_prompt → prior feedback in prompt.
-    """
-    mock_gl_instance = mock_client_class.return_value
-    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
-    mock_gl_instance.cleanup = AsyncMock()
-    mock_gl_instance.get_mr_details = AsyncMock(
-        return_value=MRDetails(
-            title="Add feature",
-            description="Implements X",
-            diff_refs=DIFF_REFS,
-            changes=make_mr_changes(),
-        )
+    """Prior agent comments flow through pipeline into the review prompt."""
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=make_mr_details(),
+        discussions=_SAMPLE_DISCUSSIONS,
     )
-    mock_gl_instance.list_mr_discussions = AsyncMock(return_value=_SAMPLE_DISCUSSIONS)
-    mock_gl_instance.get_mr_commits = AsyncMock(return_value=[])
 
     mock_executor = AsyncMock()
     mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
@@ -346,12 +296,8 @@ async def test_prior_feedback_rendered_in_prompt(
     mock_registry = AsyncMock()
     mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
 
-    await handle_review(
-        make_settings(),
-        make_webhook_payload(),
-        mock_executor,
-        credential_registry=mock_registry,
-    )
+    pipeline = _make_pipeline(gl, executor=mock_executor, credential_registry=mock_registry)
+    await run_pipeline(pipeline, ReviewContext())
 
     # Inspect the TaskParams passed to the executor
     task_params = mock_executor.execute.call_args[0][0]
@@ -395,45 +341,26 @@ def _make_marker_discussion(sha: str) -> Discussion:
     )
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 async def test_incremental_review_with_marker(
-    mock_gl_class: MagicMock,
-    mock_client_class: MagicMock,
     mock_post_review: AsyncMock,
 ) -> None:
     """Second review with SHA marker uses incremental diff via compare_commits."""
-    mock_gl_instance = mock_client_class.return_value
-    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
-    mock_gl_instance.cleanup = AsyncMock()
-    mock_gl_instance.get_mr_details = AsyncMock(
-        return_value=MRDetails(
-            title="Add feature",
-            description="Implements X",
-            diff_refs=DIFF_REFS,
-            changes=make_mr_changes(),
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=make_mr_details(),
+        discussions=[_make_marker_discussion(_MARKER_SHA)],
+    )
+    gl.compare_commits.return_value = [
+        MRChange(
+            old_path=_INCREMENTAL_PATH,
+            new_path=_INCREMENTAL_PATH,
+            diff=_INCREMENTAL_DIFF,
+            new_file=False,
+            deleted_file=False,
+            renamed_file=False,
         )
-    )
-
-    # list_mr_discussions returns the marker note from a prior review
-    mock_gl_instance.list_mr_discussions = AsyncMock(
-        return_value=[_make_marker_discussion(_MARKER_SHA)]
-    )
-    mock_gl_instance.get_mr_commits = AsyncMock(return_value=[])
-    # compare_commits returns incremental changes
-    mock_gl_instance.compare_commits = AsyncMock(
-        return_value=[
-            MRChange(
-                old_path=_INCREMENTAL_PATH,
-                new_path=_INCREMENTAL_PATH,
-                diff=_INCREMENTAL_DIFF,
-                new_file=False,
-                deleted_file=False,
-                renamed_file=False,
-            )
-        ]
-    )
+    ]
 
     mock_executor = AsyncMock()
     mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
@@ -441,48 +368,28 @@ async def test_incremental_review_with_marker(
     mock_registry = AsyncMock()
     mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
 
-    await handle_review(
-        make_settings(),
-        make_webhook_payload(),
-        mock_executor,
-        credential_registry=mock_registry,
-    )
+    pipeline = _make_pipeline(gl, executor=mock_executor, credential_registry=mock_registry)
+    await run_pipeline(pipeline, ReviewContext())
 
-    # Verify compare_commits called with correct SHAs
-    mock_gl_instance.compare_commits.assert_awaited_once_with(PROJECT_ID, _MARKER_SHA, "abc123")
+    gl.compare_commits.assert_awaited_once_with(PROJECT_ID, _MARKER_SHA, "abc123")
 
-    # Verify prompt contains incremental diff header
     task_params = mock_executor.execute.call_args[0][0]
     prompt = task_params.user_prompt
     assert "Incremental Diff" in prompt
     assert _INCREMENTAL_DIFF in prompt
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 async def test_incremental_review_compare_fails_fallback(
-    mock_gl_class: MagicMock,
-    mock_client_class: MagicMock,
     mock_post_review: AsyncMock,
 ) -> None:
     """compare_commits failure falls back to full diff."""
-    mock_gl_instance = mock_client_class.return_value
-    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
-    mock_gl_instance.cleanup = AsyncMock()
-    mock_gl_instance.get_mr_details = AsyncMock(
-        return_value=MRDetails(
-            title="Add feature",
-            description="Implements X",
-            diff_refs=DIFF_REFS,
-            changes=make_mr_changes(),
-        )
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=make_mr_details(),
+        discussions=[_make_marker_discussion(_MARKER_SHA)],
     )
-    mock_gl_instance.list_mr_discussions = AsyncMock(
-        return_value=[_make_marker_discussion(_MARKER_SHA)]
-    )
-    mock_gl_instance.get_mr_commits = AsyncMock(return_value=[])
-    mock_gl_instance.compare_commits = AsyncMock(side_effect=RuntimeError("Compare API error"))
+    gl.compare_commits.side_effect = RuntimeError("Compare API error")
 
     mock_executor = AsyncMock()
     mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
@@ -490,19 +397,13 @@ async def test_incremental_review_compare_fails_fallback(
     mock_registry = AsyncMock()
     mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
 
-    await handle_review(
-        make_settings(),
-        make_webhook_payload(),
-        mock_executor,
-        credential_registry=mock_registry,
-    )
+    pipeline = _make_pipeline(gl, executor=mock_executor, credential_registry=mock_registry)
+    await run_pipeline(pipeline, ReviewContext())
 
-    # Falls back to full diff — prompt should NOT contain incremental header
     task_params = mock_executor.execute.call_args[0][0]
     prompt = task_params.user_prompt
     assert "Incremental Diff" not in prompt
-    # Full diff from mr_details.changes is used instead
-    assert DIFF_REFS.base_sha is not None  # sanity: details were loaded
+    assert DIFF_REFS.base_sha is not None
 
 
 # -- Suppressed feedback integration tests (Feature 7) --
@@ -570,34 +471,16 @@ _DISMISSED_DISCUSSION = Discussion(
 )
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 async def test_suppressed_feedback_rendered_in_prompt(
-    mock_gl_class: MagicMock,
-    mock_client_class: MagicMock,
     mock_post_review: AsyncMock,
 ) -> None:
-    """Human-resolved and dismissed discussions flow through as suppressed feedback in prompt.
-
-    Verifies the full chain: orchestrator → run_review → build_review_prompt
-    → suppressed feedback section with [MANUALLY RESOLVED] and [DISMISSED] tags.
-    """
-    mock_gl_instance = mock_client_class.return_value
-    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
-    mock_gl_instance.cleanup = AsyncMock()
-    mock_gl_instance.get_mr_details = AsyncMock(
-        return_value=MRDetails(
-            title="Add feature",
-            description="Implements X",
-            diff_refs=DIFF_REFS,
-            changes=make_mr_changes(),
-        )
+    """Human-resolved and dismissed discussions flow through as suppressed feedback in prompt."""
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=make_mr_details(),
+        discussions=[_HUMAN_RESOLVED_DISCUSSION, _DISMISSED_DISCUSSION],
     )
-    mock_gl_instance.list_mr_discussions = AsyncMock(
-        return_value=[_HUMAN_RESOLVED_DISCUSSION, _DISMISSED_DISCUSSION]
-    )
-    mock_gl_instance.get_mr_commits = AsyncMock(return_value=[])
 
     mock_executor = AsyncMock()
     mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
@@ -605,14 +488,9 @@ async def test_suppressed_feedback_rendered_in_prompt(
     mock_registry = AsyncMock()
     mock_registry.resolve_identity = AsyncMock(return_value=_AGENT_IDENTITY)
 
-    await handle_review(
-        make_settings(),
-        make_webhook_payload(),
-        mock_executor,
-        credential_registry=mock_registry,
-    )
+    pipeline = _make_pipeline(gl, executor=mock_executor, credential_registry=mock_registry)
+    await run_pipeline(pipeline, ReviewContext())
 
-    # Inspect the TaskParams passed to the executor
     task_params = mock_executor.execute.call_args[0][0]
     prompt = task_params.user_prompt
 
@@ -631,37 +509,22 @@ _SAMPLE_COMMITS = [
 ]
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 async def test_commit_messages_in_review_prompt(
-    mock_gl_class: MagicMock,
-    mock_client_class: MagicMock,
     mock_post_review: AsyncMock,
 ) -> None:
-    """Commit messages flow through orchestrator into the review prompt."""
-    mock_gl_instance = mock_client_class.return_value
-    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
-    mock_gl_instance.cleanup = AsyncMock()
-    mock_gl_instance.get_mr_details = AsyncMock(
-        return_value=MRDetails(
-            title="Add feature",
-            description="Implements X",
-            diff_refs=DIFF_REFS,
-            changes=make_mr_changes(),
-        )
+    """Commit messages flow through pipeline into the review prompt."""
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=make_mr_details(),
+        commits=_SAMPLE_COMMITS,
     )
-    mock_gl_instance.list_mr_discussions = AsyncMock(return_value=[])
-    mock_gl_instance.get_mr_commits = AsyncMock(return_value=_SAMPLE_COMMITS)
 
     mock_executor = AsyncMock()
     mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
 
-    await handle_review(
-        make_settings(),
-        make_webhook_payload(),
-        mock_executor,
-    )
+    pipeline = _make_pipeline(gl, executor=mock_executor)
+    await run_pipeline(pipeline, ReviewContext())
 
     task_params = mock_executor.execute.call_args[0][0]
     prompt = task_params.user_prompt
@@ -671,39 +534,23 @@ async def test_commit_messages_in_review_prompt(
     assert "fix: null check" in prompt
 
 
-@patch("gitlab_copilot_agent.orchestrator.post_review", new_callable=AsyncMock)
-@patch("gitlab_copilot_agent.orchestrator.GitLabClient")
-@patch("gitlab_copilot_agent.orchestrator.gitlab.Gitlab")
+@patch("gitlab_copilot_agent.review_pipeline.post_review", new_callable=AsyncMock)
 async def test_commit_fetch_failure_graceful_degradation(
-    mock_gl_class: MagicMock,
-    mock_client_class: MagicMock,
     mock_post_review: AsyncMock,
 ) -> None:
     """get_mr_commits failure logs warning but review proceeds without commits."""
-    mock_gl_instance = mock_client_class.return_value
-    mock_gl_instance.clone_repo = AsyncMock(return_value="/tmp/fake-repo")
-    mock_gl_instance.cleanup = AsyncMock()
-    mock_gl_instance.get_mr_details = AsyncMock(
-        return_value=MRDetails(
-            title="Add feature",
-            description="Implements X",
-            diff_refs=DIFF_REFS,
-            changes=make_mr_changes(),
-        )
+    gl = make_mock_gitlab_client(
+        Path("/tmp/fake-repo"),
+        mr_details=make_mr_details(),
     )
-    mock_gl_instance.list_mr_discussions = AsyncMock(return_value=[])
-    mock_gl_instance.get_mr_commits = AsyncMock(side_effect=RuntimeError("Commits API down"))
+    gl.get_mr_commits.side_effect = RuntimeError("Commits API down")
 
     mock_executor = AsyncMock()
     mock_executor.execute.return_value = ReviewResult(summary=FAKE_REVIEW_OUTPUT)
 
-    await handle_review(
-        make_settings(),
-        make_webhook_payload(),
-        mock_executor,
-    )
+    pipeline = _make_pipeline(gl, executor=mock_executor)
+    await run_pipeline(pipeline, ReviewContext())
 
-    # Review still ran — prompt should NOT contain commit section
     task_params = mock_executor.execute.call_args[0][0]
     prompt = task_params.user_prompt
     assert "## Commit Messages" not in prompt

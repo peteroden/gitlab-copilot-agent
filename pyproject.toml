@@ -10,7 +10,6 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.135.3",
     "uvicorn[standard]==0.43.0",
-    "python-gitlab==8.2.0",
     "github-copilot-sdk==0.2.1",
     "pydantic==2.12.5",
     "pydantic-settings==2.13.1",
@@ -39,10 +38,10 @@ azure = [
     "azure-data-tables==12.7.0",
 ]
 dev = [
-    "pytest==9.0.2",
+    "pytest==9.0.3",
     "pytest-asyncio==1.3.0",
     "httpx==0.28.1",
-    "ruff==0.15.9",
+    "ruff==0.15.10",
     "pyright==1.1.408",
     "playwright==1.58.0",
 ]
@@ -109,11 +108,15 @@ dev = [
     "pyright==1.1.408",
     "pytest-asyncio==1.3.0",
     "pytest-cov==7.1.0",
-    "ruff==0.15.9",
+    "ruff==0.15.10",
     "azure-identity==1.25.3",
     "azure-storage-queue==12.15.0",
     "azure-storage-blob==12.28.0",
     "azure-data-tables==12.7.0",
     "aiohttp==3.13.5",
     "check-jsonschema==0.37.1",
+    "hypothesis==6.151.14",
+]
+fuzz = [
+    "atheris==3.0.0",
 ]

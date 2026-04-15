@@ -8,7 +8,7 @@ Test structure, shared fixtures, mocking patterns, coverage requirements, how to
 
 **Location**: `tests/` directory mirrors `src/gitlab_copilot_agent/`
 
-**Naming**: Test files prefixed with `test_` (e.g., `test_webhook.py` for `webhook.py`)
+**Naming**: Test files prefixed with `test_` (e.g., `test_webhook.py` for `gitlab_webhook.py`)
 
 **Framework**: pytest with pytest-asyncio for async tests
 
@@ -128,7 +128,7 @@ def test_settings(env_vars):
 - `app.state.executor` → `LocalTaskExecutor()`
 - `app.state.repo_locks` → `RepoLockManager()`
 - `app.state.dedup_store` → `MemoryDedup()`
-- `app.state.review_tracker` → `ReviewedMRTracker()`
+- `app.state.dedup` → `DeduplicationService(dedup_store)`
 - `app.state.allowed_project_ids` → `None`
 
 **Example**:
@@ -182,7 +182,7 @@ def test_jira_config(monkeypatch):
 @pytest.mark.asyncio
 async def test_git_clone(monkeypatch):
     mock_clone = AsyncMock(return_value=Path("/tmp/test-repo"))
-    monkeypatch.setattr("gitlab_copilot_agent.git_operations.git_clone", mock_clone)
+    monkeypatch.setattr("gitlab_copilot_agent.git.clone.git_clone", mock_clone)
     
     result = await some_function_that_clones()
     mock_clone.assert_called_once_with(
@@ -214,7 +214,7 @@ async def test_git_clone(monkeypatch):
 
 **Pattern**: Mock only external services (GitLab API, Jira API, Copilot SDK).
 
-**Example**: `test_webhook.py` — tests webhook endpoint → orchestrator → (mocked) executor.
+**Example**: `test_webhook.py` — tests webhook endpoint → pipeline → (mocked) executor.
 
 **Coverage**: Medium (80-90%) — validates integration points.
 
@@ -261,7 +261,7 @@ make e2e-down    # Teardown
 
 **Marker**: `@pytest.mark.k8s`
 
-**Purpose**: Test KubernetesTaskExecutor with real K8s cluster.
+**Purpose**: Test RemoteTaskExecutor with real K8s cluster.
 
 **Skipped By Default**: `pytest -m "not k8s"` (enforced in pytest.ini)
 

@@ -68,11 +68,24 @@ GitLab-centric YAML configuration. All models use `strict=True` validation.
 | `executor` | `TaskExecutor` | Task execution backend |
 | `repo_locks` | `DistributedLock` | Concurrency locks |
 | `dedup_store` | `DeduplicationStore` | Deduplication tracking |
-| `review_tracker` | `ReviewedMRTracker` | In-memory SHA dedup |
+| `dedup` | `DeduplicationService` | Unified dedup (reviews, notes, issues) |
 | `credential_registry` | `CredentialRegistry` | Token + identity resolution (TTL-cached) |
 | `allowed_project_ids` | `frozenset[int] \| None` | Project allowlist |
 
 **Note**: Mutable state (`project_registry`, pollers) stays on `app.state` directly for hot-reload support.
+
+---
+
+### `TaskEvent` (`events.py`)
+**Purpose**: Unified internal event model replacing direct webhook payload passing. All ingestion sources (webhooks, pollers) produce `TaskEvent` instances that flow to orchestrators and pipelines.
+
+**Config**: Pydantic model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| Normalized fields from webhook payloads | Various | Project ID, MR IID, event type, user, branches, etc. |
+
+**Used By**: `gitlab_webhook.py`, `gitlab_poller.py` → produce; `review_pipeline.py`, `discussion_pipeline.py`, `coding_pipeline.py` → consume
 
 ---
 
@@ -418,7 +431,7 @@ All models use `extra="ignore"` to allow additional API fields.
 
 ---
 
-## Config Models (`config.py`)
+## Config Models (`config/`)
 
 ### `JiraSettings`
 **Purpose**: Jira configuration — all optional (service runs review-only without these).
@@ -697,13 +710,13 @@ graph TB
         CR[CredentialRegistry] -->|resolve token| RP
     end
     
-    WHP -.->|orchestrator.py| RR
+    WHP -.->|review_pipeline.py| RR
     RR -.->|review_engine.py| TP
     TP -.->|copilot_session.py| RCFG
     TP -.->|executor| PR
     PR -.->|comment_poster.py| MRD
     CR -.->|resolve_identity| AI
-    DH -.->|orchestrator.py| TP
+    DH -.->|discussion_pipeline.py| TP
 ```
 
 ---
@@ -732,7 +745,7 @@ graph TB
 | Webhook (`models.py`) | ✅ Yes | ❌ Forbidden | ❌ No |
 | GitLab API (`gitlab_client.py`) | ❌ No | ✅ Ignored | ✅ Yes (most) |
 | Jira (`jira_models.py`) | ❌ No | ✅ Ignored | ❌ No |
-| Config (`config.py`) | ✅ Yes | ❌ Forbidden | ❌ No |
+| Config (`config/`) | ✅ Yes | ❌ Forbidden | ❌ No |
 | Review (`comment_parser.py`) | ❌ No | ❌ Forbidden | ✅ Yes |
 | Task Exec (`task_executor.py`) | ❌ No | ❌ Forbidden | ✅ Yes |
 | Repo Config (`repo_config.py`) | ❌ No | ❌ Forbidden | ✅ Yes |

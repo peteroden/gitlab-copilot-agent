@@ -64,16 +64,22 @@ async def test_reload_registry_swaps_map() -> None:
     assert poller._project_map.jira_keys() == {"PROJ", "OPS"}
 
 
-async def test_reload_registry_clears_processed() -> None:
+async def test_reload_registry_preserves_issue_dedup() -> None:
+    """Issue dedup state persists across reload (shared backend, TTL-based)."""
+    from gitlab_copilot_agent.concurrency import MemoryDedup
     from gitlab_copilot_agent.config import JiraSettings
+    from gitlab_copilot_agent.dedup import DeduplicationService
 
     settings = JiraSettings(**_settings())  # type: ignore[arg-type]
-    poller = JiraPoller(AsyncMock(), settings, _registry(), AsyncMock())
-    poller._processed_issues.add("PROJ-1")
+    dedup = DeduplicationService(MemoryDedup())
+    poller = JiraPoller(AsyncMock(), settings, _registry(), AsyncMock(), dedup=dedup)
+    await dedup.mark_issue("PROJ-1")
+    assert await dedup.is_issue_seen("PROJ-1")
 
     await poller.reload_registry(_registry())
 
-    assert len(poller._processed_issues) == 0
+    # Shared backend retains marks — they expire via TTL, not on reload
+    assert await dedup.is_issue_seen("PROJ-1")
 
 
 async def test_reload_endpoint_returns_keys(
@@ -99,7 +105,7 @@ async def test_reload_endpoint_returns_keys(
     with (
         patch("gitlab_copilot_agent.main.JiraClient"),
         patch("gitlab_copilot_agent.main.JiraPoller", return_value=mock_poller),
-        patch("gitlab_copilot_agent.main.CodingOrchestrator"),
+        patch("gitlab_copilot_agent.main.CodingTaskRunner"),
         patch("gitlab_copilot_agent.main.CredentialRegistry"),
         patch("gitlab_copilot_agent.main.ProjectRegistry") as mock_reg_cls,
     ):

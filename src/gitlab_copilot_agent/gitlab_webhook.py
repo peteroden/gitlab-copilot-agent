@@ -3,21 +3,27 @@
 from __future__ import annotations
 
 import hmac
+import json
 import re
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from gitlab_copilot_agent.app_context import get_app_context
 from gitlab_copilot_agent.discussion_models import AgentIdentity
-from gitlab_copilot_agent.discussion_orchestrator import handle_discussion_interaction
+from gitlab_copilot_agent.discussion_pipeline import DiscussionContext, DiscussionPipeline
+from gitlab_copilot_agent.events import TaskEvent
 from gitlab_copilot_agent.gitlab_client import GitLabClient
 from gitlab_copilot_agent.metrics import webhook_errors_total, webhook_received_total
 from gitlab_copilot_agent.models import MergeRequestWebhookPayload, NoteWebhookPayload
-from gitlab_copilot_agent.orchestrator import handle_review
+from gitlab_copilot_agent.pipeline import run_pipeline
 from gitlab_copilot_agent.project_registry import ProjectRegistry
+from gitlab_copilot_agent.review_pipeline import ReviewContext, ReviewPipeline
+from gitlab_copilot_agent.telemetry import get_tracer
 
 log = structlog.get_logger()
+_tracer = get_tracer(__name__)
 
 router = APIRouter()
 
@@ -56,7 +62,6 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
     app_context = get_app_context(request)
     settings = app_context.settings
     executor = app_context.executor
-    review_tracker = app_context.review_tracker
     credential_registry = app_context.credential_registry
     registry: ProjectRegistry | None = request.app.state.project_registry
     mr = payload.object_attributes
@@ -71,22 +76,38 @@ async def _process_review(request: Request, payload: MergeRequestWebhookPayload)
             resolution_behavior = resolved.resolution_behavior
             credential_ref = resolved.credential_ref
 
-    bound = log.bind(project_id=project_id, mr_iid=mr.iid, head_sha=head_sha)
+    event = TaskEvent(
+        task_type="review",
+        project_id=project_id,
+        repo=payload.project.path_with_namespace,
+        clone_url=payload.project.git_http_url,
+        branch=mr.source_branch,
+        target_branch=mr.target_branch,
+        mr_iid=mr.iid,
+        head_sha=head_sha,
+        trigger_source="webhook",
+        token=project_token,
+        credential_ref=credential_ref,
+        resolution_behavior=resolution_behavior,
+    )
+
+    bound = log.bind(**event.log_safe())
     bound.info("background_review_starting")
     try:
-        await handle_review(
-            settings,
-            payload,
-            executor,
-            project_token=project_token,
-            credential_registry=credential_registry,
-            resolution_behavior=resolution_behavior,
-            credential_ref=credential_ref,
-        )
-        review_tracker.mark(project_id, mr.iid, head_sha)
-        # Also mark in shared dedup store so the poller won't re-review
-        review_key = f"review:{project_id}:{mr.iid}:{head_sha}"
-        await app_context.dedup_store.mark_seen(review_key, ttl_seconds=86400)
+        with _tracer.start_as_current_span(
+            "mr.review",
+            attributes={"project_id": event.project_id, "mr_iid": event.mr_iid or 0},
+        ):
+            gl_client = GitLabClient(settings.gitlab_url, event.token)
+            pipeline = ReviewPipeline(
+                settings=settings,
+                event=event,
+                executor=executor,
+                gl_client=gl_client,
+                credential_registry=credential_registry,
+            )
+            await run_pipeline(pipeline, ReviewContext(), span_attributes=event.span_attrs())
+        await app_context.dedup.mark_review(project_id, mr.iid, head_sha)
         bound.info("background_review_completed")
     except Exception:
         webhook_errors_total.add(1, {"handler": "review"})
@@ -139,7 +160,8 @@ async def _process_discussion(
     request: Request,
     payload: NoteWebhookPayload,
     agent_identity: AgentIdentity,
-    note_key: str = "",
+    note_id: int = 0,
+    mr_iid: int = 0,
 ) -> None:
     """Process a discussion interaction in the background."""
     app_context = get_app_context(request)
@@ -151,49 +173,85 @@ async def _process_discussion(
 
     # Resolve resolution behavior from project registry or global settings
     resolution_behavior = settings.resolution_behavior
+    credential_ref = "default"
     if registry is not None:
         resolved_project = registry.get_by_project_id(payload.project.id)
         if resolved_project is not None:
             resolution_behavior = resolved_project.resolution_behavior
+            credential_ref = resolved_project.credential_ref
+
+    mr_iid = payload.merge_request.iid if payload.merge_request else 0
+    event = TaskEvent(
+        task_type="discussion",
+        project_id=payload.project.id,
+        repo=payload.project.path_with_namespace,
+        clone_url=payload.project.git_http_url,
+        branch=payload.merge_request.source_branch,
+        target_branch=payload.merge_request.target_branch,
+        mr_iid=mr_iid,
+        trigger_source="webhook",
+        token=project_token,
+        credential_ref=credential_ref,
+        resolution_behavior=resolution_behavior,
+        note_id=payload.object_attributes.id,
+        discussion_id=payload.object_attributes.discussion_id,
+        note_body=payload.object_attributes.note,
+    )
 
     bound = log.bind(
         project_id=payload.project.id,
-        mr_iid=payload.merge_request.iid if payload.merge_request else None,
+        mr_iid=mr_iid,
         note_body=payload.object_attributes.note[:80],
     )
     bound.info("background_discussion_starting")
     try:
-        await handle_discussion_interaction(
-            settings,
-            payload,
-            executor,
-            agent_identity,
-            project_token=project_token,
-            repo_locks=repo_locks,
-            resolution_behavior=resolution_behavior,
-        )
+        with _tracer.start_as_current_span(
+            "mr.discussion_interaction",
+            attributes={"project_id": event.project_id, "mr_iid": event.mr_iid or 0},
+        ):
+            gl_client = GitLabClient(settings.gitlab_url, event.token)
+            pipeline = DiscussionPipeline(
+                settings=settings,
+                event=event,
+                executor=executor,
+                gl_client=gl_client,
+                agent_identity=agent_identity,
+            )
+
+            async def _execute() -> None:
+                attrs = event.span_attrs()
+                await run_pipeline(pipeline, DiscussionContext(), span_attributes=attrs)
+
+            if repo_locks:
+                async with repo_locks.acquire(event.clone_url):
+                    await _execute()
+            else:
+                await _execute()
         bound.info("background_discussion_completed")
     except Exception:
         webhook_errors_total.add(1, {"handler": "discussion"})
         bound.exception("background_discussion_failed")
     finally:
-        if note_key:
-            await app_context.dedup_store.mark_seen(note_key, ttl_seconds=86400)
+        if note_id:
+            await app_context.dedup.mark_note(payload.project.id, mr_iid, note_id)
 
 
-@router.post("/webhook", status_code=200)
+@router.post("/webhook", status_code=200, response_model=None)
 async def webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     x_gitlab_token: str | None = Header(default=None),
-) -> dict[str, str]:
+) -> dict[str, str] | JSONResponse:
     """Handle GitLab webhook events (MR and note)."""
     app_context = get_app_context(request)
     settings = app_context.settings
 
     _validate_webhook_token(x_gitlab_token, settings.gitlab_webhook_secret)
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return JSONResponse(status_code=400, content={"detail": "Invalid JSON"})
 
     # Project allowlist check
     if app_context.allowed_project_ids is not None:
@@ -213,14 +271,13 @@ async def webhook(
 
         # Skip title/description-only updates (no new commits).
         # Note: "reopen" has no oldrev — it passes through to review.
-        # Diff scope is determined by SHA marker presence in orchestrator.py.
+        # Diff scope is determined by SHA marker presence in review pipeline.
         if action == "update" and mr.oldrev is None:
             return {"status": "ignored", "reason": "no new commits"}
 
         # Deduplicate by (project_id, mr_iid, head_sha)
-        review_tracker = app_context.review_tracker
         head_sha = mr.last_commit.id
-        if review_tracker.is_reviewed(payload.project.id, mr.iid, head_sha):
+        if await app_context.dedup.is_review_seen(payload.project.id, mr.iid, head_sha):
             await log.ainfo(
                 "review_skipped",
                 reason="duplicate_head_sha",
@@ -267,12 +324,11 @@ async def webhook(
         # Deduplicate — prevents reprocessing on duplicate webhook deliveries
         note_id = note_payload.object_attributes.id
         mr_iid = note_payload.merge_request.iid if note_payload.merge_request else 0
-        note_key = f"note:{note_payload.project.id}:{mr_iid}:{note_id}"
-        if await app_context.dedup_store.is_seen(note_key):
+        if await app_context.dedup.is_note_seen(note_payload.project.id, mr_iid, note_id):
             return {"status": "skipped", "reason": "already processed"}
 
         background_tasks.add_task(
-            _process_discussion, request, note_payload, agent_identity, note_key
+            _process_discussion, request, note_payload, agent_identity, note_id, mr_iid
         )
         return {"status": "queued"}
 

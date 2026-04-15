@@ -1,14 +1,21 @@
 """Shared test constants, fixtures, and factory functions."""
 
-from collections.abc import AsyncIterator
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from gitlab_copilot_agent.app_context import AppContext
 from gitlab_copilot_agent.config import Settings
-from gitlab_copilot_agent.gitlab_client import MRChange, MRDiffRef
+from gitlab_copilot_agent.events import TaskEvent
+from gitlab_copilot_agent.gitlab_client import MRChange, MRDetails, MRDiffRef
 from gitlab_copilot_agent.main import app
 from gitlab_copilot_agent.models import (
     MergeRequestWebhookPayload,
@@ -16,6 +23,7 @@ from gitlab_copilot_agent.models import (
     WebhookProject,
     WebhookUser,
 )
+from gitlab_copilot_agent.project_registry import ResolvedProject
 from gitlab_copilot_agent.task_executor import LocalTaskExecutor
 
 # -- Constants --
@@ -35,6 +43,14 @@ JIRA_PROJECT_MAP_JSON = (
     '{"mappings": {"PROJ": {"repo": "group/project", '
     '"target_branch": "main", "credential_ref": "default"}}}'
 )
+
+# Pre-built dict for Settings fields — pass to make_settings(**JIRA_SETTINGS)
+JIRA_SETTINGS: dict[str, Any] = {
+    "jira_url": JIRA_URL,
+    "jira_email": JIRA_EMAIL,
+    "jira_api_token": JIRA_TOKEN,
+    "jira_project_map": '{"mappings": {}}',
+}
 
 PROJECT_ID = 42
 
@@ -103,22 +119,23 @@ def make_settings(**overrides: Any) -> Settings:
         "gitlab_webhook_secret": WEBHOOK_SECRET,
         "github_token": GITHUB_TOKEN,
         "azure_storage_connection_string": AZURITE_CONNECTION_STRING,
+        "prompt_strategy": "inline",
     }
     return Settings(**(defaults | overrides))
 
 
 def make_app_context(**overrides: Any) -> AppContext:
     """Create an AppContext with test defaults. Override any field."""
-    from gitlab_copilot_agent.concurrency import MemoryDedup, RepoLockManager, ReviewedMRTracker
+    from gitlab_copilot_agent.concurrency import MemoryDedup, RepoLockManager
     from gitlab_copilot_agent.credential_registry import CredentialRegistry
+    from gitlab_copilot_agent.dedup import DeduplicationService
 
     settings = overrides.pop("settings", None) or make_settings()
     defaults: dict[str, Any] = {
         "settings": settings,
         "executor": LocalTaskExecutor(),
         "repo_locks": RepoLockManager(),
-        "dedup_store": MemoryDedup(),
-        "review_tracker": ReviewedMRTracker(),
+        "dedup": DeduplicationService(MemoryDedup()),
         "credential_registry": CredentialRegistry(default_token=GITLAB_TOKEN),
     }
     return AppContext(**(defaults | overrides))
@@ -157,6 +174,70 @@ def make_webhook_payload(**attr_overrides: Any) -> MergeRequestWebhookPayload:
     )
 
 
+def make_task_event(**overrides: Any) -> TaskEvent:
+    """Create a TaskEvent with test defaults for the review path.
+
+    Override any field. For discussion events, pass ``task_type="discussion"``
+    plus ``note_id`` and ``note_body``.
+    """
+    defaults: dict[str, Any] = {
+        "task_type": "review",
+        "project_id": PROJECT_ID,
+        "repo": "group/my-project",
+        "clone_url": "https://gitlab.example.com/group/my-project.git",
+        "branch": "feature/x",
+        "target_branch": "main",
+        "mr_iid": MR_IID,
+        "head_sha": "abc123",
+        "trigger_source": "webhook",
+        "token": GITLAB_TOKEN,
+        "credential_ref": "default",
+        "resolution_behavior": "suggest",
+    }
+    return TaskEvent(**(defaults | overrides))
+
+
+def make_resolved_project(**overrides: Any) -> ResolvedProject:
+    """Create a ResolvedProject with test defaults. Override any field."""
+    defaults: dict[str, Any] = {
+        "jira_project": "PROJ",
+        "repo": "group/project",
+        "gitlab_project_id": 99,
+        "clone_url": EXAMPLE_CLONE_URL,
+        "target_branch": "main",
+        "credential_ref": "default",
+        "token": GITLAB_TOKEN,
+    }
+    return ResolvedProject(**(defaults | overrides))
+
+
+def make_mr_details(**overrides: Any) -> MRDetails:
+    """Create an MRDetails with test defaults. Override any field."""
+    defaults: dict[str, Any] = {
+        "title": "Add feature",
+        "description": "Implements X",
+        "diff_refs": DIFF_REFS,
+        "changes": make_mr_changes(),
+    }
+    return MRDetails(**(defaults | overrides))
+
+
+def make_mock_gitlab_client(
+    tmp_path: Path,
+    mr_details: MRDetails | None = None,
+    discussions: list[Any] | None = None,
+    commits: list[Any] | None = None,
+) -> AsyncMock:
+    """Mock GitLabClient with sensible defaults for pipeline tests."""
+    client = AsyncMock()
+    client.clone_repo.return_value = tmp_path
+    client.get_mr_details.return_value = mr_details or make_mr_details()
+    client.list_mr_discussions.return_value = discussions or []
+    client.get_mr_commits.return_value = commits or []
+    client.create_merge_request.return_value = 1
+    return client
+
+
 # -- Fixtures --
 
 
@@ -173,11 +254,16 @@ def env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 async def client(env_vars: None) -> AsyncIterator[AsyncClient]:
     """AsyncClient wired to the FastAPI app with test settings."""
+    from gitlab_copilot_agent.main import _reload_timestamps
+
     ctx = make_app_context()
     app.state.app_context = ctx
     app.state.project_registry = None
     app.state.jira_poller = None
     app.state.gl_poller = None
+    app.state.webhook_ip_allowlist = []
+    app.state.trusted_proxies = []
+    _reload_timestamps.clear()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

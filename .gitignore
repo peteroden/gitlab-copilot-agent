@@ -25,3 +25,7 @@ demo.env
 !*.tfvars.example
 .terraform.lock.hcl
 infra/tfplan
+
+# Fuzz corpus (accumulated by Atheris harnesses)
+.fuzz-corpus/
+.hypothesis/

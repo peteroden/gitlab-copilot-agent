@@ -1,6 +1,6 @@
 """Tests for comment posting to GitLab."""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock
 
 from gitlab_copilot_agent.comment_parser import ParsedReview, Resolution, ReviewComment
 from gitlab_copilot_agent.comment_poster import (
@@ -12,33 +12,31 @@ from tests.conftest import DIFF_REFS, MR_IID, PROJECT_ID, make_mr_changes
 
 
 async def test_posts_inline_and_summary() -> None:
-    gl = MagicMock()
+    gl = AsyncMock()
     review = ParsedReview(
         comments=[ReviewComment(file="src/main.py", line=2, severity="error", comment="Bug")],
         summary="Needs fixes.",
     )
     await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
-    assert mr.discussions.create.call_count == 1
-    assert mr.notes.create.call_count == 1
-    assert "Needs fixes" in mr.notes.create.call_args[0][0]["body"]
+    assert gl.create_mr_discussion.await_count == 1
+    assert gl.post_mr_comment.await_count == 1
+    summary_body = gl.post_mr_comment.await_args[0][2]
+    assert "Needs fixes" in summary_body
 
 
 async def test_posts_summary_only_when_no_comments() -> None:
-    gl = MagicMock()
+    gl = AsyncMock()
     review = ParsedReview(comments=[], summary="All good.")
     await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
-    assert mr.discussions.create.call_count == 0
-    assert mr.notes.create.call_count == 1
+    gl.create_mr_discussion.assert_not_awaited()
+    assert gl.post_mr_comment.await_count == 1
 
 
 async def test_inline_failure_falls_back_to_note() -> None:
-    gl = MagicMock()
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
-    mr.discussions.create.side_effect = Exception("Position invalid")
+    gl = AsyncMock()
+    gl.create_mr_discussion.side_effect = Exception("Position invalid")
 
     review = ParsedReview(
         comments=[ReviewComment(file="src/main.py", line=2, severity="error", comment="Bug")],
@@ -47,14 +45,15 @@ async def test_inline_failure_falls_back_to_note() -> None:
     await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
     # Inline failed, so fallback note should be created instead
-    assert mr.notes.create.call_count == 2  # 1 fallback + 1 summary
-    fallback_body = mr.notes.create.call_args_list[0][0][0]["body"]
+    # 1 fallback + 1 summary = 2 calls to post_mr_comment
+    assert gl.post_mr_comment.await_count == 2
+    fallback_body = gl.post_mr_comment.await_args_list[0][0][2]
     assert "Bug" in fallback_body
     assert "src/main.py:2" in fallback_body
 
 
 async def test_posts_comment_with_suggestion() -> None:
-    gl = MagicMock()
+    gl = AsyncMock()
     review = ParsedReview(
         comments=[
             ReviewComment(
@@ -69,15 +68,14 @@ async def test_posts_comment_with_suggestion() -> None:
     )
     await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
-    body = mr.discussions.create.call_args[0][0]["body"]
+    body = gl.create_mr_discussion.await_args[0][2]
     assert "Missing type hints" in body
     assert "```suggestion:-0+0" in body
     assert "def add(a: int, b: int) -> int:" in body
 
 
 async def test_posts_comment_with_multiline_suggestion() -> None:
-    gl = MagicMock()
+    gl = AsyncMock()
     review = ParsedReview(
         comments=[
             ReviewComment(
@@ -94,14 +92,13 @@ async def test_posts_comment_with_multiline_suggestion() -> None:
     )
     await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
-    body = mr.discussions.create.call_args[0][0]["body"]
+    body = gl.create_mr_discussion.await_args[0][2]
     assert "```suggestion:-2+1" in body
     assert "    x = 1\n    y = 2" in body
 
 
 async def test_posts_comment_without_suggestion_has_no_block() -> None:
-    gl = MagicMock()
+    gl = AsyncMock()
     review = ParsedReview(
         comments=[
             ReviewComment(file="src/main.py", line=1, severity="info", comment="Looks fine")
@@ -110,17 +107,15 @@ async def test_posts_comment_without_suggestion_has_no_block() -> None:
     )
     await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
-    body = mr.discussions.create.call_args[0][0]["body"]
+    body = gl.create_mr_discussion.await_args[0][2]
     assert "suggestion" not in body
 
 
 async def test_both_inline_and_fallback_fail_continues() -> None:
-    gl = MagicMock()
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
-    mr.discussions.create.side_effect = Exception("Position invalid")
+    gl = AsyncMock()
+    gl.create_mr_discussion.side_effect = Exception("Position invalid")
     # Fallback fails for both comments, but summary succeeds
-    mr.notes.create.side_effect = [Exception("Fail1"), Exception("Fail2"), None]
+    gl.post_mr_comment.side_effect = [Exception("Fail1"), Exception("Fail2"), None]
 
     review = ParsedReview(
         comments=[
@@ -131,13 +126,12 @@ async def test_both_inline_and_fallback_fail_continues() -> None:
     )
     # Should not raise — both comments attempted, summary still posted
     await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
-    assert mr.notes.create.call_count == 3
+    assert gl.post_mr_comment.await_count == 3
 
 
 async def test_invalid_position_skips_inline_and_posts_fallback() -> None:
     """Invalid positions (not in diff) should skip inline and post fallback note."""
-    gl = MagicMock()
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+    gl = AsyncMock()
 
     # Line 999 is not in the sample diff (only lines 1-4 and 11-13 are valid)
     review = ParsedReview(
@@ -148,18 +142,18 @@ async def test_invalid_position_skips_inline_and_posts_fallback() -> None:
     )
     await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
-    # Should NOT call discussions.create (inline)
-    assert mr.discussions.create.call_count == 0
-    # Should call notes.create twice: 1 fallback + 1 summary
-    assert mr.notes.create.call_count == 2
-    fallback_body = mr.notes.create.call_args_list[0][0][0]["body"]
+    # Should NOT call create_mr_discussion (inline)
+    gl.create_mr_discussion.assert_not_awaited()
+    # Should call post_mr_comment twice: 1 fallback + 1 summary
+    assert gl.post_mr_comment.await_count == 2
+    fallback_body = gl.post_mr_comment.await_args_list[0][0][2]
     assert "Invalid pos" in fallback_body
     assert "src/main.py:999" in fallback_body
 
 
 async def test_valid_position_posts_inline() -> None:
     """Valid positions in diff should post inline comments."""
-    gl = MagicMock()
+    gl = AsyncMock()
 
     # Lines 1, 2, 3, 4 are valid in the sample diff (hunk @@ -1,3 +1,4 @@)
     review = ParsedReview(
@@ -171,16 +165,15 @@ async def test_valid_position_posts_inline() -> None:
     )
     await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
     # Both should be inline
-    assert mr.discussions.create.call_count == 2
+    assert gl.create_mr_discussion.await_count == 2
     # Only summary note
-    assert mr.notes.create.call_count == 1
+    assert gl.post_mr_comment.await_count == 1
 
 
 async def test_mixed_valid_and_invalid_positions() -> None:
     """Mix of valid and invalid positions should route correctly."""
-    gl = MagicMock()
+    gl = AsyncMock()
 
     review = ParsedReview(
         comments=[
@@ -192,16 +185,15 @@ async def test_mixed_valid_and_invalid_positions() -> None:
     )
     await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
     # 2 valid positions = 2 inline comments
-    assert mr.discussions.create.call_count == 2
+    assert gl.create_mr_discussion.await_count == 2
     # 1 invalid fallback + 1 summary = 2 notes
-    assert mr.notes.create.call_count == 2
+    assert gl.post_mr_comment.await_count == 2
 
 
 async def test_file_not_in_changes_is_skipped() -> None:
     """Comments for files not in MR changes should be silently skipped."""
-    gl = MagicMock()
+    gl = AsyncMock()
 
     review = ParsedReview(
         comments=[
@@ -212,11 +204,10 @@ async def test_file_not_in_changes_is_skipped() -> None:
     # Changes only include src/main.py
     await post_review(gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes())
 
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
     # No inline comment
-    assert mr.discussions.create.call_count == 0
+    gl.create_mr_discussion.assert_not_awaited()
     # Only summary note (file not in diff is skipped, not posted as fallback)
-    assert mr.notes.create.call_count == 1
+    assert gl.post_mr_comment.await_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -238,103 +229,109 @@ def _make_resolution(
     return Resolution(discussion_id=discussion_id, status=status, message=message)
 
 
-def test_handle_resolutions_off() -> None:
+async def test_handle_resolutions_off() -> None:
     """resolution_behavior='off' → no actions taken."""
-    mr = MagicMock()
+    gl = AsyncMock()
     resolutions = [_make_resolution()]
-    result = _handle_resolutions(mr, resolutions, "off")
+    result = await _handle_resolutions(gl, PROJECT_ID, MR_IID, resolutions, "off")
     assert result == 0
-    mr.discussions.get.assert_not_called()
+    gl.reply_to_discussion.assert_not_awaited()
+    gl.resolve_discussion.assert_not_awaited()
 
 
-def test_handle_resolutions_auto_resolve_resolved() -> None:
+async def test_handle_resolutions_auto_resolve_resolved() -> None:
     """auto-resolve + resolved → reply with ✅ + resolve thread."""
-    mr = MagicMock()
-    disc = mr.discussions.get.return_value
+    gl = AsyncMock()
     resolutions = [_make_resolution(status="resolved")]
 
-    result = _handle_resolutions(
-        mr,
+    result = await _handle_resolutions(
+        gl,
+        PROJECT_ID,
+        MR_IID,
         resolutions,
         "auto-resolve",
         allowed_discussion_ids=frozenset({DISC_ID_ONE}),
     )
 
     assert result == 1
-    mr.discussions.get.assert_called_once_with(DISC_ID_ONE)
-    disc.notes.create.assert_called_once()
-    body = disc.notes.create.call_args[0][0]["body"]
-    assert "✅" in body
-    assert RESOLUTION_MSG_RESOLVED in body
-    assert disc.resolved is True
-    disc.save.assert_called_once()
+    gl.reply_to_discussion.assert_awaited_once()
+    reply_body = gl.reply_to_discussion.await_args[0][3]
+    assert "✅" in reply_body
+    assert RESOLUTION_MSG_RESOLVED in reply_body
+    gl.resolve_discussion.assert_awaited_once_with(PROJECT_ID, MR_IID, DISC_ID_ONE)
 
 
-def test_handle_resolutions_auto_resolve_partial() -> None:
+async def test_handle_resolutions_auto_resolve_partial() -> None:
     """auto-resolve + partial → reply with ⚠️, NO resolve."""
-    mr = MagicMock()
-    disc = mr.discussions.get.return_value
+    gl = AsyncMock()
     resolutions = [_make_resolution(status="partial", message=RESOLUTION_MSG_PARTIAL)]
 
-    result = _handle_resolutions(
-        mr,
+    result = await _handle_resolutions(
+        gl,
+        PROJECT_ID,
+        MR_IID,
         resolutions,
         "auto-resolve",
         allowed_discussion_ids=frozenset({DISC_ID_ONE}),
     )
 
     assert result == 0
-    disc.notes.create.assert_called_once()
-    body = disc.notes.create.call_args[0][0]["body"]
-    assert "⚠️" in body
-    assert RESOLUTION_MSG_PARTIAL in body
-    disc.save.assert_not_called()
+    gl.reply_to_discussion.assert_awaited_once()
+    reply_body = gl.reply_to_discussion.await_args[0][3]
+    assert "⚠️" in reply_body
+    assert RESOLUTION_MSG_PARTIAL in reply_body
+    gl.resolve_discussion.assert_not_awaited()
 
 
-def test_handle_resolutions_suggest_resolved() -> None:
+async def test_handle_resolutions_suggest_resolved() -> None:
     """suggest + resolved → reply with ✅ only, no resolve."""
-    mr = MagicMock()
-    disc = mr.discussions.get.return_value
+    gl = AsyncMock()
     resolutions = [_make_resolution(status="resolved")]
 
-    result = _handle_resolutions(
-        mr,
+    result = await _handle_resolutions(
+        gl,
+        PROJECT_ID,
+        MR_IID,
         resolutions,
         "suggest",
         allowed_discussion_ids=frozenset({DISC_ID_ONE}),
     )
 
     assert result == 0
-    disc.notes.create.assert_called_once()
-    body = disc.notes.create.call_args[0][0]["body"]
-    assert "✅" in body
-    disc.save.assert_not_called()
+    gl.reply_to_discussion.assert_awaited_once()
+    reply_body = gl.reply_to_discussion.await_args[0][3]
+    assert "✅" in reply_body
+    gl.resolve_discussion.assert_not_awaited()
 
 
-def test_handle_resolutions_not_addressed_skipped() -> None:
+async def test_handle_resolutions_not_addressed_skipped() -> None:
     """not_addressed → no action taken."""
-    mr = MagicMock()
+    gl = AsyncMock()
     resolutions = [_make_resolution(status="not_addressed", message=RESOLUTION_MSG_NOT_ADDRESSED)]
 
-    result = _handle_resolutions(
-        mr,
+    result = await _handle_resolutions(
+        gl,
+        PROJECT_ID,
+        MR_IID,
         resolutions,
         "auto-resolve",
         allowed_discussion_ids=frozenset({DISC_ID_ONE}),
     )
 
     assert result == 0
-    mr.discussions.get.assert_not_called()
+    gl.reply_to_discussion.assert_not_awaited()
 
 
-def test_handle_resolutions_error_logged(caplog: object) -> None:
+async def test_handle_resolutions_error_logged(caplog: object) -> None:
     """Exception during resolve → logged, not raised."""
-    mr = MagicMock()
-    mr.discussions.get.side_effect = Exception("API error")
+    gl = AsyncMock()
+    gl.reply_to_discussion.side_effect = Exception("API error")
     resolutions = [_make_resolution()]
 
-    result = _handle_resolutions(
-        mr,
+    result = await _handle_resolutions(
+        gl,
+        PROJECT_ID,
+        MR_IID,
         resolutions,
         "auto-resolve",
         allowed_discussion_ids=frozenset({DISC_ID_ONE}),
@@ -345,9 +342,7 @@ def test_handle_resolutions_error_logged(caplog: object) -> None:
 
 async def test_post_review_with_resolution_behavior() -> None:
     """resolution_behavior flows through post_review to _handle_resolutions."""
-    gl = MagicMock()
-    mr_mock = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
-    disc_mock = mr_mock.discussions.get.return_value
+    gl = AsyncMock()
 
     resolutions = [_make_resolution()]
     review = ParsedReview(
@@ -366,37 +361,37 @@ async def test_post_review_with_resolution_behavior() -> None:
         allowed_discussion_ids=frozenset({DISC_ID_ONE}),
     )
 
-    mr_mock.discussions.get.assert_called_once_with(DISC_ID_ONE)
-    disc_mock.notes.create.assert_called_once()
-    assert disc_mock.resolved is True
-    disc_mock.save.assert_called_once()
+    gl.reply_to_discussion.assert_awaited_once()
+    gl.resolve_discussion.assert_awaited_once_with(PROJECT_ID, MR_IID, DISC_ID_ONE)
     # Summary note still posted
-    assert mr_mock.notes.create.call_count == 1
+    assert gl.post_mr_comment.await_count == 1
 
 
-def test_handle_resolutions_rejects_unknown_discussion_id() -> None:
+async def test_handle_resolutions_rejects_unknown_discussion_id() -> None:
     """Resolution with discussion_id not in allowlist is skipped with warning log."""
-    mr = MagicMock()
+    gl = AsyncMock()
     resolutions = [_make_resolution(discussion_id="disc_unknown")]
     allowed = frozenset({DISC_ID_ONE, DISC_ID_TWO})
 
-    result = _handle_resolutions(mr, resolutions, "auto-resolve", allowed_discussion_ids=allowed)
-
-    assert result == 0
-    mr.discussions.get.assert_not_called()
-
-
-def test_handle_resolutions_empty_allowlist_blocks_all() -> None:
-    """When allowed_discussion_ids is empty, all resolutions are skipped (fail closed)."""
-    mr = MagicMock()
-    resolutions = [_make_resolution(status="resolved")]
-
-    result = _handle_resolutions(
-        mr, resolutions, "auto-resolve", allowed_discussion_ids=frozenset()
+    result = await _handle_resolutions(
+        gl, PROJECT_ID, MR_IID, resolutions, "auto-resolve", allowed_discussion_ids=allowed
     )
 
     assert result == 0
-    mr.discussions.get.assert_not_called()
+    gl.reply_to_discussion.assert_not_awaited()
+
+
+async def test_handle_resolutions_empty_allowlist_blocks_all() -> None:
+    """When allowed_discussion_ids is empty, all resolutions are skipped (fail closed)."""
+    gl = AsyncMock()
+    resolutions = [_make_resolution(status="resolved")]
+
+    result = await _handle_resolutions(
+        gl, PROJECT_ID, MR_IID, resolutions, "auto-resolve", allowed_discussion_ids=frozenset()
+    )
+
+    assert result == 0
+    gl.reply_to_discussion.assert_not_awaited()
 
 
 # -- SHA marker embedding tests --
@@ -407,7 +402,7 @@ SHA_MARKER_COMMENT = f"<!-- mr-review-agent: last_reviewed_sha={SHA_MARKER_VALUE
 
 async def test_summary_note_contains_sha_marker() -> None:
     """post_review with head_sha embeds the SHA marker in the summary note."""
-    gl = MagicMock()
+    gl = AsyncMock()
     review = ParsedReview(comments=[], summary="Review complete.")
     await post_review(
         gl,
@@ -419,15 +414,14 @@ async def test_summary_note_contains_sha_marker() -> None:
         head_sha=SHA_MARKER_VALUE,
     )
 
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
-    assert mr.notes.create.call_count == 1
-    body = mr.notes.create.call_args[0][0]["body"]
+    assert gl.post_mr_comment.await_count == 1
+    body = gl.post_mr_comment.await_args[0][2]
     assert SHA_MARKER_COMMENT in body
 
 
 async def test_summary_note_no_marker_when_empty_sha() -> None:
     """post_review with empty head_sha does not embed a SHA marker."""
-    gl = MagicMock()
+    gl = AsyncMock()
     review = ParsedReview(comments=[], summary="Review complete.")
     await post_review(
         gl,
@@ -439,8 +433,7 @@ async def test_summary_note_no_marker_when_empty_sha() -> None:
         head_sha="",
     )
 
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
-    body = mr.notes.create.call_args[0][0]["body"]
+    body = gl.post_mr_comment.await_args[0][2]
     assert "<!-- mr-review-agent:" not in body
 
 
@@ -539,7 +532,7 @@ def test_build_activity_section_ignores_non_partial_resolutions() -> None:
 
 async def test_summary_contains_activity_section_with_comments() -> None:
     """Summary note includes activity section when comments are posted."""
-    gl = MagicMock()
+    gl = AsyncMock()
     review = ParsedReview(
         comments=[ReviewComment(file="src/main.py", line=2, severity="error", comment="Bug")],
         summary="Issues found.",
@@ -548,8 +541,7 @@ async def test_summary_contains_activity_section_with_comments() -> None:
         gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes(), head_sha=SHA_MARKER_VALUE
     )
 
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
-    body = mr.notes.create.call_args[0][0]["body"]
+    body = gl.post_mr_comment.await_args[0][2]
     # Activity section between summary and SHA marker
     assert "Issues found." in body
     assert ACTIVITY_HEADER in body
@@ -563,14 +555,13 @@ async def test_summary_contains_activity_section_with_comments() -> None:
 
 async def test_summary_omits_activity_section_when_zero() -> None:
     """Summary note has no activity section when no comments and no resolutions."""
-    gl = MagicMock()
+    gl = AsyncMock()
     review = ParsedReview(comments=[], summary="All good.")
     await post_review(
         gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes(), head_sha=SHA_MARKER_VALUE
     )
 
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
-    body = mr.notes.create.call_args[0][0]["body"]
+    body = gl.post_mr_comment.await_args[0][2]
     assert ACTIVITY_HEADER not in body
     assert "All good." in body
     assert SHA_MARKER_COMMENT in body
@@ -580,7 +571,7 @@ async def test_summary_sha_marker_extractable_with_activity_section() -> None:
     """SHA marker remains extractable even when activity section is present."""
     from gitlab_copilot_agent.incremental import _SHA_MARKER_RE
 
-    gl = MagicMock()
+    gl = AsyncMock()
     review = ParsedReview(
         comments=[ReviewComment(file="src/main.py", line=2, severity="error", comment="Bug")],
         summary="Review.",
@@ -589,8 +580,7 @@ async def test_summary_sha_marker_extractable_with_activity_section() -> None:
         gl, PROJECT_ID, MR_IID, DIFF_REFS, review, make_mr_changes(), head_sha=SHA_MARKER_VALUE
     )
 
-    mr = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
-    body = mr.notes.create.call_args[0][0]["body"]
+    body = gl.post_mr_comment.await_args[0][2]
     match = _SHA_MARKER_RE.search(body)
     assert match is not None
     assert match.group(1) == SHA_MARKER_VALUE
@@ -598,8 +588,7 @@ async def test_summary_sha_marker_extractable_with_activity_section() -> None:
 
 async def test_summary_activity_section_with_resolutions() -> None:
     """Activity section includes resolution stats when resolutions present."""
-    gl = MagicMock()
-    mr_mock = gl.projects.get(PROJECT_ID).mergerequests.get(MR_IID)
+    gl = AsyncMock()
 
     resolutions = [_make_resolution(status="resolved")]
     review = ParsedReview(comments=[], summary="Review.", resolutions=resolutions)
@@ -615,7 +604,7 @@ async def test_summary_activity_section_with_resolutions() -> None:
         head_sha=SHA_MARKER_VALUE,
     )
 
-    body = mr_mock.notes.create.call_args[0][0]["body"]
+    body = gl.post_mr_comment.await_args[0][2]
     assert ACTIVITY_HEADER in body
     assert "thread" in body
     assert "resolved" in body

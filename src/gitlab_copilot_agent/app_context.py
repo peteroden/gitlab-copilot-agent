@@ -14,13 +14,10 @@ from typing import TYPE_CHECKING
 from fastapi import Request  # noqa: TC002 — runtime import required for FastAPI Depends()
 
 if TYPE_CHECKING:
-    from gitlab_copilot_agent.concurrency import (
-        DeduplicationStore,
-        DistributedLock,
-        ReviewedMRTracker,
-    )
+    from gitlab_copilot_agent.concurrency import DistributedLock
     from gitlab_copilot_agent.config import Settings
     from gitlab_copilot_agent.credential_registry import CredentialRegistry
+    from gitlab_copilot_agent.dedup import DeduplicationService
     from gitlab_copilot_agent.task_executor import TaskExecutor
 
 
@@ -36,8 +33,7 @@ class AppContext:
     settings: Settings
     executor: TaskExecutor
     repo_locks: DistributedLock
-    dedup_store: DeduplicationStore
-    review_tracker: ReviewedMRTracker
+    dedup: DeduplicationService
     credential_registry: CredentialRegistry
     allowed_project_ids: frozenset[int] | None = field(default=None)
 

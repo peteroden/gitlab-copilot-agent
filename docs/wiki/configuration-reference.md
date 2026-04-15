@@ -3,7 +3,7 @@
 The service uses two configuration sources:
 
 1. **YAML config file** (`config_v2.py` models) — non-secret service configuration: project definitions, integrations, dispatch backend, prompts, polling settings
-2. **Environment variables** (`config.py` / `Settings`) — secrets and runtime overrides: tokens, connection strings, auth credentials
+2. **Environment variables** (`config/` package / `Settings`) — secrets and runtime overrides: tokens, connection strings, auth credentials
 
 Secrets **never** go in the YAML file. The YAML file path is set via the `CONFIG_FILE` env var (default: `config.yaml`).
 
@@ -92,7 +92,7 @@ integrations:                 # Named integration configurations
 
 ## Environment Variables (v1)
 
-Every environment variable in `config.py`, grouped by category.
+Every environment variable in the `config/` package, grouped by category.
 
 ---
 
@@ -194,6 +194,26 @@ At least one of these must be set:
 - **Required**: ❌ No
 - **Default**: `None` (uses system temp dir)
 - **Description**: Base directory for repo clones (useful for persistent volumes)
+
+### `AUTO_MERGE_ENABLED`
+- **Type**: `bool`
+- **Required**: ❌ No
+- **Default**: `false`
+- **Description**: When `false` (default), coding tasks create Draft MRs that require manual un-drafting before merge. When `true`, MRs are created as ready-to-merge.
+
+### `ADMIN_TOKEN`
+- **Type**: `str | None`
+- **Required**: ❌ No
+- **Default**: `None`
+- **Description**: Separate authentication token for the `/config/reload` endpoint. When set, the endpoint requires an `X-Admin-Token` header matching this value. When not set, falls back to `X-Gitlab-Token` (webhook secret) for backward compatibility.
+- **Security**: Generate with `openssl rand -hex 32`. Use a unique value distinct from `GITLAB_WEBHOOK_SECRET` — separating these tokens limits blast radius if either is leaked.
+
+### `PROMPT_STRATEGY`
+- **Type**: `str`
+- **Required**: ❌ No
+- **Default**: `"file-based"`
+- **Options**: `"inline"`, `"file-based"`
+- **Description**: Controls how MR context (diff, description, discussions) is passed to the LLM. `"file-based"` (default) writes context to files and instructs the agent to read them via filesystem access + `git diff`, producing shorter prompts. `"inline"` embeds all context directly in the prompt for backward compatibility.
 
 ---
 
@@ -482,7 +502,7 @@ All optional — service runs review-only without these.
 ## Telemetry
 
 ### `OTEL_EXPORTER_OTLP_ENDPOINT`
-- **Type**: `str` (not in Settings model, read directly by telemetry.py)
+- **Type**: `str` (not in Settings model, read directly by `telemetry/` package)
 - **Required**: ❌ No
 - **Default**: Unset (telemetry disabled)
 - **Description**: OTLP gRPC endpoint for traces, metrics, and logs

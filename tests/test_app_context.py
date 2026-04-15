@@ -17,8 +17,7 @@ def _make_context(**overrides: object) -> AppContext:
         "settings": MagicMock(),
         "executor": MagicMock(),
         "repo_locks": MagicMock(),
-        "dedup_store": MagicMock(),
-        "review_tracker": MagicMock(),
+        "dedup": MagicMock(),
         "credential_registry": MagicMock(),
     }
     return AppContext(**(defaults | overrides))
