@@ -11,7 +11,7 @@ dependencies = [
     "fastapi==0.135.3",
     "uvicorn[standard]==0.43.0",
     "github-copilot-sdk==0.2.1",
-    "pydantic==2.12.5",
+    "pydantic==2.13.2",
     "pydantic-settings==2.13.1",
     "structlog==25.5.0",
     "python-frontmatter==1.1.0",
