@@ -41,8 +41,8 @@ dev = [
     "pytest==9.0.3",
     "pytest-asyncio==1.3.0",
     "httpx==0.28.1",
-    "ruff==0.15.11",
-    "pyright==1.1.408",
+    "ruff==0.15.12",
+    "pyright==1.1.409",
     "playwright==1.58.0",
 ]
 
@@ -105,10 +105,10 @@ packages = ["src/gitlab_copilot_agent"]
 
 [dependency-groups]
 dev = [
-    "pyright==1.1.408",
+    "pyright==1.1.409",
     "pytest-asyncio==1.3.0",
     "pytest-cov==7.1.0",
-    "ruff==0.15.11",
+    "ruff==0.15.12",
     "azure-identity==1.25.3",
     "azure-storage-queue==12.15.0",
     "azure-storage-blob==12.28.0",
