@@ -33,8 +33,8 @@ kubernetes = ["kubernetes==35.0.0"]
 azure = [
     "azure-identity==1.25.3",
     "aiohttp==3.13.5",
-    "azure-storage-queue==12.15.0",
-    "azure-storage-blob==12.28.0",
+    "azure-storage-queue==12.16.0",
+    "azure-storage-blob==12.29.0",
     "azure-data-tables==12.7.0",
 ]
 dev = [
@@ -110,8 +110,8 @@ dev = [
     "pytest-cov==7.1.0",
     "ruff==0.15.12",
     "azure-identity==1.25.3",
-    "azure-storage-queue==12.15.0",
-    "azure-storage-blob==12.28.0",
+    "azure-storage-queue==12.16.0",
+    "azure-storage-blob==12.29.0",
     "azure-data-tables==12.7.0",
     "aiohttp==3.13.5",
     "check-jsonschema==0.37.1",
