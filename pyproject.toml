@@ -10,11 +10,11 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi==0.136.1",
     "uvicorn[standard]==0.43.0",
-    "github-copilot-sdk==0.2.1",
+    "github-copilot-sdk==1.0.2",
     "pydantic==2.13.4",
     "pydantic-settings==2.14.1",
-    "structlog==25.5.0",
-    "python-frontmatter==1.1.0",
+    "structlog==26.1.0",
+    "python-frontmatter==1.3.0",
     "httpx==0.28.1",
     "opentelemetry-api==1.40.0",
     "opentelemetry-sdk==1.40.0",
@@ -29,10 +29,10 @@ dependencies = [
 mapping-helper = "gitlab_copilot_agent.mapping_cli:main"
 
 [project.optional-dependencies]
-kubernetes = ["kubernetes==35.0.0"]
+kubernetes = ["kubernetes==36.0.2"]
 azure = [
     "azure-identity==1.25.3",
-    "aiohttp==3.13.5",
+    "aiohttp==3.14.1",
     "azure-storage-queue==12.16.0",
     "azure-storage-blob==12.29.0",
     "azure-data-tables==12.7.0",
@@ -113,10 +113,10 @@ dev = [
     "azure-storage-queue==12.16.0",
     "azure-storage-blob==12.29.0",
     "azure-data-tables==12.7.0",
-    "aiohttp==3.13.5",
-    "check-jsonschema==0.37.1",
-    "hypothesis==6.151.14",
+    "aiohttp==3.14.1",
+    "check-jsonschema==0.37.3",
+    "hypothesis==6.155.6",
 ]
 fuzz = [
-    "atheris==3.0.0",
+    "atheris==3.1.0",
 ]
